@@ -75,6 +75,11 @@ async fn main() {
                     }
                     "--links" => opts.include_links = true,
                     "--media" => opts.include_media = true,
+                    "--toc" => opts.toc = true,
+                    "--section" => {
+                        i += 1;
+                        opts.section = args.get(i).cloned();
+                    }
                     "--input" => {
                         i += 1;
                         input_file = args.get(i).cloned();
@@ -124,7 +129,7 @@ async fn main() {
             let extract_ms = t0.elapsed().as_secs_f64() * 1000.0;
             print!("{}", ex.markdown);
             eprintln!(
-                "--- title={:?} verdict={:?} status={} fetch={:.0}ms extract={:.1}ms blocks={}/{} chars={}/{} tokens~{} next_offset={:?}",
+                "--- title={:?} verdict={:?} status={} fetch={:.0}ms extract={:.1}ms blocks={}/{} chars={}/{} tokens~{} next_offset={:?} thin={}",
                 ex.title,
                 out.verdict,
                 out.status,
@@ -136,6 +141,7 @@ async fn main() {
                 ex.total_chars,
                 ex.tokens_est,
                 ex.next_offset,
+                ex.thin,
             );
         }
         "fingerprint" => {

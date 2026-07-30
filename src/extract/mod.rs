@@ -32,6 +32,12 @@ pub struct ExtractOptions {
     pub include_links: bool,
     /// Keep ![alt](src) media lines; default drops them.
     pub include_media: bool,
+    /// Outline only: heading tree, no body text. Lets an
+    /// agent read structure first, then target a section.
+    pub toc: bool,
+    /// Scope to one heading section (substring, case-
+    /// insensitive). Pairs with toc.
+    pub section: Option<String>,
 }
 
 impl Default for ExtractOptions {
@@ -43,6 +49,8 @@ impl Default for ExtractOptions {
             offset: 0,
             include_links: false,
             include_media: false,
+            toc: false,
+            section: None,
         }
     }
 }
@@ -65,6 +73,9 @@ pub struct Extracted {
     pub blocks_shown: usize,
     /// Rough token estimate (chars / 4) of the returned markdown.
     pub tokens_est: usize,
+    /// True when the page was large but almost no content
+    /// extracted — a JS shell. Tier 2's job.
+    pub thin: bool,
 }
 
 #[derive(Debug)]
@@ -108,13 +119,19 @@ pub fn extract(
             next_offset: next,
             blocks_total: 0,
             blocks_shown: 0,
+            thin: false,
         });
     }
 
     let html_text = charset::decode(body, &ct);
+    let raw_len = body.len();
     let doc = Html::parse_document(&html_text);
     let base = metadata::base_url(&doc).unwrap_or_else(|| url.to_string());
     let meta = metadata::metadata(&doc);
+
+    // A large page that yields almost nothing is a JS
+    // shell (Medium, SPAs) — flag it for tier 2 routing.
+    let thin = raw_len > 50_000;
 
     // Scope: explicit selector or scored main-content detection.
     let roots: Vec<scraper::ElementRef<'_>> = if let Some(sel) = &opts.selector {
@@ -130,6 +147,70 @@ pub fn extract(
     for root in &roots {
         blocks::segment(*root, &base, opts, &mut all_blocks);
     }
+
+    // TOC mode: heading tree only.
+    if opts.toc {
+        let mut md = String::new();
+        if let Some(t) = &meta.title {
+            md.push_str(&format!("# {t}\n\n"));
+        }
+        let mut shown = 0usize;
+        for b in &all_blocks {
+            if let blocks::Block::Heading { level, text, .. } = b {
+                let indent = "  ".repeat((*level as usize).saturating_sub(1));
+                md.push_str(&format!("{indent}- {text}\n"));
+                shown += 1;
+            }
+        }
+        if shown == 0 {
+            md.push_str("*(no headings — flat page)*\n");
+        }
+        return Ok(Extracted {
+            tokens_est: md.len() / 4,
+            total_chars: md.len(),
+            markdown: md,
+            title: meta.title,
+            byline: meta.byline,
+            published: meta.published,
+            site: meta.site,
+            next_offset: None,
+            blocks_total: all_blocks.len(),
+            blocks_shown: shown,
+            thin: false,
+        });
+    }
+
+    // Section scope: keep blocks under a matching heading.
+    if let Some(sec) = &opts.section {
+        let needle = sec.to_lowercase();
+        let mut in_section = false;
+        let mut section_level = 0u8;
+        let mut kept_idx: Vec<usize> = Vec::new();
+        for (i, b) in all_blocks.iter().enumerate() {
+            if let blocks::Block::Heading { level, text, .. } = b {
+                if in_section && *level <= section_level {
+                    // Section ends at the next heading
+                    // of same-or-higher level.
+                    in_section = false;
+                }
+                if !in_section && text.to_lowercase().contains(&needle) {
+                    in_section = true;
+                    section_level = *level;
+                }
+            }
+            if in_section {
+                kept_idx.push(i);
+            }
+        }
+        if !kept_idx.is_empty() {
+            all_blocks = kept_idx
+                .into_iter()
+                .map(|i| all_blocks[i].clone())
+                .collect();
+        }
+        // No match → keep full page (never punish a bad name).
+    }
+
     let blocks_total = all_blocks.len();
 
     // Focus: BM25 block filter (falls back to full content on no hit).
@@ -143,6 +224,7 @@ pub fn extract(
     let full = render::render(&meta, url, &kept, opts);
     let (slice, next) = paginate(&full, opts.offset, max_chars);
     let tokens_est = slice.len() / 4;
+    let thin = thin && full.len() < 800;
 
     Ok(Extracted {
         markdown: slice,
@@ -155,6 +237,7 @@ pub fn extract(
         blocks_total,
         blocks_shown,
         tokens_est,
+        thin,
     })
 }
 
@@ -177,7 +260,14 @@ fn paginate(text: &str, offset: usize, max_chars: usize) -> (String, Option<usiz
         }
     }
     let next = if end < text.len() { Some(end) } else { None };
-    (text[start..end].to_string(), next)
+    let mut slice = text[start..end].to_string();
+    // In-content truncation marker: agents read content,
+    // not metadata — the resume instruction must be IN
+    // the markdown.
+    if let Some(n) = next {
+        slice.push_str(&format!("\n\n*[truncated — continue with offset={n}]*"));
+    }
+    (slice, next)
 }
 
 fn ceil_char_boundary(text: &str, mut i: usize) -> usize {

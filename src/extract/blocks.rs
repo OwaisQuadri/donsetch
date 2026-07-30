@@ -8,7 +8,17 @@ use super::inline;
 
 const MAX_DEPTH: usize = 300;
 
-#[derive(Debug)]
+/// Inline phrasing elements: consumed by an ancestor's
+/// loose-text paragraph, NEVER walked as standalone blocks
+/// (that duplicates content). They still recurse — a card
+/// link <a><h2>…</h2><p>…</p></a> has block children that
+/// must be emitted.
+pub const INLINE_TAGS: &[&str] = &[
+    "a", "span", "strong", "b", "em", "i", "code", "small", "sub", "sup",
+    "abbr", "mark", "time", "br", "wbr", "u", "s", "q", "cite", "font", "label",
+];
+
+#[derive(Debug, Clone)]
 pub enum Block {
     Heading { level: u8, text: String, path: Vec<String> },
     Para { md: String, link_density: f32, path: Vec<String> },
@@ -173,12 +183,16 @@ fn walk<'a>(
         _ => {
             // Container or unknown: emit direct loose text as a
             // paragraph (div-soup), then recurse into children.
-            let loose = loose_text(el, base, opts);
-            if !loose.0.is_empty() {
-                push_block(
-                    Block::Para { md: loose.0, link_density: loose.1, path: current_path(headings) },
-                    out,
-                );
+            // Inline elements emit nothing themselves — their
+            // text was captured by the nearest block ancestor.
+            if !INLINE_TAGS.contains(&name) {
+                let loose = loose_text(el, base, opts);
+                if !loose.0.is_empty() {
+                    push_block(
+                        Block::Para { md: loose.0, link_density: loose.1, path: current_path(headings) },
+                        out,
+                    );
+                }
             }
             for child in el.children() {
                 let Some(child_el) = ElementRef::wrap(child) else {
@@ -223,11 +237,8 @@ fn loose_text(el: ElementRef<'_>, base: &str, opts: &super::ExtractOptions) -> (
                 // but an inline element wrapping BLOCK children (card
                 // links: <a><h2>…</h2><p>…</p></a>) must not be
                 // swallowed here; the walk emits those blocks itself.
-                if matches!(
-                    n,
-                    "a" | "strong" | "b" | "em" | "i" | "code" | "span" | "small" | "sub" | "sup"
-                        | "abbr" | "mark" | "time" | "br" | "u" | "s" | "q" | "cite"
-                ) && !crate::extract::junk::skip(c)
+                if INLINE_TAGS.contains(&n)
+                    && !crate::extract::junk::skip(c)
                     && !contains_block(c)
                 {
                     let (md, _) = inline::markdown(c, base, opts);
@@ -315,7 +326,7 @@ fn table_block(el: ElementRef<'_>, headings: &[(u8, String)]) -> Option<Block> {
         }
         let cells: Vec<String> = tr
             .select(&scraper::Selector::parse("th").unwrap())
-            .map(|c| inline::plain(c))
+            .map(|c| inline::plain(c).replace('|', "\\|"))
             .collect();
         if !cells.is_empty() && headers.is_empty() && rows.is_empty() {
             headers = cells;
@@ -324,7 +335,7 @@ fn table_block(el: ElementRef<'_>, headings: &[(u8, String)]) -> Option<Block> {
         let row: Vec<String> = tr
             .select(&scraper::Selector::parse("td").unwrap())
             .map(|c| {
-                let t = inline::plain(c);
+                let t = inline::plain(c).replace('|', "\\|"); // unescaped pipes break md tables
                 if t.len() > 120 { format!("{}…", &t[..floor_boundary(&t, 120)]) } else { t }
             })
             .collect();
@@ -357,6 +368,17 @@ fn media_block(
     out: &mut Vec<Block>,
 ) {
     let sel = scraper::Selector::parse("img").unwrap();
+    // figcaption = the alt an agent actually wants (chart/
+    // diagram descriptions) when the img alt is empty.
+    let caption = if el.value().name() == "figure" {
+        scraper::Selector::parse("figcaption")
+            .ok()
+            .and_then(|s| el.select(&s).next())
+            .map(|c| inline::plain(c))
+            .filter(|c| !c.is_empty())
+    } else {
+        None
+    };
     let imgs: Vec<ElementRef<'_>> = if el.value().name() == "img" {
         vec![el]
     } else {
@@ -375,7 +397,13 @@ fn media_block(
         if small {
             continue;
         }
-        let alt = img.value().attr("alt").unwrap_or("").trim().to_string();
+        let alt = img
+            .value()
+            .attr("alt")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| caption.clone())
+            .unwrap_or_default();
         let abs = inline::absolutize(base, src);
         if let Some(src) = abs {
             out.push(Block::Media {

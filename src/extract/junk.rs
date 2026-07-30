@@ -92,6 +92,17 @@ pub fn skip(el: ElementRef<'_>) -> bool {
     if e.attr("aria-hidden").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
         return true;
     }
+    // Screen-reader-only text duplicates visible content
+    // (Ars/BBC badge dupes) — same class as display:none.
+    if e.attr("class").is_some_and(|c| {
+        c.split_whitespace().any(|t| {
+            t.eq_ignore_ascii_case("sr-only")
+                || t.eq_ignore_ascii_case("visually-hidden")
+                || t.eq_ignore_ascii_case("visuallyhidden")
+        })
+    }) {
+        return true;
+    }
     if let Some(style) = e.attr("style") {
         let s: String = style.to_lowercase();
         if s.contains("display:none") || s.contains("display: none") || s.contains("visibility:hidden")

@@ -37,6 +37,10 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
     let mut last_path: Vec<String> = Vec::new();
     let mut last_was_heading = true; // frontmatter counts
     let mut title_heading_dropped = false;
+    // Cross-block exact-duplicate suppression: badge
+    // dupes, repeated teasers. Keyed on normalized text.
+    let mut seen: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for block in kept {
         match block {
             Block::Heading { level, text, .. } => {
@@ -55,6 +59,9 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
                 // Bare-link / one-word lines: pure noise.
                 if md.len() < 25 && *link_density > 0.9 {
                     continue;
+                }
+                if !seen.insert(normalize(md)) {
+                    continue; // exact duplicate of an earlier block
                 }
                 // Bare numbers: vote counts, rank numbers.
                 if md.len() < 8 && md.chars().all(|c| c.is_ascii_digit() || c == ',') {
@@ -141,6 +148,10 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
     }
     out.push('\n');
     out
+}
+
+fn normalize(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
 /// Emit the heading breadcrumb when the path changes mid-focus
