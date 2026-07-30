@@ -1,5 +1,6 @@
 mod detect;
 mod error;
+mod extract;
 mod fetch;
 mod memory;
 mod profile;
@@ -36,12 +37,106 @@ async fn main() {
                     println!("--- body (first 800) ---");
                     let text = String::from_utf8_lossy(&out.body);
                     println!("{}", &text[..text.len().min(800)]);
+                    if let Some(pos) = args.iter().position(|a| a == "--dump") {
+                        if let Some(path) = args.get(pos + 1) {
+                            let _ = std::fs::write(path, &out.body);
+                            eprintln!("dumped {} bytes -> {path}", out.body.len());
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!("error: {e}");
                     std::process::exit(1);
                 }
             }
+        }
+        "extract" => {
+            let mut url = String::new();
+            let mut input_file: Option<String> = None;
+            let mut opts = extract::ExtractOptions::default();
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--focus" => {
+                        i += 1;
+                        opts.focus = args.get(i).cloned();
+                    }
+                    "--max" => {
+                        i += 1;
+                        opts.max_chars = args.get(i).and_then(|s| s.parse().ok());
+                    }
+                    "--offset" => {
+                        i += 1;
+                        opts.offset = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(0);
+                    }
+                    "--selector" => {
+                        i += 1;
+                        opts.selector = args.get(i).cloned();
+                    }
+                    "--links" => opts.include_links = true,
+                    "--media" => opts.include_media = true,
+                    "--input" => {
+                        i += 1;
+                        input_file = args.get(i).cloned();
+                    }
+                    other => url = other.to_string(),
+                }
+                i += 1;
+            }
+            if let Some(path) = input_file {
+                let body = std::fs::read(&path).expect("read input");
+                let t0 = std::time::Instant::now();
+                let ex = match extract::extract(&body, "text/html", "https://local/", &opts) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        std::process::exit(1);
+                    }
+                };
+                eprintln!(
+                    "--- extract={:.1}ms blocks={}/{} chars={}/{}",
+                    t0.elapsed().as_secs_f64() * 1000.0,
+                    ex.blocks_shown,
+                    ex.blocks_total,
+                    ex.markdown.len(),
+                    ex.total_chars,
+                );
+                print!("{}", ex.markdown);
+                return;
+            }
+            let fetcher = fetch::client::Fetcher::new(BrowserProfile::host_default())
+                .expect("fetcher init");
+            let out = fetcher.fetch(&url).await.expect("fetch");
+            let ct = out
+                .headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            let t0 = std::time::Instant::now();
+            let ex = match extract::extract(&out.body, &ct, &out.url, &opts) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            };
+            let extract_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            print!("{}", ex.markdown);
+            eprintln!(
+                "--- title={:?} verdict={:?} status={} fetch={:.0}ms extract={:.1}ms blocks={}/{} chars={}/{} tokens~{} next_offset={:?}",
+                ex.title,
+                out.verdict,
+                out.status,
+                out.elapsed.as_secs_f64() * 1000.0,
+                extract_ms,
+                ex.blocks_shown,
+                ex.blocks_total,
+                ex.markdown.len(),
+                ex.total_chars,
+                ex.tokens_est,
+                ex.next_offset,
+            );
         }
         "fingerprint" => {
             let url = args
@@ -84,7 +179,7 @@ async fn main() {
             }
         }
         _ => {
-            eprintln!("donsetch — commands: fetch <url> | fingerprint [url] | resume-test <url>");
+            eprintln!("donsetch — commands: fetch <url> | extract <url> [--focus q] [--max n] [--offset n] [--selector css] [--links] [--media] | fingerprint [url] | resume-test <url>");
         }
     }
 }

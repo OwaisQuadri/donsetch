@@ -1,0 +1,136 @@
+//! The skip predicate: functional pruning. Junk is skipped during
+//! traversal — the tree is never mutated, never re-parsed.
+
+use scraper::ElementRef;
+
+const SKIP_TAGS: &[&str] = &[
+    "script", "style", "noscript", "template", "svg", "canvas", "iframe", "object", "embed",
+    "form", "button", "input", "select", "textarea", "option", "nav", "aside", "footer",
+];
+
+const SKIP_ROLES: &[&str] = &[
+    "navigation",
+    "banner",
+    "contentinfo",
+    "complementary",
+    "search",
+    "dialog",
+    "alert",
+];
+
+/// Class/id fragments that mark boilerplate. Long fragments use
+/// substring matching on tokens; SHORT fragments (nav, menu)
+/// require exact token match — "flex-nav-upsell" must not kill
+/// a whole page wrapper.
+const NEGATIVE_SUBSTR: &[&str] = &[
+    "comment", "sidebar", "widget", "footer", "related", "promo", "advert",
+    "share", "social", "newsletter", "cookie", "modal", "popup", "banner",
+    "breadcrumb", "masthead", "outbrain", "taboola", "sponsor", "toolbar",
+    "dropdown", "signup", "infobar", "subscribe", "login", "signin",
+];
+
+const NEGATIVE_EXACT: &[&str] = &["nav", "menu", "sign-up", "sign-in"];
+
+/// Class/id fragments that mark real content (exact token match,
+/// lowercased, separators normalized).
+pub const POSITIVE: &[&str] = &[
+    "article", "content", "main", "post", "entry", "story", "body", "prose", "markdown",
+    "articlebody", "postcontent", "article-content", "post-content", "page-content",
+    "main-content", "entry-content", "mw-content-text", "mw-parser-output", "contenttext",
+];
+
+fn tokens(el: &scraper::node::Element) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(id) = el.id() {
+        out.push(id.to_lowercase());
+    }
+    if let Some(class) = el.attr("class") {
+        for c in class.split_whitespace() {
+            out.push(c.to_lowercase());
+        }
+    }
+    out
+}
+
+pub fn is_positive(el: &scraper::node::Element) -> bool {
+    tokens(el).iter().any(|t| {
+        POSITIVE.contains(&t.as_str())
+            || t.replace(['-', '_'], "") == "content"
+            || t.contains("articlebody")
+    })
+}
+
+fn is_negative(el: &scraper::node::Element) -> bool {
+    if is_positive(el) {
+        return false;
+    }
+    tokens(el).iter().any(|t| {
+        NEGATIVE_EXACT.contains(&t.as_str())
+            || NEGATIVE_SUBSTR.iter().any(|n| t.contains(n))
+    })
+}
+
+/// Hard skip: semantic junk only (tags, hidden, roles).
+/// Class-name heuristics are NOT here — they're too fragile
+/// for hard skips (a "fixed-sidebar" class can sit on the
+/// main container). Use `is_negative` as a score penalty or
+/// a size-gated skip instead.
+pub fn skip(el: ElementRef<'_>) -> bool {
+    let e = el.value();
+    let name = e.name();
+    if SKIP_TAGS.contains(&name) {
+        return true;
+    }
+    if e.attr("hidden").is_some() {
+        return true;
+    }
+    if let Some(role) = e.attr("role") {
+        if SKIP_ROLES.contains(&role) {
+            return true;
+        }
+    }
+    if e.attr("aria-hidden").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
+        return true;
+    }
+    if let Some(style) = e.attr("style") {
+        let s: String = style.to_lowercase();
+        if s.contains("display:none") || s.contains("display: none") || s.contains("visibility:hidden")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Class/id heuristic: LIKELY boilerplate. Caller decides
+/// what to do with it (score penalty, size-gated skip).
+pub fn negative(el: ElementRef<'_>) -> bool {
+    is_negative(el.value())
+}
+
+/// Visible text length of a subtree, early-exit at `cap`.
+/// Used to size-gate negative skips: real junk is small;
+/// a "negative" class on a huge container is a false hit.
+pub fn text_size(el: ElementRef<'_>, cap: usize) -> usize {
+    let mut total = 0usize;
+    let mut stack = vec![el];
+    while let Some(node) = stack.pop() {
+        if total >= cap {
+            return total;
+        }
+        for child in node.children() {
+            match child.value() {
+                scraper::Node::Text(t) => total += t.text.trim().len(),
+                scraper::Node::Element(_) => {
+                    if let Some(c) = ElementRef::wrap(child) {
+                        if !skip(c) {
+                            stack.push(c);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    total
+}

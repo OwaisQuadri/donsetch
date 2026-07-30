@@ -16,6 +16,8 @@ brotli = "7"
 flate2 = "1"
 zstd = "0.13"
 rustls-native-certs = "0.8"
+scraper = "0.27.0"
+encoding_rs = "0.8.35"
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli"] }

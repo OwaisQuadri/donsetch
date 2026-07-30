@@ -38,11 +38,11 @@ pub fn detect(status: u16, headers: &[(String, String)], body: &[u8]) -> Verdict
     let server = header(headers, "server").unwrap_or_default().to_lowercase();
     let cf_ray = header(headers, "cf-ray").is_some();
     let is_cf = server.contains("cloudflare") || cf_ray;
-    let text = if body.len() <= 512 * 1024 {
-        String::from_utf8_lossy(body).to_lowercase()
-    } else {
-        String::from_utf8_lossy(&body[..512 * 1024]).to_lowercase()
-    };
+    // Challenge markers live in the title/head — scanning
+    // the whole body false-positives on articles that merely
+    // MENTION a vendor (a Wikipedia page about Akamai).
+    let scan = &body[..body.len().min(64 * 1024)];
+    let text = String::from_utf8_lossy(scan).to_lowercase();
 
     match status {
         401 | 402 => return Verdict::AuthWall,
@@ -54,12 +54,11 @@ pub fn detect(status: u16, headers: &[(String, String)], body: &[u8]) -> Verdict
     }
 
     if (200..300).contains(&status) {
-        // Interstitials dressed as 200: small body + challenge markers.
-        if body.len() < 64 * 1024 {
-            let v = classify_wall(&text, headers, is_cf, status);
-            if v != Verdict::ContentOk {
-                return v;
-            }
+        // Interstitials dressed as 200 — scan regardless of
+        // body size (marker scan is cheap).
+        let v = classify_wall(&text, headers, is_cf, status);
+        if v != Verdict::ContentOk {
+            return v;
         }
         return Verdict::ContentOk;
     }
@@ -95,10 +94,13 @@ fn classify_wall(
     {
         return Verdict::Challenge(Vendor::DataDome);
     }
-    // Akamai
+    // Akamai: block pages carry "Reference #…" +
+    // edgesuite. A bare "akamai" match false-positives on
+    // articles about Akamai Technologies.
     if text.contains("reference #") && text.contains("errors.edgesuite.net")
-        || text.contains("akamai")
         || text.contains("_abck")
+        || header(headers, "x-akamai-transformed").is_some()
+            && (status == 403 || status == 503)
     {
         return Verdict::Challenge(Vendor::Akamai);
     }
@@ -127,6 +129,13 @@ fn classify_wall(
             return Verdict::Challenge(Vendor::Generic);
         }
         return Verdict::Blocked;
+    }
+    // Reddit-style interstitials (often served as 200).
+    if text.contains("prove your humanity")
+        || text.contains("not for bots")
+        || text.contains("please wait for verification")
+    {
+        return Verdict::Challenge(Vendor::Generic);
     }
     Verdict::ContentOk
 }
