@@ -1,0 +1,203 @@
+//! Byte-true Chrome HTTP/2 client connection.
+
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+use tokio_boring::SslStream;
+
+use super::frame::*;
+use super::hpack::{Decoder, Encoder};
+use crate::error::FetchError;
+use crate::profile::BrowserProfile;
+
+const PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+
+pub struct H2Response {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+pub struct H2Conn {
+    stream: SslStream<TcpStream>,
+    encoder: Encoder,
+    decoder: Decoder,
+    next_stream: u32,
+    conn_window: i64,
+}
+
+impl H2Conn {
+    /// Send client preface with Chrome's exact SETTINGS + connection WINDOW_UPDATE.
+    pub async fn start(
+        mut stream: SslStream<TcpStream>,
+        profile: &BrowserProfile,
+    ) -> Result<Self, FetchError> {
+        let h2 = &profile.h2;
+        let settings = settings_payload(&[
+            (0x1, h2.header_table_size),
+            (0x2, h2.enable_push),
+            (0x4, h2.initial_window_size),
+            (0x6, h2.max_header_list_size),
+        ]);
+        let mut buf = Vec::with_capacity(24 + 9 + settings.len() + 13);
+        buf.extend_from_slice(PREFACE);
+        // SETTINGS frame
+        let slen = settings.len() as u32;
+        buf.extend_from_slice(&[
+            (slen >> 16) as u8, (slen >> 8) as u8, slen as u8,
+            SETTINGS, 0, 0, 0, 0, 0,
+        ]);
+        buf.extend_from_slice(&settings);
+        // WINDOW_UPDATE frame (stream 0)
+        let inc = h2.conn_window_update;
+        buf.extend_from_slice(&[
+            0, 0, 4, WINDOW_UPDATE, 0, 0, 0, 0, 0,
+            ((inc >> 24) & 0x7f) as u8, (inc >> 16) as u8, (inc >> 8) as u8, inc as u8,
+        ]);
+        stream.write_all(&buf).await?;
+        stream.flush().await?;
+        Ok(Self {
+            stream,
+            encoder: Encoder::new(),
+            decoder: Decoder::new(),
+            next_stream: 1,
+            conn_window: 65535 + inc as i64,
+        })
+    }
+
+    /// One GET request → full response. Stream-per-request for now (pool later).
+    pub async fn get(
+        &mut self,
+        authority: &str,
+        path: &str,
+        extra_headers: &[(String, String)],
+    ) -> Result<H2Response, FetchError> {
+        let stream_id = self.next_stream;
+        self.next_stream += 2;
+
+        let mut headers: Vec<(String, String)> = vec![
+            (":method".into(), "GET".into()),
+            (":authority".into(), authority.into()),
+            (":scheme".into(), "https".into()),
+            (":path".into(), path.into()),
+        ];
+        headers.extend(extra_headers.iter().cloned());
+        let block = self.encoder.encode(&headers);
+        write_frame(
+            &mut self.stream,
+            HEADERS,
+            FLAG_END_HEADERS | FLAG_END_STREAM,
+            stream_id,
+            &block,
+        )
+        .await?;
+        self.stream.flush().await?;
+
+        let mut status = 0u16;
+        let mut resp_headers: Vec<(String, String)> = Vec::new();
+        let mut body: Vec<u8> = Vec::new();
+        let mut header_frag: Vec<u8> = Vec::new();
+        let initial_window = 6_291_456i64;
+        let mut stream_window: i64 = initial_window;
+        let mut got_headers = false;
+
+        loop {
+            let (hdr, payload) = read_frame(&mut self.stream).await?;
+            match hdr.ty {
+                SETTINGS => {
+                    if hdr.flags & FLAG_ACK == 0 {
+                        write_frame(&mut self.stream, SETTINGS, FLAG_ACK, 0, &[]).await?;
+                        self.stream.flush().await?;
+                    }
+                }
+                PING => {
+                    if hdr.flags & FLAG_ACK == 0 {
+                        write_frame(&mut self.stream, PING, FLAG_ACK, 0, &payload).await?;
+                        self.stream.flush().await?;
+                    }
+                }
+                WINDOW_UPDATE => {}
+                HEADERS | CONTINUATION if hdr.stream_id == stream_id => {
+                    if hdr.ty == HEADERS {
+                        // Strip padding/priority fields if flagged.
+                        let mut off = 0usize;
+                        if hdr.flags & FLAG_PADDED != 0 && !payload.is_empty() {
+                            off = payload[0] as usize + 1;
+                        }
+                        if hdr.flags & FLAG_PRIORITY != 0 {
+                            off += 5;
+                        }
+                        header_frag = payload.get(off..).unwrap_or(&[]).to_vec();
+                    } else {
+                        header_frag.extend_from_slice(&payload);
+                    }
+                    if hdr.flags & FLAG_END_HEADERS != 0 {
+                        let decoded = self.decoder.decode(&header_frag)?;
+                        for (n, v) in decoded {
+                            if n == ":status" {
+                                status = v.parse().unwrap_or(0);
+                            } else if !n.starts_with(':') {
+                                resp_headers.push((n, v));
+                            }
+                        }
+                        got_headers = true;
+                        header_frag.clear();
+                        if hdr.ty == HEADERS && hdr.flags & FLAG_END_STREAM != 0 {
+                            break;
+                        }
+                    }
+                }
+                DATA if hdr.stream_id == stream_id => {
+                    let data = if hdr.flags & FLAG_PADDED != 0 && !payload.is_empty() {
+                        let pad = payload[0] as usize;
+                        let end = payload.len().saturating_sub(pad);
+                        payload.get(1..end).unwrap_or(&[])
+                    } else {
+                        &payload[..]
+                    };
+                    body.extend_from_slice(data);
+                    stream_window -= data.len() as i64;
+                    self.conn_window -= data.len() as i64;
+                    // Replenish flow-control windows at half consumption.
+                    if stream_window < initial_window / 2 {
+                        let inc = (initial_window - stream_window) as u32;
+                        write_frame(
+                            &mut self.stream,
+                            WINDOW_UPDATE,
+                            0,
+                            stream_id,
+                            &inc.to_be_bytes(),
+                        )
+                        .await?;
+                        stream_window += inc as i64;
+                    }
+                    if self.conn_window < 15_000_000 / 2 {
+                        let inc = (15_000_000 - self.conn_window) as u32;
+                        write_frame(&mut self.stream, WINDOW_UPDATE, 0, 0, &inc.to_be_bytes())
+                            .await?;
+                        self.conn_window += inc as i64;
+                    }
+                    if hdr.flags & FLAG_END_STREAM != 0 {
+                        break;
+                    }
+                }
+                RST_STREAM => {
+                    return Err(FetchError::Http(format!("h2 rst_stream on {stream_id}")));
+                }
+                GOAWAY => {
+                    return Err(FetchError::Http("h2 goaway".into()));
+                }
+                PUSH_PROMISE => {
+                    write_frame(&mut self.stream, RST_STREAM, 0, hdr.stream_id, &stream_id.to_be_bytes())
+                        .await
+                        .ok();
+                }
+                PRIORITY => {}
+                _ => {}
+            }
+        }
+        if !got_headers {
+            return Err(FetchError::Http("h2: stream ended without headers".into()));
+        }
+        Ok(H2Response { status, headers: resp_headers, body })
+    }
+}

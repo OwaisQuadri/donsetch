@@ -1,0 +1,20 @@
+# DonSeTch private working docs + build artifacts
+status.md
+project.md
+
+# --- language-specific (add once we lock the language in discussion) ---
+
+# Editor / OS cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+
+# Added by cargo
+
+/target
+/target

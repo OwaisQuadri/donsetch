@@ -1,0 +1,27 @@
+[package]
+name = "donsetch"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Web fetch, search and crawl for AI agents. Custom stealthy HTTP fetch tier on BoringSSL."
+
+[dependencies]
+boring = { version = "5", features = ["mlkem"] }
+boring-sys = "5"
+foreign-types = "0.5"
+tokio-boring = "5"
+tokio = { version = "1", features = ["full"] }
+url = "2"
+brotli = "7"
+flate2 = "1"
+zstd = "0.13"
+rustls-native-certs = "0.8"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
