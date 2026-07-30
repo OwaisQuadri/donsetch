@@ -112,6 +112,19 @@ async fn main() {
             let fetcher = fetch::client::Fetcher::new(BrowserProfile::host_default())
                 .expect("fetcher init");
             let out = fetcher.fetch(&url).await.expect("fetch");
+
+            // A challenge page is NOT content. An agent must
+            // never quote "Just a moment…" as page content —
+            // give it an actionable message instead.
+            if !matches!(out.verdict, detect::walls::Verdict::ContentOk) {
+                println!(
+                    "# Blocked: {:?}\n\nThe page at {} returned a bot-wall challenge, not content. This needs tier 2 (JS challenge solving).\n\n*[verdict: {:?}, status: {}]*",
+                    out.verdict, out.url, out.verdict, out.status
+                );
+                eprintln!("--- verdict={:?} status={}", out.verdict, out.status);
+                return;
+            }
+
             let ct = out
                 .headers
                 .iter()
@@ -129,8 +142,9 @@ async fn main() {
             let extract_ms = t0.elapsed().as_secs_f64() * 1000.0;
             print!("{}", ex.markdown);
             eprintln!(
-                "--- title={:?} verdict={:?} status={} fetch={:.0}ms extract={:.1}ms blocks={}/{} chars={}/{} tokens~{} next_offset={:?} thin={}",
+                "--- title={:?} kind={:?} verdict={:?} status={} fetch={:.0}ms extract={:.1}ms blocks={}/{} chars={}/{} tokens~{} next_offset={:?} thin={}",
                 ex.title,
+                ex.content_kind,
                 out.verdict,
                 out.status,
                 out.elapsed.as_secs_f64() * 1000.0,

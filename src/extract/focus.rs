@@ -26,10 +26,14 @@ pub fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn filter<'a>(blocks: &'a [Block], query: &str) -> Vec<&'a Block> {
+/// BM25 block filter. Returns (kept blocks, fell_back).
+/// fell_back = true when the query matched nothing and we
+/// returned the full page — the CALLER must signal this,
+/// or the agent mistakes full content for focus matches.
+pub fn filter<'a>(blocks: &'a [Block], query: &str) -> (Vec<&'a Block>, bool) {
     let qterms = tokenize(query);
     if qterms.is_empty() || blocks.is_empty() {
-        return blocks.iter().collect();
+        return (blocks.iter().collect(), false);
     }
 
     // Document stats.
@@ -69,15 +73,16 @@ pub fn filter<'a>(blocks: &'a [Block], query: &str) -> Vec<&'a Block> {
     }
 
     if scored.is_empty() {
-        return blocks.iter().collect(); // no hits → full content
+        return (blocks.iter().collect(), true); // no hits → full, SIGNAL it
     }
 
     // Keep blocks above a fraction of the max score, in doc order.
     let max_score = scored.iter().map(|(_, s)| *s).fold(0.0, f64::max);
     let threshold = max_score * 0.15;
-    scored
+    let kept = scored
         .into_iter()
         .filter(|(_, s)| *s >= threshold)
         .map(|(i, _)| &blocks[i])
-        .collect()
+        .collect();
+    (kept, false)
 }

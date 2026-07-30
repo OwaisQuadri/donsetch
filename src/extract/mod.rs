@@ -76,6 +76,19 @@ pub struct Extracted {
     /// True when the page was large but almost no content
     /// extracted — a JS shell. Tier 2's job.
     pub thin: bool,
+    /// Best-guess content kind from block composition.
+    /// Conservative: only non-Page when confident.
+    pub content_kind: ContentKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentKind {
+    Article,
+    Listing,
+    Forum,
+    Docs,
+    Table,
+    Page, // unsure
 }
 
 #[derive(Debug)]
@@ -89,6 +102,60 @@ impl std::fmt::Display for ExtractError {
             ExtractError::BadSelector(s) => write!(f, "invalid CSS selector: {s}"),
         }
     }
+}
+
+/// Classify content from block composition.
+/// Conservative — Page when nothing is dominant.
+fn classify(blocks: &[&blocks::Block]) -> ContentKind {
+    let mut code = 0usize;
+    let mut tables = 0usize;
+    let mut lists = 0usize;
+    let mut list_items = 0usize;
+    let mut list_chars = 0usize;
+    let mut quotes = 0usize;
+    let mut para_chars = 0usize;
+    let mut paras = 0usize;
+    let mut headings = 0usize;
+    for b in blocks {
+        match b {
+            blocks::Block::Code { .. } => code += 1,
+            blocks::Block::Table { .. } => tables += 1,
+            blocks::Block::List { items, .. } => {
+                lists += 1;
+                list_items += items.len();
+                list_chars += items.iter().map(|i| i.len()).sum::<usize>();
+            }
+            blocks::Block::Quote { .. } => quotes += 1,
+            blocks::Block::Para { md, .. } => {
+                paras += 1;
+                para_chars += md.len();
+            }
+            blocks::Block::Heading { .. } => headings += 1,
+            _ => {}
+        }
+    }
+    if code >= 3 {
+        return ContentKind::Docs;
+    }
+    // Article = heading-STRUCTURED prose: several
+    // headings, substantial paragraphs between them.
+    // Char mass lies (reference lists outweigh prose).
+    if headings >= 3 && paras >= 5 && para_chars / paras.max(1) > 150 {
+        return ContentKind::Article;
+    }
+    if tables >= 2 && tables >= paras {
+        return ContentKind::Table;
+    }
+    if quotes >= 5 {
+        return ContentKind::Forum;
+    }
+    if lists >= 3 && list_items >= 12 && list_chars > paras * 200 {
+        return ContentKind::Listing;
+    }
+    if paras >= 3 && para_chars / paras.max(1) > 200 {
+        return ContentKind::Article;
+    }
+    ContentKind::Page
 }
 
 /// Extract agent-ready markdown from a fetched body.
@@ -120,6 +187,7 @@ pub fn extract(
             blocks_total: 0,
             blocks_shown: 0,
             thin: false,
+            content_kind: ContentKind::Page,
         });
     }
 
@@ -177,10 +245,12 @@ pub fn extract(
             blocks_total: all_blocks.len(),
             blocks_shown: shown,
             thin: false,
+            content_kind: ContentKind::Page,
         });
     }
 
     // Section scope: keep blocks under a matching heading.
+    let mut section_missed = false;
     if let Some(sec) = &opts.section {
         let needle = sec.to_lowercase();
         let mut in_section = false;
@@ -207,24 +277,54 @@ pub fn extract(
                 .into_iter()
                 .map(|i| all_blocks[i].clone())
                 .collect();
+        } else {
+            // No match → full page, but SIGNAL it.
+            section_missed = true;
         }
-        // No match → keep full page (never punish a bad name).
     }
 
     let blocks_total = all_blocks.len();
 
-    // Focus: BM25 block filter (falls back to full content on no hit).
-    let kept: Vec<&blocks::Block> = match &opts.focus {
+    // Focus: BM25 block filter. fell_back = query matched
+    // nothing → full content returned, MUST be signaled.
+    let (kept, focus_fell_back): (Vec<&blocks::Block>, bool) = match &opts.focus {
         Some(q) => focus::filter(&all_blocks, q),
-        None => all_blocks.iter().collect(),
+        None => (all_blocks.iter().collect(), false),
     };
     let blocks_shown = kept.len();
 
     // Render markdown (frontmatter + blocks) then paginate.
-    let full = render::render(&meta, url, &kept, opts);
+    let mut full = render::render(&meta, url, &kept, opts);
+
+    // Agent-trust signals, inline in the content:
+    // - focus miss → agent must not quote wrong content
+    // - empty page → silence looks like a bug
+    if focus_fell_back {
+        if let Some(q) = &opts.focus {
+            full = format!(
+                "*[focus \"{q}\": no matches — showing full content]*\n\n{full}"
+            );
+        }
+    } else if section_missed {
+        if let Some(s) = &opts.section {
+            full = format!(
+                "*[section \"{s}\": not found — showing full content]*\n\n{full}"
+            );
+        }
+    } else if full.trim().is_empty() || (blocks_total == 0 && meta.title.is_none()) {
+        full = format!("{url}\n\n*(no extractable content)*\n");
+    }
+
+    // JS-shell warning: agent must know the content
+    // below is likely incomplete.
+    let thin = thin && full.len() < 800;
+    if thin {
+        full = format!(
+            "*[note: large page rendered almost no content — likely JS-rendered (SPA). Content below may be a shell; tier 2 renders JS.]*\n\n{full}"
+        );
+    }
     let (slice, next) = paginate(&full, opts.offset, max_chars);
     let tokens_est = slice.len() / 4;
-    let thin = thin && full.len() < 800;
 
     Ok(Extracted {
         markdown: slice,
@@ -238,6 +338,7 @@ pub fn extract(
         blocks_shown,
         tokens_est,
         thin,
+        content_kind: classify(&kept),
     })
 }
 
