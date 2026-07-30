@@ -1,5 +1,7 @@
+mod detect;
 mod error;
 mod fetch;
+mod memory;
 mod profile;
 mod transport;
 
@@ -25,6 +27,7 @@ async fn main() {
                     println!("bytes: {}", out.body.len());
                     println!("cache: {:?}", out.cache);
                     println!("pooled-conn: {}", out.used_pool);
+                    println!("verdict: {:?}", out.verdict);
                     println!("profile: {}", fetcher.profile().name);
                     println!("--- headers ---");
                     for (n, v) in &out.headers {

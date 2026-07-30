@@ -5,7 +5,9 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use crate::detect::walls::{self, Verdict};
 use crate::error::FetchError;
+use crate::memory::DomainMap;
 use crate::profile::BrowserProfile;
 use crate::transport::pool::Pool;
 use crate::transport::{h1, h2::conn::H2Conn, tcp, tls};
@@ -37,6 +39,7 @@ pub struct FetchOutcome {
     pub cache: CacheState,
     /// True when the request rode a pooled (pre-existing) connection.
     pub used_pool: bool,
+    pub verdict: Verdict,
     pub elapsed: Duration,
 }
 
@@ -47,6 +50,7 @@ pub struct Fetcher {
     pool: Mutex<Pool>,
     jar: Mutex<CookieJar>,
     cache: Mutex<RevalidationCache>,
+    memory: Mutex<DomainMap>,
 }
 
 impl Fetcher {
@@ -60,6 +64,7 @@ impl Fetcher {
             pool: Mutex::new(Pool::new()),
             jar: Mutex::new(CookieJar::new()),
             cache: Mutex::new(RevalidationCache::new()),
+            memory: Mutex::new(DomainMap::new()),
         })
     }
 
@@ -88,6 +93,7 @@ impl Fetcher {
                     redirects: 0,
                     cache: CacheState::Fresh,
                     used_pool: false,
+                    verdict: Verdict::ContentOk,
                     elapsed: started.elapsed(),
                 });
             }
@@ -150,6 +156,44 @@ impl Fetcher {
                         let mut cache = self.cache.lock().unwrap();
                         cache.store(&current, out.status, &out.headers, &out.body);
                     }
+                    out.verdict = walls::detect(out.status, &out.headers, &out.body);
+
+                    // Wall pushed back. If it left a cookie, do ONE
+                    // cookie-warm retry (JS-less cookie walls pass on the
+                    // second, cookie-carrying request).
+                    if let Verdict::Challenge(_) = out.verdict {
+                        self.memory
+                            .lock()
+                            .unwrap()
+                            .update(&host, |m| m.challenged = true);
+                        if header_value(&out.headers, "set-cookie").is_some() {
+                            if let Ok(mut retry) = self.fetch_once(&current, &[]).await {
+                                {
+                                    let mut jar = self.jar.lock().unwrap();
+                                    jar.store_from_headers(&host, &retry.headers);
+                                }
+                                retry.verdict =
+                                    walls::detect(retry.status, &retry.headers, &retry.body);
+                                {
+                                    let mut cache = self.cache.lock().unwrap();
+                                    cache.store(&current, retry.status, &retry.headers, &retry.body);
+                                }
+                                if retry.verdict == Verdict::ContentOk {
+                                    self.memory.lock().unwrap().update(&host, |m| {
+                                        m.warm_retry_worked = true;
+                                    });
+                                }
+                                out = retry;
+                            }
+                        }
+                        if matches!(out.verdict, Verdict::Challenge(_)) {
+                            self.memory
+                                .lock()
+                                .unwrap()
+                                .update(&host, |m| m.needs_tier2 = true);
+                        }
+                    }
+
                     out.elapsed = started.elapsed();
                     out.redirects = redirects;
                     return Ok(out);
@@ -306,6 +350,7 @@ fn finish(
         redirects: 0,
         cache: CacheState::None,
         used_pool,
+        verdict: Verdict::ContentOk,
         elapsed: Duration::ZERO,
     })
 }
