@@ -6,8 +6,15 @@ pub enum FetchError {
     Tls(String),
     Io(std::io::Error),
     Http(String),
+    Ghost(String),
     Timeout,
     TooManyRedirects,
+}
+
+impl FetchError {
+    pub fn ghost(msg: impl Into<String>) -> Self {
+        Self::Ghost(msg.into())
+    }
 }
 
 impl fmt::Display for FetchError {
@@ -17,6 +24,7 @@ impl fmt::Display for FetchError {
             Self::Tls(e) => write!(f, "tls: {e}"),
             Self::Io(e) => write!(f, "io: {e}"),
             Self::Http(e) => write!(f, "http: {e}"),
+            Self::Ghost(e) => write!(f, "ghost: {e}"),
             Self::Timeout => write!(f, "timeout"),
             Self::TooManyRedirects => write!(f, "too many redirects"),
         }

@@ -64,6 +64,26 @@ impl CookieJar {
         }
     }
 
+    /// Inject a cookie harvested out-of-band (DonGhost
+    /// clearance handoff). Leading-dot domains are
+    /// subdomain cookies; bare domains are host-only.
+    pub fn store_raw(&mut self, name: &str, value: &str, domain: &str) {
+        let (dom, host_only) = if let Some(d) = domain.strip_prefix('.') {
+            (d.to_string(), false)
+        } else {
+            (domain.to_string(), true)
+        };
+        self.cookies
+            .retain(|c| !(c.name == name && c.domain == dom && c.path == "/"));
+        self.cookies.push(Cookie {
+            name: name.to_string(),
+            value: value.to_string(),
+            domain: dom,
+            path: "/".into(),
+            host_only,
+        });
+    }
+
     /// Cookie header value for a request to `host` + `path`, if any match.
     pub fn header_for(&self, host: &str, path: &str) -> Option<String> {
         let mut pairs: Vec<&Cookie> = Vec::new();

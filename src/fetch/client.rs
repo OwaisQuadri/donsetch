@@ -73,6 +73,16 @@ impl Fetcher {
         &self.profile
     }
 
+    /// Import cookies harvested by DonGhost (tier-2
+    /// solve) into the persistent jar so the tier-1
+    /// re-fetch carries the clearance.
+    pub async fn import_cookies(&self, cookies: &[(String, String, String)]) {
+        let mut jar = self.jar.lock().unwrap();
+        for (name, value, domain) in cookies {
+            jar.store_raw(name, value, domain);
+        }
+    }
+
     /// Fetch with browser-correct redirects, cookies, cache revalidation.
     pub async fn fetch(&self, url_str: &str) -> Result<FetchOutcome, FetchError> {
         let started = Instant::now();
