@@ -2,7 +2,11 @@
 status.md
 project.md
 
-# --- language-specific (add once we lock the language in discussion) ---
+# Private design blueprints — never public
+design/
+
+# Rust
+/target
 
 # Editor / OS cruft
 .DS_Store
@@ -12,9 +16,3 @@ Thumbs.db
 *~
 .idea/
 .vscode/
-
-
-# Added by cargo
-
-/target
-/target

@@ -1,17 +1,30 @@
-//! Fetch orchestrator: url → TCP → Chrome-true TLS → ALPN → h2|h1 → response,
-//! with browser-correct redirect following and a cookie jar.
+//! Fetch orchestrator with temporal stealth: origin pool, TLS session
+//! resumption, persistent cookie jar, conditional revalidation cache,
+//! Happy Eyeballs, single idempotent retry.
 
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tokio::net::TcpStream;
+use crate::error::FetchError;
+use crate::profile::BrowserProfile;
+use crate::transport::pool::Pool;
+use crate::transport::{h1, h2::conn::H2Conn, tcp, tls};
 
 use super::cookies::CookieJar;
 use super::decompress;
-use crate::error::FetchError;
-use crate::profile::BrowserProfile;
-use crate::transport::{h1, h2::conn::H2Conn, tls};
+use super::revalidate::{CacheCheck, RevalidationCache};
 
 const MAX_REDIRECTS: u8 = 10;
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheState {
+    None,
+    /// Served from a fresh cache window, no request was made.
+    Fresh,
+    /// Server said 304; body merged from cache.
+    Revalidated,
+}
 
 pub struct FetchOutcome {
     /// Final URL after redirects.
@@ -21,18 +34,33 @@ pub struct FetchOutcome {
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub redirects: u8,
+    pub cache: CacheState,
+    /// True when the request rode a pooled (pre-existing) connection.
+    pub used_pool: bool,
     pub elapsed: Duration,
 }
 
 pub struct Fetcher {
     profile: BrowserProfile,
     connector: boring::ssl::SslConnector,
+    sessions: tls::SessionStore,
+    pool: Mutex<Pool>,
+    jar: Mutex<CookieJar>,
+    cache: Mutex<RevalidationCache>,
 }
 
 impl Fetcher {
     pub fn new(profile: BrowserProfile) -> Result<Self, FetchError> {
-        let connector = tls::build_connector(&profile)?;
-        Ok(Self { profile, connector })
+        let sessions = tls::new_session_store();
+        let connector = tls::build_connector(&profile, sessions.clone())?;
+        Ok(Self {
+            profile,
+            connector,
+            sessions,
+            pool: Mutex::new(Pool::new()),
+            jar: Mutex::new(CookieJar::new()),
+            cache: Mutex::new(RevalidationCache::new()),
+        })
     }
 
     #[allow(dead_code)] // MCP surface will need this.
@@ -40,20 +68,58 @@ impl Fetcher {
         &self.profile
     }
 
-    #[allow(dead_code)]
-    fn _api_surface_note(&self) {}
-
-    /// Fetch with browser-correct redirect following (301/302/303/307/308).
+    /// Fetch with browser-correct redirects, cookies, cache revalidation.
     pub async fn fetch(&self, url_str: &str) -> Result<FetchOutcome, FetchError> {
         let started = Instant::now();
-        let mut jar = CookieJar::new();
+
+        // Fresh-window cache hit: no request at all (browser-true).
+        let check = {
+            let cache = self.cache.lock().unwrap();
+            cache.check(url_str)
+        };
+        let conditional = match check {
+            CacheCheck::Fresh(body, status, headers) => {
+                return Ok(FetchOutcome {
+                    url: url_str.into(),
+                    status,
+                    alpn: "cache".into(),
+                    headers,
+                    body,
+                    redirects: 0,
+                    cache: CacheState::Fresh,
+                    used_pool: false,
+                    elapsed: started.elapsed(),
+                });
+            }
+            CacheCheck::Revalidate(cond) => cond,
+            CacheCheck::None => Vec::new(),
+        };
+
         let mut current = url_str.to_string();
         let mut redirects = 0u8;
 
         loop {
             let host = host_of(&current)?;
-            let mut out = self.fetch_once(&current, &jar).await?;
-            jar.store_from_headers(&host, &out.headers);
+            let mut out = self.fetch_once(&current, &conditional).await?;
+            {
+                let mut jar = self.jar.lock().unwrap();
+                jar.store_from_headers(&host, &out.headers);
+            }
+
+            // 304: merge body from cache.
+            if out.status == 304 {
+                if let Some((body, status, headers)) =
+                    self.cache.lock().unwrap().stored(&current)
+                {
+                    out.status = status;
+                    out.headers = headers;
+                    out.body = body;
+                    out.cache = CacheState::Revalidated;
+                    out.elapsed = started.elapsed();
+                    out.redirects = redirects;
+                    return Ok(out);
+                }
+            }
 
             match out.status {
                 301 | 302 | 303 | 307 | 308 => {
@@ -72,8 +138,7 @@ impl Fetcher {
                         .join(&loc)
                         .map_err(|_| FetchError::Http(format!("bad redirect target: {loc}")))?;
                     if next.scheme() != "https" {
-                        // Plain-http downgrade: not yet supported. Return the
-                        // redirect response honestly instead of following blind.
+                        // Plain-http downgrade: returned honestly, not followed blind.
                         out.elapsed = started.elapsed();
                         out.redirects = redirects;
                         return Ok(out);
@@ -81,6 +146,10 @@ impl Fetcher {
                     current = next.to_string();
                 }
                 _ => {
+                    {
+                        let mut cache = self.cache.lock().unwrap();
+                        cache.store(&current, out.status, &out.headers, &out.body);
+                    }
                     out.elapsed = started.elapsed();
                     out.redirects = redirects;
                     return Ok(out);
@@ -92,7 +161,7 @@ impl Fetcher {
     async fn fetch_once(
         &self,
         url_str: &str,
-        jar: &CookieJar,
+        conditional: &[(String, String)],
     ) -> Result<FetchOutcome, FetchError> {
         let url = url::Url::parse(url_str).map_err(|_| FetchError::InvalidUrl(url_str.into()))?;
         let host = url.host_str().ok_or_else(|| FetchError::InvalidUrl(url_str.into()))?;
@@ -105,25 +174,66 @@ impl Fetcher {
             path = "/".into();
         }
         let authority = if port == 443 { host.to_string() } else { format!("{host}:{port}") };
+        let origin = authority.clone();
 
-        // DNS + TCP with timeout.
-        let addr = tokio::time::timeout(
-            Duration::from_secs(10),
-            tokio::net::lookup_host((host, port)),
-        )
-        .await
-        .map_err(|_| FetchError::Timeout)??
-        .next()
-        .ok_or_else(|| FetchError::Http(format!("dns: no address for {host}")))?;
-        let tcp = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(addr))
-            .await
-            .map_err(|_| FetchError::Timeout)??;
-        tcp.set_nodelay(true).ok();
+        // Header set from profile (Chrome order, coherence) + cookie + conditionals.
+        let mut req_headers = self.profile.h1_headers(&authority);
+        {
+            let jar = self.jar.lock().unwrap();
+            if let Some(cookie) = jar.header_for(host, &path) {
+                let pos = req_headers
+                    .iter()
+                    .position(|(n, _)| n == "priority")
+                    .unwrap_or(req_headers.len());
+                req_headers.insert(pos, ("cookie".into(), cookie));
+            }
+        }
+        req_headers.extend(conditional.iter().cloned());
 
-        // Chrome-true TLS.
+        // 1) Try a pooled h2 connection for this origin.
+        let pooled = self.pool.lock().unwrap().take_h2(&origin);
+        if let Some(mut conn) = pooled {
+            match self.h2_request(&mut conn, &authority, &path, &req_headers, true).await {
+                Ok(out) => {
+                    self.pool.lock().unwrap().put_h2(&origin, conn);
+                    return Ok(out);
+                }
+                Err(_) => { /* conn died; drop it and go fresh */ }
+            }
+        }
+
+        // 2) Fresh connection, one retry on network failure (Chrome-true).
+        let mut last_err = FetchError::Http("unreachable".into());
+        for attempt in 0..2 {
+            match self
+                .fresh_request(&origin, host, port, &authority, &path, &req_headers)
+                .await
+            {
+                Ok(out) => return Ok(out),
+                Err(e) => {
+                    last_err = e;
+                    if attempt == 1 {
+                        break;
+                    }
+                }
+            }
+        }
+        Err(last_err)
+    }
+
+    async fn fresh_request(
+        &self,
+        origin: &str,
+        host: &str,
+        port: u16,
+        authority: &str,
+        path: &str,
+        req_headers: &[(String, String)],
+    ) -> Result<FetchOutcome, FetchError> {
+        let tcp = tcp::happy_connect(host, port).await?;
         let mut tls_stream = tokio::time::timeout(
             Duration::from_secs(15),
-            tls::connect(&self.profile, &self.connector, host, tcp),
+            tls::connect(&self.profile, &self.connector, host, tcp, &self.sessions),
         )
         .await
         .map_err(|_| FetchError::Timeout)??;
@@ -133,57 +243,71 @@ impl Fetcher {
             .map(|p| String::from_utf8_lossy(p).into_owned())
             .unwrap_or_else(|| "none".into());
 
-        // Header set from profile (Chrome order, coherence), + cookie.
-        let mut req_headers = self.profile.h1_headers(&authority);
-        if let Some(cookie) = jar.header_for(host, &path) {
-            // Insert before "priority" (Chrome puts cookie late in the block).
-            let pos = req_headers
-                .iter()
-                .position(|(n, _)| n == "priority")
-                .unwrap_or(req_headers.len());
-            req_headers.insert(pos, ("cookie".into(), cookie));
-        }
-
-        let (status, headers, body) = if alpn == "h2" {
-            let h2_headers: Vec<(String, String)> = req_headers
-                .into_iter()
-                .filter(|(n, _)| n != "host" && n != "connection")
-                .collect();
+        if alpn == "h2" {
             let mut conn = H2Conn::start(tls_stream, &self.profile).await?;
-            let resp = tokio::time::timeout(
-                Duration::from_secs(30),
-                conn.get(&authority, &path, &h2_headers),
-            )
-            .await
-            .map_err(|_| FetchError::Timeout)??;
-            (resp.status, resp.headers, resp.body)
+            let out = self.h2_request(&mut conn, authority, path, req_headers, false).await?;
+            self.pool.lock().unwrap().put_h2(origin, conn);
+            Ok(out)
         } else {
             let resp = tokio::time::timeout(
-                Duration::from_secs(30),
-                h1::get(&mut tls_stream, &path, &req_headers),
+                RESPONSE_TIMEOUT,
+                h1::get(&mut tls_stream, path, req_headers),
             )
             .await
             .map_err(|_| FetchError::Timeout)??;
-            (resp.status, resp.headers, resp.body)
-        };
-
-        let encoding = headers
-            .iter()
-            .find(|(n, _)| n == "content-encoding")
-            .map(|(_, v)| v.clone())
-            .unwrap_or_default();
-        let body = decompress::decompress(&encoding, &body)?;
-
-        Ok(FetchOutcome {
-            url: url_str.into(),
-            status,
-            alpn,
-            headers,
-            body,
-            redirects: 0,
-            elapsed: Duration::ZERO,
-        })
+            finish(url_of(authority, path), "h1", resp.status, resp.headers, resp.body, false)
+        }
     }
+
+    async fn h2_request(
+        &self,
+        conn: &mut H2Conn,
+        authority: &str,
+        path: &str,
+        req_headers: &[(String, String)],
+        used_pool: bool,
+    ) -> Result<FetchOutcome, FetchError> {
+        let h2_headers: Vec<(String, String)> = req_headers
+            .iter()
+            .filter(|(n, _)| n != "host" && n != "connection")
+            .cloned()
+            .collect();
+        let resp = tokio::time::timeout(RESPONSE_TIMEOUT, conn.get(authority, path, &h2_headers))
+            .await
+            .map_err(|_| FetchError::Timeout)??;
+        finish(url_of(authority, path), "h2", resp.status, resp.headers, resp.body, used_pool)
+    }
+}
+
+fn url_of(authority: &str, path: &str) -> String {
+    format!("https://{authority}{path}")
+}
+
+fn finish(
+    url: String,
+    alpn: &str,
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    used_pool: bool,
+) -> Result<FetchOutcome, FetchError> {
+    let encoding = headers
+        .iter()
+        .find(|(n, _)| n == "content-encoding")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let body = decompress::decompress(&encoding, &body)?;
+    Ok(FetchOutcome {
+        url,
+        status,
+        alpn: alpn.into(),
+        headers,
+        body,
+        redirects: 0,
+        cache: CacheState::None,
+        used_pool,
+        elapsed: Duration::ZERO,
+    })
 }
 
 fn host_of(url_str: &str) -> Result<String, FetchError> {

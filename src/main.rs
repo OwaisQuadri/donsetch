@@ -23,6 +23,8 @@ async fn main() {
                     println!("final: {}", out.url);
                     println!("elapsed: {:?}", out.elapsed);
                     println!("bytes: {}", out.body.len());
+                    println!("cache: {:?}", out.cache);
+                    println!("pooled-conn: {}", out.used_pool);
                     println!("profile: {}", fetcher.profile().name);
                     println!("--- headers ---");
                     for (n, v) in &out.headers {
@@ -56,8 +58,30 @@ async fn main() {
                 }
             }
         }
+        "resume-test" => {
+            let url = args.get(2).expect("usage: donsetch resume-test <url>");
+            let fetcher = fetch::client::Fetcher::new(BrowserProfile::host_default())
+                .expect("fetcher init");
+            for i in 1..=3 {
+                match fetcher.fetch(url).await {
+                    Ok(out) => println!(
+                        "fetch{i}: status={} alpn={} elapsed={:?} bytes={} cache={:?} pooled={}",
+                        out.status,
+                        out.alpn,
+                        out.elapsed,
+                        out.body.len(),
+                        out.cache,
+                        out.used_pool
+                    ),
+                    Err(e) => {
+                        eprintln!("fetch{i} error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
         _ => {
-            eprintln!("donsetch — commands: fetch <url> | fingerprint [url]");
+            eprintln!("donsetch — commands: fetch <url> | fingerprint [url] | resume-test <url>");
         }
     }
 }
