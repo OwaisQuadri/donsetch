@@ -56,6 +56,7 @@ async fn main() {
             let mut input_file: Option<String> = None;
             let mut opts = extract::ExtractOptions::default();
             let mut tier = "auto".to_string();
+            let mut shot_path: Option<String> = None;
             let mut i = 2;
             while i < args.len() {
                 match args[i].as_str() {
@@ -85,6 +86,10 @@ async fn main() {
                     "--tier" => {
                         i += 1;
                         tier = args.get(i).cloned().unwrap_or("auto".into());
+                    }
+                    "--shot" => {
+                        i += 1;
+                        shot_path = args.get(i).cloned();
                     }
                     "--input" => {
                         i += 1;
@@ -123,6 +128,21 @@ async fn main() {
                 .expect("fetcher init");
             let mut tier_used = "1";
             let mut ghost: Option<ghost::Ghost> = None;
+            let mut state = ghost::cache::GhostState::load();
+            let host = url::Url::parse(&url)
+                .ok()
+                .and_then(|u| u.host_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            // Warm tier 1 from a previous solve — the ghost
+            // stays asleep until clearance actually fails.
+            if tier != "2" {
+                if let Some(rec) = state.solved_for(&host) {
+                    eprintln!("--- warm start: {} solved cookies from state", rec.cookies.len());
+                    fetcher.import_cookies(&rec.cookies).await;
+                    tier_used = "1(warm)";
+                }
+            }
 
             let mut out = fetcher.fetch(&url).await.expect("fetch");
             let mut rendered_html: Option<Vec<u8>> = None;
@@ -153,6 +173,7 @@ async fn main() {
                             ghost::ops::has_clearance(&r.cookies)
                         );
                         fetcher.import_cookies(&r.cookies).await;
+                        state.record_solved(&host, &r.cookies);
                         let retry =
                             fetcher.fetch(&url).await.expect("fetch");
                         if matches!(
@@ -175,6 +196,10 @@ async fn main() {
                             "# Blocked: interactive captcha\n\n{} requires a human-or-service captcha solve. No solving service by design.\n\n*[verdict: {:?}, status: {}]*",
                             url, out.verdict, out.status
                         );
+                        if let Some(path) = &shot_path {
+                            let _ = g.screenshot(path).await;
+                            eprintln!("--- what the ghost saw -> {path}");
+                        }
                         g.kill().await;
                         return;
                     }
@@ -221,38 +246,58 @@ async fn main() {
             };
 
             // RENDER mode: clean 200 but a JS shell.
+            // Check the render cache first — repeat SPA
+            // visits skip the browser entirely.
             if ex.thin && tier == "auto" {
-                let g = match ghost {
-                    Some(g) => g,
-                    None => ghost::Ghost::launch(&profile)
-                        .await
-                        .expect("ghost launch"),
-                };
-                let mut g = g;
-                match ghost::ops::render(
-                    &mut g,
-                    &final_url,
-                    std::time::Duration::from_secs(30),
-                )
-                .await
-                {
-                    Ok(html) => {
-                        eprintln!(
-                            "--- ghost rendered {} bytes (was thin)",
-                            html.len()
-                        );
-                        ex = extract::extract(
-                            html.as_bytes(),
-                            "text/html",
-                            &final_url,
-                            &opts,
-                        )
-                        .expect("extract");
-                        tier_used = "ghost-render";
+                if let Some(rc) = state.render_for(&final_url) {
+                    eprintln!(
+                        "--- render cache hit ({}B, fresh)",
+                        rc.html.len()
+                    );
+                    ex = extract::extract(
+                        rc.html.as_bytes(),
+                        "text/html",
+                        &final_url,
+                        &opts,
+                    )
+                    .expect("extract");
+                    tier_used = "render-cache";
+                } else {
+                    let g = match ghost {
+                        Some(g) => g,
+                        None => ghost::Ghost::launch(&profile)
+                            .await
+                            .expect("ghost launch"),
+                    };
+                    let mut g = g;
+                    match ghost::ops::render(
+                        &mut g,
+                        &final_url,
+                        std::time::Duration::from_secs(30),
+                    )
+                    .await
+                    {
+                        Ok(html) => {
+                            eprintln!(
+                                "--- ghost rendered {} bytes (was thin)",
+                                html.len()
+                            );
+                            state.record_render(&final_url, &html);
+                            ex = extract::extract(
+                                html.as_bytes(),
+                                "text/html",
+                                &final_url,
+                                &opts,
+                            )
+                            .expect("extract");
+                            tier_used = "ghost-render";
+                        }
+                        Err(e) => {
+                            eprintln!("--- ghost render failed: {e}")
+                        }
                     }
-                    Err(e) => eprintln!("--- ghost render failed: {e}"),
+                    ghost = Some(g);
                 }
-                ghost = Some(g);
             }
 
             let extract_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -391,7 +436,46 @@ async fn main() {
                     println!("shot -> {path}");
                     g.kill().await;
                 }
-                _ => eprintln!("ghost subcommands: solve | render | shot"),
+                "selftest" => {
+                    let mut g = ghost::Ghost::launch(&profile)
+                        .await
+                        .expect("launch");
+                    match ghost::ops::selftest(&mut g).await {
+                        Ok(j) => println!("{j}"),
+                        Err(e) => eprintln!("selftest: {e}"),
+                    }
+                    g.kill().await;
+                }
+                "freeze-check" => {
+                    // Lifecycle roundtrip: launch → render →
+                    // freeze (0 CPU) → thaw → render again.
+                    let mut g = ghost::Ghost::launch(&profile)
+                        .await
+                        .expect("launch");
+                    let h1 = ghost::ops::render(
+                        &mut g,
+                        "https://example.com",
+                        std::time::Duration::from_secs(15),
+                    )
+                    .await
+                    .expect("render1");
+                    println!("render1: {}B", h1.len());
+                    g.freeze();
+                    println!("frozen");
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let alive = g.thaw();
+                    println!("thawed alive={alive}");
+                    let h2 = ghost::ops::render(
+                        &mut g,
+                        "https://example.com",
+                        std::time::Duration::from_secs(15),
+                    )
+                    .await
+                    .expect("render2");
+                    println!("render2 after thaw: {}B", h2.len());
+                    g.kill().await;
+                }
+                _ => eprintln!("ghost subcommands: solve | render | shot | selftest | freeze-check"),
             }
         }
         _ => {

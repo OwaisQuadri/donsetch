@@ -13,6 +13,7 @@
 //! 10 min frozen. The persistent profile dir keeps cookie
 //! warmth across restarts.
 
+pub mod cache;
 pub mod cdp;
 pub mod ops;
 
@@ -44,6 +45,8 @@ pub struct Ghost {
     pub cdp: cdp::Cdp,
     /// Attached page session id.
     pub session: String,
+    /// Our page target id.
+    target: String,
     #[allow(dead_code)] // read by the daemon idle reaper
     frozen: bool,
     pub last_used: Instant,
@@ -115,6 +118,7 @@ impl Ghost {
             &format!("--user-data-dir={}", dir.display()),
             &format!("--user-agent={}", profile.user_agent),
             "--window-size=1920,1080",
+            "--window-position=0,0",
             "--lang=en-US",
             "--no-first-run",
             "--no-default-browser-check",
@@ -199,11 +203,58 @@ impl Ghost {
             .ok_or_else(|| FetchError::ghost("no sessionId"))?
             .to_string();
         cdp.call(Some(&session), "Page.enable", json!({})).await?;
+        // Headless reports screen 800x600 + outer 0x0 while
+        // the window is 1920x1080 — a glaring contradiction.
+        // Emulation.setDeviceMetricsOverride makes the
+        // geometry tell ONE story. Not Runtime; the standard
+        // non-injectable way to align the viewport.
+        cdp.call(
+            Some(&session),
+            "Emulation.setDeviceMetricsOverride",
+            json!({
+                "width": 1920,
+                "height": 1080,
+                "deviceScaleFactor": 1,
+                "mobile": false,
+                "screenWidth": 1920,
+                "screenHeight": 1080
+            }),
+        )
+        .await?;
+        // outerWidth/Height stay 0 in headless — a classic
+        // tell. Give the window real bounds so outer size
+        // is window size + chrome frame.
+        if let Ok(win) = cdp
+            .call(
+                Some(&session),
+                "Browser.getWindowForTarget",
+                json!({}),
+            )
+            .await
+        {
+            if let Some(id) = win.get("windowId").and_then(Value::as_i64)
+            {
+                let _ = cdp
+                    .call(
+                        None,
+                        "Browser.setWindowBounds",
+                        json!({
+                            "windowId": id,
+                            "bounds": {
+                                "left": 0, "top": 0,
+                                "width": 1920, "height": 1167
+                            }
+                        }),
+                    )
+                    .await;
+            }
+        }
 
         Ok(Self {
             child,
             cdp,
             session,
+            target,
             frozen: false,
             last_used: Instant::now(),
         })
@@ -215,7 +266,6 @@ impl Ghost {
 
     /// SIGSTOP the whole process group. CPU → 0, RAM goes
     /// cold and swappable. Resume is ~ms.
-    #[allow(dead_code)] // daemon idle reaper (MCP milestone)
     pub fn freeze(&mut self) {
         if self.frozen {
             return;
@@ -230,7 +280,6 @@ impl Ghost {
 
     /// SIGCONT the group. False if the browser died while
     /// frozen (caller relaunches).
-    #[allow(dead_code)] // daemon idle reaper (MCP milestone)
     pub fn thaw(&mut self) -> bool {
         if !self.frozen {
             return true;
@@ -299,6 +348,23 @@ impl Ghost {
             )
             .await?
             .get("outerHTML")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string())
+    }
+
+    /// Current page URL (targetInfo — no Runtime).
+    pub async fn current_url(&self) -> Result<String, FetchError> {
+        Ok(self
+            .cdp
+            .call(
+                None,
+                "Target.getTargetInfo",
+                json!({ "targetId": self.target }),
+            )
+            .await?
+            .get("targetInfo")
+            .and_then(|t| t.get("url"))
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string())

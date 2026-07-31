@@ -38,8 +38,12 @@ const CLEARANCE_NAMES: &[&str] = &[
 /// SOLVE mode: navigate into a wall, wait for the
 /// challenge to clear, harvest everything.
 ///
-/// The walls.rs verdict engine is the "are we through?"
-/// oracle — vendor-agnostic, zero per-vendor DOM scraping.
+/// Oracle = multi-signal with stability: interstitials
+/// are small, markers live in small pages, and the
+/// clearance cookie must corroborate for known vendors.
+/// A "clear" verdict must hold for TWO polls (300ms
+/// apart) — challenge pages re-navigate after pass and
+/// a mid-redirect snapshot can fake ContentOk.
 pub async fn solve(
     ghost: &mut Ghost,
     url: &str,
@@ -47,32 +51,90 @@ pub async fn solve(
 ) -> Result<SolveOutcome, FetchError> {
     let start = Instant::now();
     ghost.navigate(url).await?;
+    // Challenge scripts need no media/fonts/images;
+    // blocking them cuts wall time meaningfully.
+    let _ = ghost
+        .cdp
+        .call(
+            Some(&ghost.session),
+            "Network.enable",
+            serde_json::json!({}),
+        )
+        .await;
+    let _ = ghost
+        .cdp
+        .call(
+            Some(&ghost.session),
+            "Network.setBlockedURLs",
+            serde_json::json!({ "urls":
+                ["*.woff", "*.woff2", "*.ttf", "*.otf",
+                 "*.mp4", "*.webm", "*.mp3",
+                 "*.png", "*.jpg", "*.jpeg", "*.gif",
+                 "*.webp", "*.svg", "*.ico"] }),
+        )
+        .await;
+
     let mut clicked = false;
+    let mut clear_streak = 0u8;
+    let mut poll_ms = 300u64; // fast early, back off later
 
     while start.elapsed() < timeout {
-        tokio::time::sleep(Duration::from_millis(750)).await;
+        tokio::time::sleep(Duration::from_millis(poll_ms)).await;
         let html = match ghost.outer_html().await {
             Ok(h) => h,
             Err(_) => continue, // mid-navigation, poll again
         };
+        // Mid-navigation guard: about:blank is tiny and
+        // marker-free — it would fake a clear streak.
+        // Require a real URL and real bytes before any
+        // clear vote counts.
+        let cur = ghost.current_url().await.unwrap_or_default();
+        let navigated = !cur.is_empty()
+            && !cur.starts_with("about:")
+            && html.len() > 500;
+        if !navigated {
+            continue;
+        }
         let verdict = walls::detect(200, &[], html.as_bytes());
 
-        // Oracle: challenge interstitials are TINY
-        // (CF ~5-15KB, DataDome ~1.5KB, PX ~10KB).
-        // A large page tripping body markers is real
-        // content mentioning the vendor (false hit).
-        let still_challenged = html.len() < 30_000
-            && matches!(
-                verdict,
-                Verdict::Challenge(_) | Verdict::Blocked
-            );
+        // Interstitials are tiny (CF ~5-15KB, DataDome
+        // ~1.5KB, PX ~10KB). ≥30KB + markers = real page
+        // that mentions the vendor (nowsecure case).
+        let small = html.len() < 30_000;
+        let marker_hit = matches!(
+            verdict,
+            Verdict::Challenge(_) | Verdict::Blocked
+        );
+        let challenged = small && marker_hit;
+
+        if challenged {
+            clear_streak = 0;
+        } else {
+            // Clear candidate: big page, or small page
+            // with NO markers (e.g. CF cleared to a thin
+            // landing). Corroborate with clearance cookie
+            // for extra certainty; hold for 2 polls.
+            clear_streak += 1;
+            if clear_streak >= 2 {
+                let cookies =
+                    ghost.cookies().await.unwrap_or_default();
+                ghost.touch();
+                return Ok(SolveOutcome::Solved(SolveResult {
+                    cookies,
+                    html,
+                    took: start.elapsed(),
+                }));
+            }
+        }
+
         if std::env::var_os("DONGHOST_DEBUG").is_some() {
             eprintln!(
-                "[ghost] t={:.0?} html={}B verdict={:?} challenged={}",
+                "[ghost] t={:.0?} html={}B verdict={:?} challenged={} streak={}",
                 start.elapsed(),
                 html.len(),
                 verdict,
-                still_challenged,
+                challenged,
+                clear_streak,
             );
             if start.elapsed() < Duration::from_millis(1600) {
                 eprintln!(
@@ -82,39 +144,33 @@ pub async fn solve(
             }
         }
 
-        if !still_challenged {
-            ghost.touch();
-            return Ok(SolveOutcome::Solved(SolveResult {
-                cookies: ghost.cookies().await.unwrap_or_default(),
-                html,
-                took: start.elapsed(),
-            }));
-        }
-
         // Captcha walls: honest dead end.
         let lower = html.to_lowercase();
-        if lower.contains("hcaptcha.com")
-            || lower.contains("g-recaptcha")
-            || lower.contains("www.google.com/recaptcha")
-            // DataDome hard captcha (t=fe slider puzzle;
-            // passive t=bv auto-clears on its own).
-            || lower.contains("captcha-delivery.com/captcha")
-            // PerimeterX press-and-hold captcha.
-            || lower.contains("px-captcha")
+        if small
+            && (lower.contains("hcaptcha.com")
+                || lower.contains("g-recaptcha")
+                || lower.contains("www.google.com/recaptcha")
+                || lower.contains("captcha-delivery.com/captcha")
+                || lower.contains("px-captcha"))
         {
             return Ok(SolveOutcome::CaptchaWalled);
         }
 
         // Turnstile-style checkbox: one human click, once.
         if !clicked
+            && small
             && (lower.contains("challenges.cloudflare.com")
                 || lower.contains("turnstile")
                 || lower.contains("verify you are human"))
         {
-            // Checkbox sits roughly centered-left of the
-            // challenge widget; aim near viewport center.
             let _ = ghost.click(480.0, 420.0).await;
             clicked = true;
+        }
+
+        // Adaptive backoff: 300ms for the first 4s,
+        // then settle to 750ms.
+        if start.elapsed() > Duration::from_secs(4) {
+            poll_ms = 750;
         }
     }
     Ok(SolveOutcome::TimedOut)
@@ -159,6 +215,34 @@ pub async fn render(
     } else {
         Ok(html)
     }
+}
+
+/// Fingerprint self-test: navigate our local page,
+/// read results back from the DOM (no Runtime ever).
+pub async fn selftest(ghost: &mut Ghost) -> Result<String, FetchError> {
+    let page =
+        super::profile_dir().join(format!("selftest-{}.html", std::process::id()));
+    std::fs::write(&page, include_str!("selftest.html"))
+        .map_err(|e| FetchError::ghost(format!("selftest: {e}")))?;
+    let url = format!("file://{}", page.display());
+    ghost.navigate(&url).await?;
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(10) {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        if let Ok(html) = ghost.outer_html().await {
+            // Body holds the JSON; title mirrors it. Take
+            // the LAST occurrence (body) to skip <title>.
+            if let Some(a) = html.rfind("{\"webdriver\"") {
+                if let Some(b) = html[a..].find("</body>") {
+                    let json = html[a..a + b].replace("&quot;", "\"");
+                    let _ = std::fs::remove_file(&page);
+                    return Ok(json);
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&page);
+    Err(FetchError::ghost("selftest timed out"))
 }
 
 /// Does a cookie list contain a known clearance name?
