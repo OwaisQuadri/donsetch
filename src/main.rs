@@ -4,8 +4,11 @@ mod extract;
 mod fetch;
 mod ghost;
 mod mcp;
+mod search;
 mod memory;
 mod profile;
+use fetch::client::Fetcher;
+use transport::proxy;
 mod transport;
 
 use profile::BrowserProfile;
@@ -323,10 +326,57 @@ async fn main() {
                 g.kill().await;
             }
         }
+        "search" => {
+            // donsetch search <query...> [--max n]
+            let mut terms: Vec<String> = Vec::new();
+            let mut max = 10usize;
+            let mut i = 2;
+            while i < args.len() {
+                if args[i] == "--max" {
+                    i += 1;
+                    max = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(10);
+                } else {
+                    terms.push(args[i].clone());
+                }
+                i += 1;
+            }
+            let query = terms.join(" ");
+            let f = Fetcher::new(BrowserProfile::host_default()).expect("fetcher");
+            let searcher = search::Searcher::new(f, search::egress::EgressPool::from_env());
+            match searcher.search(&query, max, None).await {
+                Ok(out) => {
+                    print!("{}", search::render_markdown(&out, &query));
+                    eprintln!("── engines: {}", out.report.iter()
+                        .map(|r| format!("{}:{}({} hits, {}ms)", r.engine, r.status, r.hits, r.ms))
+                        .collect::<Vec<_>>().join(", "));
+                    eprintln!("── intent={:?} weak={} cached={} t={:.1}s",
+                        out.intent, out.weak, out.cached, out.elapsed.as_secs_f64());
+                }
+                Err(e) => { eprintln!("search: {e}"); std::process::exit(1); }
+            }
+        }
         "mcp" => {
             if let Err(e) = mcp::server::run().await {
                 eprintln!("mcp daemon: {e}");
                 std::process::exit(1);
+            }
+        }
+        "probe" => {
+            // donsetch probe <serp-url> [user:pass@host:port] [dump]
+            let u = args.get(2).map(String::as_str).unwrap_or("");
+            let px = args.get(3).and_then(|s| proxy::Proxy::parse(s).ok());
+            let f = Fetcher::new(BrowserProfile::host_default()).expect("fetcher");
+            match f.fetch_once_via(u, &[], px.as_ref()).await {
+                Ok(out) => {
+                    println!("status={} alpn={} bytes={} verdict={:?} t={:.2}s",
+                        out.status, out.alpn, out.body.len(), out.verdict,
+                        out.elapsed.as_secs_f64());
+                    if let Some(p) = std::env::args().nth(4) {
+                        std::fs::write(&p, &out.body).ok();
+                        eprintln!("dumped -> {p}");
+                    }
+                }
+                Err(e) => println!("error: {e}"),
             }
         }
         "fingerprint" => {

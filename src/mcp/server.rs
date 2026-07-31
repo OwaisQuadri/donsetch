@@ -14,6 +14,9 @@ use crate::ghost::cache::GhostState;
 use crate::ghost::manager::GhostManager;
 use crate::ghost::ops;
 use crate::profile::BrowserProfile;
+use crate::search::{self, Searcher};
+use crate::search::egress::EgressPool;
+use crate::search::intent::Intent;
 
 use super::tools;
 
@@ -23,17 +26,23 @@ pub struct Daemon {
     profile: BrowserProfile,
     ghost_mgr: Arc<GhostManager>,
     state: Mutex<GhostState>,
+    searcher: Searcher,
 }
 
 impl Daemon {
     pub fn new() -> Result<Self, crate::error::FetchError> {
         let profile = BrowserProfile::host_default();
         let fetcher = Fetcher::new(profile.clone())?;
+        let searcher = Searcher::new(
+            Fetcher::new(profile.clone())?,
+            EgressPool::from_env(),
+        );
         Ok(Self {
             fetcher,
             profile,
             ghost_mgr: GhostManager::new(),
             state: Mutex::new(GhostState::load()),
+            searcher,
         })
     }
 }
@@ -151,6 +160,7 @@ async fn call_tool(
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     match name {
         "fetch" => Ok(fetch_tool(daemon, &args).await),
+        "search" => Ok(search_tool(daemon, &args).await),
         _ => Err((-32602, format!("unknown tool: {name}"))),
     }
 }
@@ -362,6 +372,36 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
             json!({ "ttlMs": 300_000, "cacheScope": "session" });
     }
     result
+}
+
+async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
+    let query = match args.get("query").and_then(Value::as_str) {
+        Some(q) if !q.trim().is_empty() => q.to_string(),
+        _ => return tool_error("search: query required"),
+    };
+    let max = args
+        .get("max_results")
+        .and_then(Value::as_u64)
+        .unwrap_or(10) as usize;
+    let intent = match args.get("intent").and_then(Value::as_str) {
+        Some("web") => Some(Intent::Web),
+        Some("code") => Some(Intent::Code),
+        Some("paper") => Some(Intent::Paper),
+        Some("news") => Some(Intent::News),
+        Some("entity") => Some(Intent::Entity),
+        _ => None,
+    };
+    match daemon.searcher.search(&query, max, intent).await {
+        Ok(out) => {
+            let md = search::render_markdown(&out, &query);
+            let meta = search::render_meta(&out);
+            json!({
+                "content": [{ "type": "text", "text": md }],
+                "structuredContent": meta,
+            })
+        }
+        Err(e) => tool_error(format!("search: {e}")),
+    }
 }
 
 fn tool_error(message: impl Into<String>) -> Value {

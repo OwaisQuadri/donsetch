@@ -48,15 +48,19 @@ pub fn detect(status: u16, headers: &[(String, String)], body: &[u8]) -> Verdict
         401 | 402 => return Verdict::AuthWall,
         404 => return Verdict::SoftNotFound,
         403 | 429 | 503 => {
-            return classify_wall(&text, headers, is_cf, status);
+            return classify_wall(&text, headers, is_cf, status, true);
         }
         _ => {}
     }
 
     if (200..300).contains(&status) {
-        // Interstitials dressed as 200 — scan regardless of
-        // body size (marker scan is cheap).
-        let v = classify_wall(&text, headers, is_cf, status);
+        // Interstitials dressed as 200. Body markers only
+        // count on SMALL pages: interstitials are tiny,
+        // while real pages (a Bing SERP, an article about
+        // Cloudflare) mention vendors in passing — the
+        // lesson the ghost oracle learned first.
+        let allow_body_markers = scan.len() < 32 * 1024;
+        let v = classify_wall(&text, headers, is_cf, status, allow_body_markers);
         if v != Verdict::ContentOk {
             return v;
         }
@@ -71,7 +75,27 @@ fn classify_wall(
     headers: &[(String, String)],
     is_cf: bool,
     status: u16,
+    allow_body_markers: bool,
 ) -> Verdict {
+    // Header-based detection is always active: a
+    // cf-mitigated / x-datadome header never lies,
+    // regardless of page size.
+    if is_cf && (status == 403 || status == 503) {
+        return Verdict::Challenge(Vendor::Cloudflare);
+    }
+    if header(headers, "x-datadome").is_some() {
+        return Verdict::Challenge(Vendor::DataDome);
+    }
+
+    // Body markers below. On 2xx these only run for SMALL
+    // pages: interstitials are tiny; large real pages
+    // (Bing SERPs embed inactive turnstile scripts,
+    // articles mention vendors) false-positive otherwise —
+    // the lesson the ghost oracle learned first.
+    if !allow_body_markers {
+        return Verdict::ContentOk;
+    }
+
     // Cloudflare
     if is_cf || text.contains("cf-chl") || text.contains("cloudflare") {
         if text.contains("attention required") {
@@ -88,10 +112,7 @@ fn classify_wall(
         }
     }
     // DataDome
-    if header(headers, "x-datadome").is_some()
-        || text.contains("datadome")
-        || text.contains("captcha-delivery.com")
-    {
+    if text.contains("datadome") || text.contains("captcha-delivery.com") {
         return Verdict::Challenge(Vendor::DataDome);
     }
     // Akamai: block pages carry "Reference #…" +
@@ -137,6 +158,16 @@ fn classify_wall(
     {
         return Verdict::Challenge(Vendor::Generic);
     }
+    // Small 200-page captchas (Mojeek et al.): a real page
+    // is never this tiny with a challenge form on it.
+    if text.len() < 16_384
+        && text.contains("captcha")
+        && (text.contains("verification")
+            || text.contains("challenge")
+            || text.contains("robot"))
+    {
+        return Verdict::Challenge(Vendor::Generic);
+    }
     Verdict::ContentOk
 }
 
@@ -145,4 +176,26 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(name))
         .map(|(_, v)| v.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn large_serp_with_vendor_mentions_is_content() {
+        let body = std::fs::read("/tmp/bing2.html").unwrap();
+        let scan = &body[..body.len().min(64 * 1024)];
+        let text = String::from_utf8_lossy(scan).to_lowercase();
+        eprintln!("scan_len={}", scan.len());
+        let v = detect(200, &[], &body);
+        assert!(matches!(v, Verdict::ContentOk), "got {v:?}");
+    }
+
+    #[test]
+    fn small_captcha_page_is_challenge() {
+        let body = std::fs::read("/tmp/moj2.html").unwrap();
+        let v = detect(200, &[], &body);
+        assert!(matches!(v, Verdict::Challenge(_)), "got {v:?}");
+    }
 }

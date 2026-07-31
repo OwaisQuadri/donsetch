@@ -10,7 +10,7 @@ use crate::error::FetchError;
 use crate::memory::DomainMap;
 use crate::profile::BrowserProfile;
 use crate::transport::pool::Pool;
-use crate::transport::{h1, h2::conn::H2Conn, tcp, tls};
+use crate::transport::{h1, h2::conn::H2Conn, proxy, tcp, tls};
 
 use super::cookies::CookieJar;
 use super::decompress;
@@ -217,6 +217,17 @@ impl Fetcher {
         url_str: &str,
         conditional: &[(String, String)],
     ) -> Result<FetchOutcome, FetchError> {
+        self.fetch_once_via(url_str, conditional, None).await
+    }
+
+    /// Same, optionally through a CONNECT proxy. Pool keys
+    /// are proxy-scoped so egress IPs never share conns.
+    pub async fn fetch_once_via(
+        &self,
+        url_str: &str,
+        conditional: &[(String, String)],
+        proxy: Option<&proxy::Proxy>,
+    ) -> Result<FetchOutcome, FetchError> {
         let url = url::Url::parse(url_str).map_err(|_| FetchError::InvalidUrl(url_str.into()))?;
         let host = url.host_str().ok_or_else(|| FetchError::InvalidUrl(url_str.into()))?;
         let port = url.port().unwrap_or(443);
@@ -228,7 +239,10 @@ impl Fetcher {
             path = "/".into();
         }
         let authority = if port == 443 { host.to_string() } else { format!("{host}:{port}") };
-        let origin = authority.clone();
+        let origin = match proxy {
+            Some(p) => format!("{}|{}", p.id(), authority),
+            None => authority.clone(),
+        };
 
         // Header set from profile (Chrome order, coherence) + cookie + conditionals.
         let mut req_headers = self.profile.h1_headers(&authority);
@@ -248,7 +262,8 @@ impl Fetcher {
         let pooled = self.pool.lock().unwrap().take_h2(&origin);
         if let Some(mut conn) = pooled {
             match self.h2_request(&mut conn, &authority, &path, &req_headers, true).await {
-                Ok(out) => {
+                Ok(mut out) => {
+                    out.verdict = walls::detect(out.status, &out.headers, &out.body);
                     self.pool.lock().unwrap().put_h2(&origin, conn);
                     return Ok(out);
                 }
@@ -260,10 +275,13 @@ impl Fetcher {
         let mut last_err = FetchError::Http("unreachable".into());
         for attempt in 0..2 {
             match self
-                .fresh_request(&origin, host, port, &authority, &path, &req_headers)
+                .fresh_request(&origin, host, port, &authority, &path, &req_headers, proxy)
                 .await
             {
-                Ok(out) => return Ok(out),
+                Ok(mut out) => {
+                    out.verdict = walls::detect(out.status, &out.headers, &out.body);
+                    return Ok(out);
+                }
                 Err(e) => {
                     last_err = e;
                     if attempt == 1 {
@@ -283,8 +301,12 @@ impl Fetcher {
         authority: &str,
         path: &str,
         req_headers: &[(String, String)],
+        proxy: Option<&proxy::Proxy>,
     ) -> Result<FetchOutcome, FetchError> {
-        let tcp = tcp::happy_connect(host, port).await?;
+        let tcp = match proxy {
+            Some(p) => p.connect(host, port).await?,
+            None => tcp::happy_connect(host, port).await?,
+        };
         let mut tls_stream = tokio::time::timeout(
             Duration::from_secs(15),
             tls::connect(&self.profile, &self.connector, host, tcp, &self.sessions),

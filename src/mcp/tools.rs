@@ -77,6 +77,38 @@ pub fn list() -> Value {
                 },
                 "required": ["url"]
             }
+        }, {
+            "name": "search",
+            "description": concat!(
+                "Web search across multiple engines (independent ",
+                "indexes + Bing family) and keyless verticals ",
+                "(GitHub, Wikipedia, HN, Scholar, news) fused by ",
+                "cross-engine consensus ranking. Returns ranked ",
+                "markdown + structuredContent with urls, scores, ",
+                "consensus counts, and an engine health report. ",
+                "Set intent when you know it; weak=true means low ",
+                "consensus, treat carefully. Follow up with the ",
+                "fetch tool on chosen urls."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Max results (default 10)."
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["auto", "web", "code", "paper", "news", "entity"],
+                        "description": "auto (default) detects intent. code adds GitHub+HN; paper adds Semantic Scholar; news adds Google News; entity adds Wikipedia."
+                    }
+                },
+                "required": ["query"]
+            }
         }]
     })
 }
