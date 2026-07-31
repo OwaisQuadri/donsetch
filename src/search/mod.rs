@@ -300,11 +300,9 @@ impl Searcher {
         })
     }
 
-    fn bump_trust(&self, engine: &str, ok: bool) {
+    fn bump_trust(&self, base_engine: &str, ok: bool) {
         let mut trust = self.trust.lock().unwrap();
-        // Base engine name (variant queries share it).
-        let base = engine.split('@').next().unwrap_or(engine).to_string();
-        let t = trust.entry(base).or_insert(1.0);
+        let t = trust.entry(base_engine.to_string()).or_insert(1.0);
         let target = if ok { 1.2 } else { 0.3 };
         *t = (*t * 0.7 + target * 0.3).clamp(0.2, 2.0);
     }
