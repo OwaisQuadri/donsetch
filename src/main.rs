@@ -329,7 +329,7 @@ async fn main() {
         "search" => {
             // donsetch search <query...> [--max n]
             let mut terms: Vec<String> = Vec::new();
-            let mut max = 10usize;
+            let mut max = 7usize;
             let mut i = 2;
             while i < args.len() {
                 if args[i] == "--max" {

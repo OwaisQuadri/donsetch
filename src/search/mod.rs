@@ -11,7 +11,7 @@ pub mod rank;
 pub mod verticals;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -25,14 +25,41 @@ use intent::Intent;
 use rank::Merged;
 
 const ENGINE_TIMEOUT: Duration = Duration::from_secs(8);
-const CACHE_TTL: Duration = Duration::from_secs(600);
+
+/// Intent-aware cache TTL: news stales fast, evergreen
+/// content stales slow. Every cached query is a query
+/// that never touches an egress — the #1 rate reducer.
+fn cache_ttl(intent: Intent) -> Duration {
+    match intent {
+        Intent::News => Duration::from_secs(300),
+        Intent::Code => Duration::from_secs(900),
+        _ => Duration::from_secs(1800),
+    }
+}
+
+/// Normalize a query for cache keys: casing, punctuation
+/// and stopwords don't change intent, so they don't get
+/// to spend egress budget twice.
+fn norm_query(q: &str) -> String {
+    const STOP: &[&str] = &[
+        "a", "an", "the", "is", "are", "was", "were", "of", "in", "on", "at", "to",
+        "for", "and", "or", "what", "which", "how", "do", "does", "i", "you", "it",
+    ];
+    q.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty() && !STOP.contains(w))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 pub struct Searcher {
     fetcher: Fetcher,
     pool: EgressPool,
     /// engine -> trust EWMA (1.0 seed; 0.2..2.0 clamp).
     trust: Mutex<HashMap<String, f64>>,
-    /// exact-query cache: zero egress cost on repeats.
+    /// normalized-query cache: zero egress cost on repeats.
+    /// Stores up to 12 results; reads truncate to the
+    /// requested max so max_results variants share entries.
     cache: Mutex<HashMap<String, (Instant, Vec<Merged>, usize)>>,
     /// Chronic-failure quarantine: engine -> (consecutive
     /// failures, last failure). 3 strikes across any
@@ -48,6 +75,9 @@ pub struct EngineReport {
     pub status: String,
     pub hits: usize,
     pub ms: u64,
+    /// Which lane carried it (observability for the
+    /// governor's routing decisions).
+    pub egress: String,
 }
 
 pub struct SearchOutcome {
@@ -65,9 +95,34 @@ impl Searcher {
             fetcher,
             pool,
             trust: Mutex::new(HashMap::new()),
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(load_cache_disk()),
             failures: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Proxy preflight: probe every proxy at startup so
+    /// dead lines are benched BEFORE a query ever gets
+    /// assigned to them. Runs in the background; the first
+    /// queries just use healthy lanes.
+    pub fn preflight(self: &Arc<Self>) {
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            for proxy in this.pool.proxies() {
+                let id = proxy.id();
+                let probe = this.fetcher.fetch_once_via(
+                    "https://api.ipify.org/",
+                    &[],
+                    Some(&proxy),
+                );
+                match tokio::time::timeout(Duration::from_secs(6), probe).await {
+                    Ok(Ok(o)) if o.status == 200 => {}
+                    Ok(Err(e)) if format!("{e}").contains("CONNECT -> 407") => {
+                        this.pool.report_auth_fail(&id);
+                    }
+                    _ => this.pool.report_dead(&id),
+                }
+            }
+        });
     }
 
     /// True when an engine is benched for chronic failure.
@@ -96,13 +151,13 @@ impl Searcher {
     ) -> Result<SearchOutcome, FetchError> {
         let started = Instant::now();
         let intent = forced_intent.unwrap_or_else(|| intent::detect(query));
-        let cache_key = format!("{query}|{max_results}|{intent:?}");
+        let cache_key = format!("{}|{intent:?}", norm_query(query));
 
         if let Some((at, cached, total)) = self.cache.lock().unwrap().get(&cache_key) {
-            if at.elapsed() < CACHE_TTL {
+            if at.elapsed() < cache_ttl(intent) {
                 let weak = rank::is_weak(cached, *total);
                 return Ok(SearchOutcome {
-                    results: cached.clone(),
+                    results: cached.iter().take(max_results).cloned().collect(),
                     weak,
                     intent,
                     report: Vec::new(),
@@ -125,23 +180,48 @@ impl Searcher {
         }
         // Engines get the original query; the recall variant
         // goes only to the first two engines (top trust).
-        let live: Vec<&str> = engines
+        let mut live: Vec<&str> = engines
             .iter()
             .filter(|e| !self.quarantined(e))
             .copied()
             .collect();
+        // Rank engines by learned trust so width cuts drop
+        // the weakest first.
+        {
+            let trust = self.trust.lock().unwrap();
+            live.sort_by(|a, b| {
+                trust
+                    .get(*b)
+                    .copied()
+                    .unwrap_or(1.0)
+                    .total_cmp(&trust.get(*a).copied().unwrap_or(1.0))
+            });
+        }
+        // ── Adaptive fan-out width: the governor. Under
+        // stress the system shrinks its appetite instead of
+        // burning lanes — consensus survives at width 2 by
+        // construction (two independent index families).
+        let width = width_for_stress(self.pool.stress(), live.len());
+        live.truncate(width);
         let mut assignments: Vec<(String, String)> =
             live.iter().map(|e| (e.to_string(), query.to_string())).collect();
-        if queries.len() > 1 {
+        if queries.len() > 1 && width > 1 {
             for e in live.iter().take(2) {
                 assignments.push((e.to_string(), queries[1].clone()));
             }
         }
 
+        let mut direct_used = false;
         for (engine, q) in assignments {
-            let Some(eg) = self.pool.pick(&engine, &used_egresses) else {
+            let Some(eg) = self
+                .pool
+                .pick(&engine, &used_egresses, !direct_used)
+            else {
                 break;
             };
+            if eg.proxy.is_none() {
+                direct_used = true;
+            }
             used_egresses.push(eg.id.clone());
             futures.push(Box::pin(engine_task(
                 engine, q, eg.id, eg.proxy, &self.fetcher, &self.pool,
@@ -189,7 +269,7 @@ impl Searcher {
             if is_vertical {
                 // Vertical retry rides a proxy egress (their
                 // direct IP is what got rate-limited).
-                let Some(eg) = self.pool.pick("github", &[]) else { continue };
+                let Some(eg) = self.pool.pick("github", &[], false) else { continue };
                 retry_futures.push(Box::pin(vertical_task(
                     engine.clone(),
                     query.to_string(),
@@ -200,7 +280,7 @@ impl Searcher {
             }
             // ddg's lite endpoint often lives when html dies.
             let retry_engine = if engine == "ddg" { "ddg_lite" } else { engine };
-            let Some(eg) = self.pool.pick(engine, &used_egresses) else { continue };
+            let Some(eg) = self.pool.pick(engine, &used_egresses, true) else { continue };
             retry_futures.push(Box::pin(engine_task(
                 retry_engine.to_string(),
                 query.to_string(),
@@ -242,6 +322,7 @@ impl Searcher {
                         status: "ok".into(),
                         hits: hits.len(),
                         ms,
+                        egress: egress_id.clone(),
                     });
                     per_engine.push((engine, hits));
                 }
@@ -249,12 +330,14 @@ impl Searcher {
                     let base = engine.split('_').next().unwrap_or(&engine);
                     // Dead proxies are egress failures, not
                     // engine failures — don't quarantine.
-                    if !status.starts_with("dead") {
+                    if !status.starts_with("dead") && status != "auth-fail" {
                         self.record_outcome(base, false);
                     }
                     if was_engine {
                         if status.starts_with("dead") {
                             self.pool.report_dead(&egress_id);
+                        } else if status == "auth-fail" {
+                            self.pool.report_auth_fail(&egress_id);
                         } else {
                             self.pool.report_blocked(base, &egress_id);
                         }
@@ -265,6 +348,7 @@ impl Searcher {
                         status,
                         hits: 0,
                         ms: 0,
+                        egress: egress_id,
                     });
                 }
             }
@@ -285,10 +369,24 @@ impl Searcher {
         let total = rank::merged_total(&per_engine);
         let results = rank::merge(&per_engine, query, intent, &trust, max_results);
         let weak = rank::is_weak(&results, total);
-        self.cache
-            .lock()
-            .unwrap()
-            .insert(cache_key, (Instant::now(), results.clone(), total));
+        {
+            let mut cache = self.cache.lock().unwrap();
+            // LRU-ish cap: drop oldest when full.
+            if cache.len() >= 500 {
+                if let Some(oldest) = cache
+                    .iter()
+                    .max_by_key(|(_, (at, _, _))| at.elapsed())
+                    .map(|(k, _)| k.clone())
+                {
+                    cache.remove(&oldest);
+                }
+            }
+            cache.insert(
+                cache_key,
+                (Instant::now(), results.iter().take(12).cloned().collect(), total),
+            );
+            save_cache_disk(&cache);
+        }
 
         Ok(SearchOutcome {
             results,
@@ -339,6 +437,7 @@ async fn engine_task(
             Ok(Err(e)) => {
                 let status = match &e {
                     FetchError::Timeout => "timeout",
+                    FetchError::Http(m) if m.contains("CONNECT -> 407") => "auth-fail",
                     FetchError::Http(m) if m.contains("CONNECT") => "dead-proxy",
                     _ => "net",
                 };
@@ -380,14 +479,129 @@ async fn vertical_task(
     }
 }
 
+/// Disk cache path (ghost-state pattern).
+fn cache_path() -> Option<std::path::PathBuf> {
+    let dir = dirs_cache()?;
+    Some(dir.join("search-cache.json"))
+}
+
+fn dirs_cache() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let dir = std::path::PathBuf::from(home).join(".cache/donsetch");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// On disk: (key, age_secs, results, total) — age lets us
+/// re-base Instant across process restarts.
+fn save_cache_disk(cache: &HashMap<String, (Instant, Vec<Merged>, usize)>) {
+    let Some(path) = cache_path() else { return };
+    let now = Instant::now();
+    let entries: Vec<(String, u64, Vec<Merged>, usize)> = cache
+        .iter()
+        .map(|(k, (at, r, t))| {
+            (k.clone(), now.saturating_duration_since(*at).as_secs(), r.clone(), *t)
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_string(&entries) {
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, json).is_ok() {
+            let _ = std::fs::rename(tmp, path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn governor_shrinks_width_under_stress() {
+        assert_eq!(width_for_stress(0.05, 4), 4);
+        assert_eq!(width_for_stress(0.30, 4), 3);
+        assert_eq!(width_for_stress(0.50, 4), 2);
+        assert_eq!(width_for_stress(0.90, 4), 1);
+        assert_eq!(width_for_stress(0.90, 0), 0);
+    }
+
+    #[test]
+    fn norm_query_collapses_variants() {
+        assert_eq!(
+            norm_query("Rust Async: the Runtime, comparison!"),
+            norm_query("rust async runtime comparison")
+        );
+        assert_ne!(norm_query("kafka vs nats"), norm_query("kafka"));
+    }
+
+    #[test]
+    fn cache_ttl_is_intent_aware() {
+        assert!(cache_ttl(Intent::News) < cache_ttl(Intent::Web));
+        assert!(cache_ttl(Intent::Code) < cache_ttl(Intent::Web));
+    }
+}
+
+fn load_cache_disk() -> HashMap<String, (Instant, Vec<Merged>, usize)> {
+    let mut map = HashMap::new();
+    let Some(path) = cache_path() else { return map };
+    let Ok(raw) = std::fs::read_to_string(path) else { return map };
+    let Ok(entries) =
+        serde_json::from_str::<Vec<(String, u64, Vec<Merged>, usize)>>(&raw)
+    else {
+        return map;
+    };
+    for (key, age, results, total) in entries {
+        // TTL is intent-keyed; a 30min-old entry could still
+        // be valid for web but stale for news. Checking the
+        // intent segment of the key keeps both honest.
+        let ttl = if key.ends_with("News") {
+            Duration::from_secs(300)
+        } else if key.ends_with("Code") {
+            Duration::from_secs(900)
+        } else {
+            Duration::from_secs(1800)
+        };
+        if Duration::from_secs(age) < ttl {
+            map.insert(
+                key,
+                (
+                    Instant::now() - Duration::from_secs(age),
+                    results,
+                    total,
+                ),
+            );
+        }
+    }
+    map
+}
+
+/// Governor: fan-out width under stress. Healthy pool →
+/// all engines; stressed → shrink appetite (you can't be
+/// rate-limited if you never exceed the rate); starved →
+/// top engine + verticals. Consensus survives at width 2
+/// by construction (two independent index families).
+fn width_for_stress(stress: f64, available: usize) -> usize {
+    if stress < 0.15 {
+        available
+    } else if stress < 0.40 {
+        available.min(3)
+    } else if stress < 0.65 {
+        available.min(2)
+    } else {
+        available.min(1)
+    }
+}
+
 /// Markdown rendering for the MCP/CLI surface.
 pub fn render_markdown(out: &SearchOutcome, query: &str) -> String {
+    // Search answers ONE question: "what should I fetch?"
+    // Snippets carry just enough to decide — content is
+    // the fetch tool's job.
     let mut md = format!("# Search: {query}\n\n");
     for (i, r) in out.results.iter().enumerate() {
         let host = rank::host_of(&r.url);
         md.push_str(&format!("{}. **{}** — {}\n", i + 1, r.title, host));
         if !r.snippet.is_empty() {
-            let snip: String = r.snippet.chars().take(220).collect();
+            let snip: String = r.snippet.chars().take(120).collect();
             md.push_str(&format!("   {snip}\n"));
         }
         md.push_str(&format!("   {}\n", r.url));
@@ -415,6 +629,7 @@ pub fn render_meta(out: &SearchOutcome) -> Value {
         })).collect::<Vec<_>>(),
         "engines": out.report.iter().map(|r| json!({
             "engine": r.engine, "status": r.status, "hits": r.hits, "ms": r.ms,
+            "egress": if r.egress == "direct" { "direct".to_string() } else { "proxy".to_string() },
         })).collect::<Vec<_>>(),
     })
 }

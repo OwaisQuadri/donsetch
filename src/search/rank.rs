@@ -22,7 +22,7 @@ fn is_vertical(engine: &str) -> bool {
 }
 
 /// A merged, scored result.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Merged {
     pub title: String,
     pub url: String,

@@ -80,15 +80,15 @@ pub fn list() -> Value {
         }, {
             "name": "search",
             "description": concat!(
-                "Web search across multiple engines (independent ",
-                "indexes + Bing family) and keyless verticals ",
-                "(GitHub, Wikipedia, HN, Scholar, news) fused by ",
-                "cross-engine consensus ranking. Returns ranked ",
-                "markdown + structuredContent with urls, scores, ",
-                "consensus counts, and an engine health report. ",
-                "Set intent when you know it; weak=true means low ",
-                "consensus, treat carefully. Follow up with the ",
-                "fetch tool on chosen urls."
+                "Web search: returns urls + titles + short ",
+                "snippets — just enough to decide WHAT to fetch, ",
+                "not the content itself (use the fetch tool for ",
+                "that). Multi-engine (independent indexes + Bing ",
+                "family) fused by cross-engine consensus ranking, ",
+                "plus keyless verticals (GitHub, Wikipedia, HN, ",
+                "Scholar, news). structuredContent carries urls, ",
+                "scores, consensus counts, engine health. ",
+                "weak=true means low consensus, treat carefully."
             ),
             "inputSchema": {
                 "type": "object",
@@ -99,7 +99,7 @@ pub fn list() -> Value {
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "Max results (default 10)."
+                        "description": "Max results (default 7; the most relevant results almost always live within the top 7)."
                     },
                     "intent": {
                         "type": "string",

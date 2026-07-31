@@ -26,17 +26,18 @@ pub struct Daemon {
     profile: BrowserProfile,
     ghost_mgr: Arc<GhostManager>,
     state: Mutex<GhostState>,
-    searcher: Searcher,
+    searcher: Arc<Searcher>,
 }
 
 impl Daemon {
     pub fn new() -> Result<Self, crate::error::FetchError> {
         let profile = BrowserProfile::host_default();
         let fetcher = Fetcher::new(profile.clone())?;
-        let searcher = Searcher::new(
+        let searcher = Arc::new(Searcher::new(
             Fetcher::new(profile.clone())?,
             EgressPool::from_env(),
-        );
+        ));
+        searcher.preflight();
         Ok(Self {
             fetcher,
             profile,
@@ -382,7 +383,7 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     let max = args
         .get("max_results")
         .and_then(Value::as_u64)
-        .unwrap_or(10) as usize;
+        .unwrap_or(7) as usize;
     let intent = match args.get("intent").and_then(Value::as_str) {
         Some("web") => Some(Intent::Web),
         Some("code") => Some(Intent::Code),
