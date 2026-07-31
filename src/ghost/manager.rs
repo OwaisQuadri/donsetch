@@ -1,0 +1,114 @@
+//! GhostManager — the daemon's browser lifecycle brain.
+//!
+//! One browser, one tab, one job at a time. Frozen
+//! between jobs (0 CPU), reaped after 10 min frozen,
+//! crash-transparent on acquire.
+
+use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use tokio::sync::{Mutex, OwnedMutexGuard};
+
+use super::{FREEZE_AFTER, Ghost, REAP_AFTER};
+use crate::error::FetchError;
+use crate::profile::BrowserProfile;
+
+struct Slot {
+    ghost: Option<Ghost>,
+    last_used: Instant,
+}
+
+pub struct GhostManager {
+    slot: Arc<Mutex<Slot>>,
+}
+
+/// RAII handle: derefs straight to the live Ghost, so
+/// async ops hold the lock across awaits. Drop stamps
+/// last_used for the reaper.
+pub struct GhostGuard {
+    guard: OwnedMutexGuard<Slot>,
+}
+
+impl Deref for GhostGuard {
+    type Target = Ghost;
+    fn deref(&self) -> &Ghost {
+        self.guard.ghost.as_ref().expect("ghost in guard")
+    }
+}
+
+impl DerefMut for GhostGuard {
+    fn deref_mut(&mut self) -> &mut Ghost {
+        self.guard.ghost.as_mut().expect("ghost in guard")
+    }
+}
+
+impl Drop for GhostGuard {
+    fn drop(&mut self) {
+        self.guard.last_used = Instant::now();
+    }
+}
+
+impl GhostManager {
+    pub fn new() -> Arc<Self> {
+        let mgr = Arc::new(Self {
+            slot: Arc::new(Mutex::new(Slot {
+                ghost: None,
+                last_used: Instant::now(),
+            })),
+        });
+        let reaper = Arc::clone(&mgr);
+        tokio::spawn(async move { reaper.reap_loop().await });
+        mgr
+    }
+
+    /// Acquire the ghost: launch if absent, thaw if
+    /// frozen, relaunch if the thaw finds a corpse.
+    pub async fn acquire(
+        &self,
+        profile: &BrowserProfile,
+    ) -> Result<GhostGuard, FetchError> {
+        let mut slot = self.slot.clone().lock_owned().await;
+        let need_launch = match slot.ghost.as_mut() {
+            None => true,
+            Some(g) => !g.thaw(),
+        };
+        if need_launch {
+            if let Some(mut old) = slot.ghost.take() {
+                old.kill().await;
+            }
+            slot.ghost = Some(Ghost::launch(profile).await?);
+        }
+        Ok(GhostGuard { guard: slot })
+    }
+
+    /// Freeze after FREEZE_AFTER idle; reap after
+    /// REAP_AFTER frozen. 5s tick.
+    async fn reap_loop(&self) {
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tick.tick().await;
+            let mut slot = self.slot.lock().await;
+            let idle = slot.last_used.elapsed();
+            let Some(g) = slot.ghost.as_mut() else {
+                continue;
+            };
+            if g.is_frozen() {
+                if idle > REAP_AFTER {
+                    let mut g = slot.ghost.take().expect("ghost");
+                    g.kill().await;
+                }
+            } else if idle > FREEZE_AFTER {
+                g.freeze();
+            }
+        }
+    }
+
+    /// Daemon shutdown: kill the browser, always.
+    pub async fn shutdown(&self) {
+        let mut slot = self.slot.lock().await;
+        if let Some(mut g) = slot.ghost.take() {
+            g.kill().await;
+        }
+    }
+}

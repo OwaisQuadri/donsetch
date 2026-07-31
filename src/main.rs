@@ -3,6 +3,7 @@ mod error;
 mod extract;
 mod fetch;
 mod ghost;
+mod mcp;
 mod memory;
 mod profile;
 mod transport;
@@ -320,6 +321,12 @@ async fn main() {
             );
             if let Some(mut g) = ghost {
                 g.kill().await;
+            }
+        }
+        "mcp" => {
+            if let Err(e) = mcp::server::run().await {
+                eprintln!("mcp daemon: {e}");
+                std::process::exit(1);
             }
         }
         "fingerprint" => {

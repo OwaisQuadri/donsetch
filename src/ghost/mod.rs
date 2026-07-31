@@ -15,6 +15,7 @@
 
 pub mod cache;
 pub mod cdp;
+pub mod manager;
 pub mod ops;
 
 use std::path::PathBuf;
@@ -32,11 +33,9 @@ use crate::profile::BrowserProfile;
 
 /// Idle this long → SIGSTOP the process group.
 /// (Daemon lifecycle — used by the MCP idle reaper.)
-#[allow(dead_code)]
 pub const FREEZE_AFTER: std::time::Duration =
     std::time::Duration::from_secs(20);
 /// Frozen this long → reap entirely.
-#[allow(dead_code)]
 pub const REAP_AFTER: std::time::Duration =
     std::time::Duration::from_secs(600);
 
@@ -47,7 +46,6 @@ pub struct Ghost {
     pub session: String,
     /// Our page target id.
     target: String,
-    #[allow(dead_code)] // read by the daemon idle reaper
     frozen: bool,
     pub last_used: Instant,
 }
@@ -297,6 +295,10 @@ impl Ghost {
             // Exited (or error) → caller relaunches.
             _ => false,
         }
+    }
+
+    pub fn is_frozen(&self) -> bool {
+        self.frozen
     }
 
     /// Reap the browser entirely — the whole process
