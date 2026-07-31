@@ -11,6 +11,8 @@ pub struct Hit {
     pub url: String,
     pub snippet: String,
     pub rank: usize,
+    /// ISO date when the source carries one (news vertical).
+    pub published: Option<String>,
 }
 
 fn text(el: scraper::ElementRef) -> String {
@@ -140,7 +142,7 @@ fn parse_brave(doc: &Html) -> Vec<Hit> {
             .trim_start_matches(|c: char| !c.is_alphanumeric())
             .to_string();
         if !t.is_empty() {
-            hits.push(Hit { title: t, url, snippet: snip, rank });
+            hits.push(Hit { title: t, url, snippet: snip, rank, published: None });
         }
     }
     hits
@@ -160,7 +162,7 @@ fn parse_bing(doc: &Html) -> Vec<Hit> {
         let title = text(a);
         let snippet = li.select(&cap).next().map(text).unwrap_or_default();
         if !title.is_empty() {
-            hits.push(Hit { title, url, snippet, rank });
+            hits.push(Hit { title, url, snippet, rank, published: None });
         }
     }
     hits
@@ -179,7 +181,7 @@ fn parse_ddg(doc: &Html) -> Vec<Hit> {
         }
         let title = text(a);
         let snippet = snippet_vec.get(rank).cloned().unwrap_or_default();
-        hits.push(Hit { title, url, snippet, rank });
+        hits.push(Hit { title, url, snippet, rank, published: None });
     }
     hits
 }
@@ -201,6 +203,7 @@ fn parse_ddg_lite(doc: &Html) -> Vec<Hit> {
             url,
             snippet: snippet_vec.get(rank).cloned().unwrap_or_default(),
             rank,
+            published: None,
         });
     }
     hits
@@ -229,6 +232,7 @@ fn parse_mojeek(doc: &Html) -> Vec<Hit> {
             url,
             snippet: li.select(&cap).next().map(text).unwrap_or_default(),
             rank,
+            published: None,
         });
     }
     hits
@@ -248,7 +252,7 @@ fn parse_yahoo(doc: &Html) -> Vec<Hit> {
         let title = text(a);
         let snippet = item.select(&cap).next().map(text).unwrap_or_default();
         if !title.is_empty() {
-            hits.push(Hit { title, url, snippet, rank });
+            hits.push(Hit { title, url, snippet, rank, published: None });
         }
     }
     hits

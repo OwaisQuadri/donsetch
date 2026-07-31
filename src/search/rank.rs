@@ -18,7 +18,7 @@ const MAX_PER_DOMAIN: usize = 2;
 const VERTICAL_WEIGHT: f64 = 0.6;
 
 fn is_vertical(engine: &str) -> bool {
-    matches!(engine, "github" | "hn" | "wikipedia" | "scholar" | "news")
+    matches!(engine, "github" | "hn" | "wikipedia" | "scholar" | "news" | "arxiv")
 }
 
 /// A merged, scored result.
@@ -167,6 +167,9 @@ pub fn merge(
             {
                 entry.title = hit.title.clone();
             }
+            if entry.published.is_none() && hit.published.is_some() {
+                entry.published = hit.published.clone();
+            }
             entry.score += tw / (RRF_K + hit.rank as f64 + 1.0);
             entry.sources.push((engine.clone(), hit.rank));
         }
@@ -254,4 +257,91 @@ pub fn is_weak(results: &[Merged]) -> bool {
     let families: std::collections::HashSet<&str> =
         top.sources.iter().map(|(e, _)| engine_family(e)).collect();
     families.len() < 2 && results.len() < 5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::engines::Hit;
+    use crate::search::intent::Intent;
+
+    fn hit(url: &str, rank: usize) -> Hit {
+        Hit {
+            title: format!("title for {url}"),
+            url: url.into(),
+            snippet: "rust async runtime comparison".into(),
+            rank,
+            published: None,
+        }
+    }
+
+    #[test]
+    fn consensus_beats_vertical_only() {
+        // URL A: brave #5 + bing #5 (two families).
+        // URL B: github vertical #0 only.
+        let per = vec![
+            ("brave".to_string(), vec![hit("https://a.com/x", 5)]),
+            ("bing".to_string(), vec![hit("https://a.com/x", 5)]),
+            ("github".to_string(), vec![hit("https://b.com/y", 0)]),
+        ];
+        let trust = std::collections::HashMap::new();
+        let out = merge(&per, "rust async runtime", Intent::Code, &trust, 10);
+        assert_eq!(out[0].url, "https://a.com/x", "consensus must win");
+    }
+
+    #[test]
+    fn diversity_caps_domains() {
+        // other.com ranks higher than any same.com, so a
+        // naive merge would still flood the top with
+        // same.com #1..5 below it. Cap: max 2 per domain
+        // before other domains get their slots; overflow
+        // only backfills when the list runs short.
+        let mut hits: Vec<Hit> = vec![hit("https://other.com/a", 0)];
+        hits.extend((0..5).map(|i| hit(&format!("https://same.com/p{i}"), i + 1)));
+        hits.push(hit("https://third.com/z", 9));
+        let per = vec![("brave".to_string(), hits)];
+        let trust = std::collections::HashMap::new();
+        let out = merge(&per, "rust async runtime", Intent::Web, &trust, 10);
+        // third.com must appear before the 3rd same.com hit.
+        let pos_third = out.iter().position(|r| r.url.contains("third.com")).unwrap();
+        let third_same = out
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.url.contains("same.com"))
+            .nth(2)
+            .map(|(i, _)| i);
+        if let Some(p3) = third_same {
+            assert!(pos_third < p3, "diversity violated: third@{pos_third} same#3@{p3}");
+        }
+    }
+
+    #[test]
+    fn norm_key_unifies_variants() {
+        let a = norm_key("https://www.docs.rs/ratatui/index.html");
+        let b = norm_key("http://docs.rs/ratatui/");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn empty_merge_is_safe() {
+        let trust = std::collections::HashMap::new();
+        let out = merge(&[], "anything", Intent::Web, &trust, 10);
+        assert!(out.is_empty());
+        assert!(is_weak(&out));
+    }
+
+    #[test]
+    fn title_prefers_clean_over_breadcrumb() {
+        let mut dirty = hit("https://en.wikipedia.org/wiki/Rust", 0);
+        dirty.title = "en.wikipedia.org › wiki › Rust".into();
+        let mut clean = hit("https://en.wikipedia.org/wiki/Rust", 3);
+        clean.title = "Rust - Wikipedia".into();
+        let per = vec![
+            ("brave".to_string(), vec![dirty]),
+            ("ddg".to_string(), vec![clean]),
+        ];
+        let trust = std::collections::HashMap::new();
+        let out = merge(&per, "rust", Intent::Web, &trust, 10);
+        assert_eq!(out[0].title, "Rust - Wikipedia");
+    }
 }

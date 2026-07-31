@@ -75,7 +75,7 @@ pub fn engines_for(intent: Intent) -> &'static [&'static str] {
 pub fn verticals_for(intent: Intent) -> &'static [&'static str] {
     match intent {
         Intent::Code => &["github", "hn"],
-        Intent::Paper => &["scholar"],
+        Intent::Paper => &["scholar", "arxiv"],
         Intent::News => &["news", "hn"],
         Intent::Entity => &["wikipedia"],
         Intent::Web => &[],
@@ -107,7 +107,13 @@ pub fn domain_prior(intent: Intent, host: &str) -> f64 {
         Intent::Entity => &[
             "wikipedia.org", "britannica.com", "wikidata.org", "imdb.com",
         ],
-        Intent::Web => &[],
+        Intent::Web => &[
+            // Authoritative explainers — SEO-gamed titles
+            // win BM25 otherwise.
+            "cloudflare.com", "developer.mozilla.org", "wikipedia.org",
+            "learn.microsoft.com", "aws.amazon.com", "kubernetes.io",
+            "ietf.org", "rfc-editor.org",
+        ],
     };
     if table.iter().any(|d| h == *d || h.ends_with(&format!(".{d}"))) {
         1.0

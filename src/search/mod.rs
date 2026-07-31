@@ -34,6 +34,11 @@ pub struct Searcher {
     trust: Mutex<HashMap<String, f64>>,
     /// exact-query cache: zero egress cost on repeats.
     cache: Mutex<HashMap<String, (Instant, Vec<Merged>)>>,
+    /// Chronic-failure quarantine: engine -> (consecutive
+    /// failures, last failure). 3 strikes across any
+    /// egresses = benched for QUARANTINE_TTL so a walled
+    /// engine stops wasting a fan-out slot every query.
+    failures: Mutex<HashMap<String, (u32, Instant)>>,
 }
 
 /// Per-engine outcome for honest reporting.
@@ -61,6 +66,25 @@ impl Searcher {
             pool,
             trust: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
+            failures: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// True when an engine is benched for chronic failure.
+    fn quarantined(&self, engine: &str) -> bool {
+        const QUARANTINE_TTL: Duration = Duration::from_secs(600);
+        let f = self.failures.lock().unwrap();
+        matches!(f.get(engine), Some(&(n, at)) if n >= 3 && at.elapsed() < QUARANTINE_TTL)
+    }
+
+    fn record_outcome(&self, engine: &str, ok: bool) {
+        let mut f = self.failures.lock().unwrap();
+        if ok {
+            f.remove(engine);
+        } else {
+            let e = f.entry(engine.to_string()).or_insert((0, Instant::now()));
+            e.0 += 1;
+            e.1 = Instant::now();
         }
     }
 
@@ -100,10 +124,15 @@ impl Searcher {
         }
         // Engines get the original query; the recall variant
         // goes only to the first two engines (top trust).
+        let live: Vec<&str> = engines
+            .iter()
+            .filter(|e| !self.quarantined(e))
+            .copied()
+            .collect();
         let mut assignments: Vec<(String, String)> =
-            engines.iter().map(|e| (e.to_string(), query.to_string())).collect();
+            live.iter().map(|e| (e.to_string(), query.to_string())).collect();
         if queries.len() > 1 {
-            for e in engines.iter().take(2) {
+            for e in live.iter().take(2) {
                 assignments.push((e.to_string(), queries[1].clone()));
             }
         }
@@ -113,24 +142,99 @@ impl Searcher {
                 break;
             };
             used_egresses.push(eg.id.clone());
-            self.pool.pace(&engine, &eg.id).await;
-            futures.push(Box::pin(engine_task(engine, q, eg.id, eg.proxy, &self.fetcher)));
+            futures.push(Box::pin(engine_task(
+                engine, q, eg.id, eg.proxy, &self.fetcher, &self.pool,
+            )));
         }
         // Verticals: direct, friendly APIs.
+        let verticals: Vec<&&str> = verticals
+            .iter()
+            .filter(|v| !self.quarantined(v))
+            .collect();
         for v in verticals {
-            futures.push(Box::pin(vertical_task(v.to_string(), query.to_string(), &self.fetcher)));
+            futures.push(Box::pin(vertical_task(
+                v.to_string(), query.to_string(), &self.fetcher, None,
+            )));
         }
 
         let outcomes = futures_util::future::join_all(futures).await;
 
+        // ── Retry wave: failed engines get one more shot
+        // through a fresh egress — but ONLY when the first
+        // wave left the merge thin. A healthy merge never
+        // pays retry latency; a degraded one recovers.
+        let ok_engines = outcomes.iter().filter(|(_, r)| r.is_ok()).count();
+        let ok_hits: usize = outcomes
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().ok())
+            .map(|(h, _, _, _)| h.len())
+            .sum();
+        let merge_thin = ok_engines < 3 || ok_hits < 15;
+        let failed: Vec<String> = if merge_thin {
+            outcomes
+                .iter()
+                .filter(|(_, r)| r.is_err())
+                .map(|(e, _)| e.split('@').next().unwrap_or(e).to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut retry_futures: Vec<TaskFut> = Vec::new();
+        for engine in &failed {
+            let is_vertical = matches!(
+                engine.as_str(),
+                "github" | "hn" | "wikipedia" | "scholar" | "news" | "arxiv"
+            );
+            if is_vertical {
+                // Vertical retry rides a proxy egress (their
+                // direct IP is what got rate-limited).
+                let Some(eg) = self.pool.pick("github", &[]) else { continue };
+                retry_futures.push(Box::pin(vertical_task(
+                    engine.clone(),
+                    query.to_string(),
+                    &self.fetcher,
+                    eg.proxy,
+                )));
+                continue;
+            }
+            // ddg's lite endpoint often lives when html dies.
+            let retry_engine = if engine == "ddg" { "ddg_lite" } else { engine };
+            let Some(eg) = self.pool.pick(engine, &used_egresses) else { continue };
+            retry_futures.push(Box::pin(engine_task(
+                retry_engine.to_string(),
+                query.to_string(),
+                eg.id,
+                eg.proxy,
+                &self.fetcher,
+                &self.pool,
+            )));
+        }
+        let retry_outcomes = if retry_futures.is_empty() {
+            Vec::new()
+        } else {
+            match tokio::time::timeout(
+                Duration::from_secs(3),
+                futures_util::future::join_all(retry_futures),
+            )
+            .await
+            {
+                Ok(o) => o,
+                Err(_) => Vec::new(),
+            }
+        };
+
         let mut per_engine: Vec<(String, Vec<engines::Hit>)> = Vec::new();
         let mut report = Vec::new();
-        for (engine, outcome) in outcomes {
+        let all: Vec<(String, EngineResult)> =
+            outcomes.into_iter().chain(retry_outcomes).collect();
+        for (engine, outcome) in all {
             match outcome {
                 Ok((hits, ms, egress_id, was_engine)) => {
+                    let base = engine.split('_').next().unwrap_or(&engine);
+                    self.record_outcome(base, true);
                     if was_engine {
-                        self.pool.report_ok(&engine, &egress_id);
-                        self.bump_trust(&engine, true);
+                        self.pool.report_ok(base, &egress_id);
+                        self.bump_trust(base, true);
                     }
                     report.push(EngineReport {
                         engine: engine.clone(),
@@ -141,13 +245,19 @@ impl Searcher {
                     per_engine.push((engine, hits));
                 }
                 Err((status, egress_id, was_engine)) => {
+                    let base = engine.split('_').next().unwrap_or(&engine);
+                    // Dead proxies are egress failures, not
+                    // engine failures — don't quarantine.
+                    if !status.starts_with("dead") {
+                        self.record_outcome(base, false);
+                    }
                     if was_engine {
                         if status.starts_with("dead") {
                             self.pool.report_dead(&egress_id);
                         } else {
-                            self.pool.report_blocked(&engine, &egress_id);
+                            self.pool.report_blocked(base, &egress_id);
                         }
-                        self.bump_trust(&engine, false);
+                        self.bump_trust(base, false);
                     }
                     report.push(EngineReport {
                         engine,
@@ -213,8 +323,10 @@ async fn engine_task(
     egress_id: String,
     proxy: Option<crate::transport::proxy::Proxy>,
     fetcher: &Fetcher,
+    pool: &EgressPool,
 ) -> (String, EngineResult) {
     let label = engine.clone();
+    pool.pace(&engine, &egress_id).await;
     let started = Instant::now();
     let Some(url) = engines::serp_url(&engine, &query) else {
         return (label, Err(("no-url".into(), egress_id, true)));
@@ -250,11 +362,12 @@ async fn vertical_task(
     vertical: String,
     query: String,
     fetcher: &Fetcher,
+    proxy: Option<crate::transport::proxy::Proxy>,
 ) -> (String, EngineResult) {
     let started = Instant::now();
     match tokio::time::timeout(
         ENGINE_TIMEOUT,
-        verticals::run(&fetcher, &vertical, &query),
+        verticals::run(&fetcher, &vertical, &query, proxy.as_ref()),
     )
     .await
     {

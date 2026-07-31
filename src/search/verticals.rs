@@ -54,20 +54,25 @@ pub fn endpoint(vertical: &str, query: &str) -> Option<String> {
         "news" => Some(format!(
             "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
         )),
+        "arxiv" => Some(format!(
+            "https://export.arxiv.org/api/query?search_query=all:{query}&max_results=5&sortBy=relevance"
+        )),
         _ => None,
     }
 }
 
-/// Verticals call friendly APIs direct — no proxy needed.
+/// Verticals call friendly APIs direct by default; the
+/// retry wave passes a proxy when direct got rate-limited.
 pub async fn run(
     fetcher: &Fetcher,
     vertical: &str,
     query: &str,
+    proxy: Option<&crate::transport::proxy::Proxy>,
 ) -> Result<Vec<Hit>, FetchError> {
     let Some(url) = endpoint(vertical, query) else {
         return Ok(Vec::new());
     };
-    let out = fetcher.fetch_once_via(&url, &[], None).await?;
+    let out = fetcher.fetch_once_via(&url, &[], proxy).await?;
     if out.status != 200 {
         return Err(FetchError::Http(format!(
             "{vertical}: status {}",
@@ -75,11 +80,26 @@ pub async fn run(
         )));
     }
     let body = String::from_utf8_lossy(&out.body);
-    Ok(if vertical == "news" {
-        parse_rss(&body)
-    } else {
-        parse_json(vertical, &body)
+    Ok(match vertical {
+        "news" => parse_rss(&body),
+        "arxiv" => parse_arxiv(&body),
+        _ => parse_json(vertical, &body),
     })
+}
+
+/// RFC-822-ish date from RSS pubDate -> ISO date string.
+/// "Thu, 31 Jul 2026 07:00:00 GMT" -> "2026-07-31".
+pub fn rss_date_to_iso(date: &str) -> Option<String> {
+    let parts: Vec<&str> = date.split_whitespace().collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let month = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .iter()
+    .position(|m| parts[2].starts_with(m))?;
+    Some(format!("{}-{:02}-{}", parts[3], month + 1, parts[1]))
 }
 
 fn parse_json(vertical: &str, body: &str) -> Vec<Hit> {
@@ -100,6 +120,7 @@ fn parse_json(vertical: &str, body: &str) -> Vec<Hit> {
                         ),
                         snippet: strip_tags(it["snippet"].as_str().unwrap_or("")),
                         rank,
+                        published: None,
                     })
                     .collect()
             })
@@ -121,6 +142,7 @@ fn parse_json(vertical: &str, body: &str) -> Vec<Hit> {
                                 "Hacker News: {points} points, {comments} comments"
                             ),
                             rank,
+                            published: None,
                         })
                     })
                     .collect()
@@ -141,6 +163,7 @@ fn parse_json(vertical: &str, body: &str) -> Vec<Hit> {
                                 url: it["html_url"].as_str().unwrap_or("").to_string(),
                                 snippet: format!("{desc} (★ {stars})"),
                                 rank,
+                                published: None,
                             }
                         } else {
                             // issue result
@@ -157,6 +180,7 @@ fn parse_json(vertical: &str, body: &str) -> Vec<Hit> {
                                 url: it["html_url"].as_str().unwrap_or("").to_string(),
                                 snippet: format!("GitHub issue ({state})"),
                                 rank,
+                                published: None,
                             }
                         }
                     })
@@ -181,6 +205,7 @@ fn parse_json(vertical: &str, body: &str) -> Vec<Hit> {
                             url: it["url"].as_str().unwrap_or("").to_string(),
                             snippet: format!("{abs} ({year})"),
                             rank,
+                            published: None,
                         }
                     })
                     .collect()
@@ -214,8 +239,58 @@ fn parse_rss(body: &str) -> Vec<Hit> {
         let title = grab("title");
         let url = grab("link");
         let date = grab("pubDate");
+        let iso = rss_date_to_iso(&date);
         if !title.is_empty() && url.starts_with("http") {
-            hits.push(Hit { title, url, snippet: date, rank });
+            hits.push(Hit {
+                title,
+                url,
+                snippet: date.clone(),
+                rank,
+                published: iso,
+            });
+        }
+    }
+    hits
+}
+
+/// arXiv Atom feed: loose tag scan like the RSS parser.
+fn parse_arxiv(body: &str) -> Vec<Hit> {
+    let mut hits = Vec::new();
+    for (rank, entry) in body.split("<entry>").skip(1).enumerate() {
+        if rank >= 5 {
+            break;
+        }
+        let grab = |tag: &str| -> String {
+            let open = format!("<{tag}>");
+            let close = format!("</{tag}>");
+            entry
+                .split_once(&open)
+                .and_then(|(_, rest)| rest.split_once(&close))
+                .map(|(inner, _)| inner.trim().to_string())
+                .unwrap_or_default()
+        };
+        let title = grab("title")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        // arxiv id is the canonical abs-page URL.
+        let url = grab("id");
+        let summary: String = grab("summary")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(220)
+            .collect();
+        let published = grab("published").chars().take(10).collect::<String>();
+        if !title.is_empty() && url.starts_with("http") {
+            hits.push(Hit {
+                title,
+                url,
+                snippet: summary,
+                rank,
+                published: Some(published),
+            });
         }
     }
     hits

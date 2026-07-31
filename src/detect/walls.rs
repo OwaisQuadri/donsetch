@@ -184,17 +184,16 @@ mod tests {
 
     #[test]
     fn large_serp_with_vendor_mentions_is_content() {
-        let body = std::fs::read("/tmp/bing2.html").unwrap();
+        let body = include_bytes!("../../tests/fixtures/bing-serp.html").to_vec();
         let scan = &body[..body.len().min(64 * 1024)];
         let text = String::from_utf8_lossy(scan).to_lowercase();
-        eprintln!("scan_len={}", scan.len());
         let v = detect(200, &[], &body);
         assert!(matches!(v, Verdict::ContentOk), "got {v:?}");
     }
 
     #[test]
     fn small_captcha_page_is_challenge() {
-        let body = std::fs::read("/tmp/moj2.html").unwrap();
+        let body = include_bytes!("../../tests/fixtures/mojeek-captcha.html").to_vec();
         let v = detect(200, &[], &body);
         assert!(matches!(v, Verdict::Challenge(_)), "got {v:?}");
     }
