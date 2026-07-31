@@ -26,10 +26,23 @@ use rank::Merged;
 
 const ENGINE_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// Intent-aware cache TTL: news stales fast, evergreen
-/// content stales slow. Every cached query is a query
-/// that never touches an egress — the #1 rate reducer.
-fn cache_ttl(intent: Intent) -> Duration {
+/// Intent + recency-aware cache TTL. Every cached query
+/// is a query that never touches an egress — the #1 rate
+/// reducer. But a cached answer presented as fresh is
+/// WORSE than honest latency when the world moved:
+/// time-sensitive queries (even outside news intent —
+/// "X release date", "inflation 2026") get news-grade
+/// TTLs regardless of detected intent.
+fn cache_ttl(intent: Intent, query: &str) -> Duration {
+    const RECENCY: &[&str] = &[
+        "latest", "today", "breaking", "recent", "this week", "this month",
+        "price", "stock", "weather", "deadline", "release date", "news",
+        "2024", "2025", "2026", "2027",
+    ];
+    let q = query.to_lowercase();
+    if RECENCY.iter().any(|s| q.contains(s)) {
+        return Duration::from_secs(300);
+    }
     match intent {
         Intent::News => Duration::from_secs(300),
         Intent::Code => Duration::from_secs(900),
@@ -66,6 +79,11 @@ pub struct Searcher {
     /// egresses = benched for QUARANTINE_TTL so a walled
     /// engine stops wasting a fan-out slot every query.
     failures: Mutex<HashMap<String, (u32, Instant)>>,
+    /// Single-flight: two identical in-flight queries spend
+    /// egress budget ONCE — the follower awaits the
+    /// leader's result. Stampedes are an agent reality
+    /// (parallel tool calls love the same query).
+    inflight: Mutex<std::collections::HashSet<String>>,
 }
 
 /// Per-engine outcome for honest reporting.
@@ -80,6 +98,7 @@ pub struct EngineReport {
     pub egress: String,
 }
 
+#[derive(Debug, Clone)]
 pub struct SearchOutcome {
     pub results: Vec<Merged>,
     pub weak: bool,
@@ -97,6 +116,7 @@ impl Searcher {
             trust: Mutex::new(HashMap::new()),
             cache: Mutex::new(load_cache_disk()),
             failures: Mutex::new(HashMap::new()),
+            inflight: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -107,20 +127,33 @@ impl Searcher {
     pub fn preflight(self: &Arc<Self>) {
         let this = Arc::clone(self);
         tokio::spawn(async move {
-            for proxy in this.pool.proxies() {
+            let proxies = this.pool.proxies();
+            let total = proxies.len();
+            let mut dead = 0usize;
+            for proxy in proxies {
                 let id = proxy.id();
                 let probe = this.fetcher.fetch_once_via(
                     "https://api.ipify.org/",
                     &[],
                     Some(&proxy),
+                    false,
                 );
                 match tokio::time::timeout(Duration::from_secs(6), probe).await {
                     Ok(Ok(o)) if o.status == 200 => {}
                     Ok(Err(e)) if format!("{e}").contains("CONNECT -> 407") => {
                         this.pool.report_auth_fail(&id);
                     }
-                    _ => this.pool.report_dead(&id),
+                    _ => {
+                        dead += 1;
+                        this.pool.report_dead(&id);
+                    }
                 }
+            }
+            // ALL proxies failing means the PROBE endpoint
+            // died, not the pool — clear the marks rather
+            // than bench every lane over our own bug.
+            if total > 0 && dead == total {
+                this.pool.revive_all();
             }
         });
     }
@@ -150,11 +183,62 @@ impl Searcher {
         forced_intent: Option<Intent>,
     ) -> Result<SearchOutcome, FetchError> {
         let started = Instant::now();
+        let intent_probe = forced_intent.unwrap_or_else(|| intent::detect(query));
+        let sf_key = format!("{}|{intent_probe:?}|{max_results}", norm_query(query));
+        let leader = {
+            let mut m = self.inflight.lock().unwrap();
+            m.insert(sf_key.clone())
+        };
+        if !leader {
+            // Follower: poll for the leader's cache write.
+            // The leader publishes into the query cache on
+            // completion, so followers read it from there.
+            for _ in 0..120 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let hit = self
+                    .cache
+                    .lock()
+                    .unwrap()
+                    .get(&format!("{}|{intent_probe:?}", norm_query(query)))
+                    .cloned();
+                if let Some((at, cached, total)) = hit {
+                    if at.elapsed() < cache_ttl(intent_probe, query) {
+                        let weak = rank::is_weak(&cached, total);
+                        return Ok(SearchOutcome {
+                            results: cached.iter().take(max_results).cloned().collect(),
+                            weak,
+                            intent: intent_probe,
+                            report: Vec::new(),
+                            cached: true,
+                            elapsed: started.elapsed(),
+                        });
+                    }
+                }
+            }
+            // Leader died or timed out — compute ourselves.
+        }
+        let _inflight_guard = InflightGuard {
+            map: &self.inflight,
+            key: sf_key,
+        };
+        self.search_inner(query, max_results, forced_intent, started).await
+    }
+
+    async fn search_inner(
+        &self,
+        query: &str,
+        max_results: usize,
+        forced_intent: Option<Intent>,
+        started: Instant,
+    ) -> Result<SearchOutcome, FetchError> {
+        // Cache stores top-12; asking for more just
+        // re-lists the same tail.
+        let max_results = max_results.clamp(1, 12);
         let intent = forced_intent.unwrap_or_else(|| intent::detect(query));
         let cache_key = format!("{}|{intent:?}", norm_query(query));
 
         if let Some((at, cached, total)) = self.cache.lock().unwrap().get(&cache_key) {
-            if at.elapsed() < cache_ttl(intent) {
+            if at.elapsed() < cache_ttl(intent, query) {
                 let weak = rank::is_weak(cached, *total);
                 return Ok(SearchOutcome {
                     results: cached.iter().take(max_results).cloned().collect(),
@@ -205,24 +289,37 @@ impl Searcher {
         live.truncate(width);
         let mut assignments: Vec<(String, String)> =
             live.iter().map(|e| (e.to_string(), query.to_string())).collect();
-        if queries.len() > 1 && width > 1 {
+        // Recall variants spend lanes — only when the
+        // governor did NOT cut the roster (healthy pool).
+        if queries.len() > 1 && self.pool.stress() < 0.15 {
             for e in live.iter().take(2) {
                 assignments.push((e.to_string(), queries[1].clone()));
             }
         }
 
+        // The premium-lane cap only exists when proxies
+        // exist to be workhorses. A zero-config install has
+        // ONE lane — direct serves every engine, paced
+        // strictly (the governor's jitter does that).
+        let cap_direct = self.pool.has_proxies();
         let mut direct_used = false;
         for (engine, q) in assignments {
             let Some(eg) = self
                 .pool
-                .pick(&engine, &used_egresses, !direct_used)
+                .pick(&engine, &used_egresses, !direct_used || !cap_direct)
             else {
                 break;
             };
             if eg.proxy.is_none() {
                 direct_used = true;
             }
-            used_egresses.push(eg.id.clone());
+            // In no-proxy mode every engine shares the one
+            // lane — exclusion by egress id would bench
+            // engines 2..N, so only exclude when proxies
+            // give lanes their own identity.
+            if cap_direct {
+                used_egresses.push(eg.id.clone());
+            }
             futures.push(Box::pin(engine_task(
                 engine, q, eg.id, eg.proxy, &self.fetcher, &self.pool,
             )));
@@ -254,7 +351,9 @@ impl Searcher {
         let failed: Vec<String> = if merge_thin {
             outcomes
                 .iter()
-                .filter(|(_, r)| r.is_err())
+                .filter(|(_, r)| {
+                    matches!(r, Err((s, _, _)) if s != "no-results")
+                })
                 .map(|(e, _)| e.split('@').next().unwrap_or(e).to_string())
                 .collect()
         } else {
@@ -265,6 +364,7 @@ impl Searcher {
             let is_vertical = matches!(
                 engine.as_str(),
                 "github" | "hn" | "wikipedia" | "scholar" | "news" | "arxiv"
+                    | "stackexchange" | "mdn"
             );
             if is_vertical {
                 // Vertical retry rides a proxy egress (their
@@ -280,7 +380,15 @@ impl Searcher {
             }
             // ddg's lite endpoint often lives when html dies.
             let retry_engine = if engine == "ddg" { "ddg_lite" } else { engine };
-            let Some(eg) = self.pool.pick(engine, &used_egresses, true) else { continue };
+            let Some(eg) = self
+                .pool
+                .pick(engine, &used_egresses, !direct_used || !cap_direct)
+            else {
+                continue;
+            };
+            if eg.proxy.is_none() {
+                direct_used = true;
+            }
             retry_futures.push(Box::pin(engine_task(
                 retry_engine.to_string(),
                 query.to_string(),
@@ -330,7 +438,10 @@ impl Searcher {
                     let base = engine.split('_').next().unwrap_or(&engine);
                     // Dead proxies are egress failures, not
                     // engine failures — don't quarantine.
-                    if !status.starts_with("dead") && status != "auth-fail" {
+                    if !status.starts_with("dead")
+                        && status != "auth-fail"
+                        && status != "no-results"
+                    {
                         self.record_outcome(base, false);
                     }
                     if was_engine {
@@ -338,10 +449,10 @@ impl Searcher {
                             self.pool.report_dead(&egress_id);
                         } else if status == "auth-fail" {
                             self.pool.report_auth_fail(&egress_id);
-                        } else {
+                        } else if status != "no-results" {
                             self.pool.report_blocked(base, &egress_id);
+                            self.bump_trust(base, false);
                         }
-                        self.bump_trust(base, false);
                     }
                     report.push(EngineReport {
                         engine,
@@ -369,7 +480,11 @@ impl Searcher {
         let total = rank::merged_total(&per_engine);
         let results = rank::merge(&per_engine, query, intent, &trust, max_results);
         let weak = rank::is_weak(&results, total);
-        {
+        // Poisoning guard: a merge built while engines
+        // were down must NOT persist for 30 minutes —
+        // degraded-period results expire with the moment.
+        let cacheable = ok_engines >= 2 && total >= 8;
+        if cacheable {
             let mut cache = self.cache.lock().unwrap();
             // LRU-ish cap: drop oldest when full.
             if cache.len() >= 500 {
@@ -430,7 +545,7 @@ async fn engine_task(
         return (label, Err(("no-url".into(), egress_id, true)));
     };
     let out =
-        match tokio::time::timeout(ENGINE_TIMEOUT, fetcher.fetch_once_via(&url, &[], proxy.as_ref()))
+        match tokio::time::timeout(ENGINE_TIMEOUT, fetcher.fetch_once_via(&url, &[], proxy.as_ref(), false))
             .await
         {
             Err(_) => return (label, Err(("timeout".into(), egress_id, true))),
@@ -452,7 +567,15 @@ async fn engine_task(
     let html = String::from_utf8_lossy(&out.body).to_string();
     let hits = engines::parse(&engine, &html);
     if hits.len() < 3 {
-        return (label, Err(("empty-parse".into(), egress_id, true)));
+        // Honest "no results" is NOT an engine failure —
+        // don't burn trust/lanes for a dry query.
+        let lower = html.to_lowercase();
+        let dry = lower.contains("no results")
+            || lower.contains("did not match any")
+            || lower.contains("no good results")
+            || lower.contains("nothing found");
+        let status = if dry { "no-results" } else { "empty-parse" };
+        return (label, Err((status.into(), egress_id, true)));
     }
     (label, Ok((hits, ms, egress_id, true)))
 }
@@ -534,9 +657,18 @@ mod tests {
     }
 
     #[test]
-    fn cache_ttl_is_intent_aware() {
-        assert!(cache_ttl(Intent::News) < cache_ttl(Intent::Web));
-        assert!(cache_ttl(Intent::Code) < cache_ttl(Intent::Web));
+    fn cache_ttl_is_intent_and_recency_aware() {
+        assert!(cache_ttl(Intent::News, "anything") < cache_ttl(Intent::Web, "anything"));
+        assert!(cache_ttl(Intent::Code, "anything") < cache_ttl(Intent::Web, "anything"));
+        // recency signal forces news-grade TTL even for web intent
+        assert_eq!(
+            cache_ttl(Intent::Web, "nepal inflation 2026 rate"),
+            cache_ttl(Intent::News, "x")
+        );
+        assert_eq!(
+            cache_ttl(Intent::Web, "rust ownership explained"),
+            Duration::from_secs(1800)
+        );
     }
 }
 
@@ -550,16 +682,17 @@ fn load_cache_disk() -> HashMap<String, (Instant, Vec<Merged>, usize)> {
         return map;
     };
     for (key, age, results, total) in entries {
-        // TTL is intent-keyed; a 30min-old entry could still
-        // be valid for web but stale for news. Checking the
-        // intent segment of the key keeps both honest.
-        let ttl = if key.ends_with("News") {
-            Duration::from_secs(300)
-        } else if key.ends_with("Code") {
-            Duration::from_secs(900)
-        } else {
-            Duration::from_secs(1800)
+        // TTL is intent + recency keyed (the query text
+        // is the key's first segment).
+        let (qpart, ipart) = key.rsplit_once('|').unwrap_or((key.as_str(), ""));
+        let intent = match ipart {
+            "News" => Intent::News,
+            "Code" => Intent::Code,
+            "Paper" => Intent::Paper,
+            "Entity" => Intent::Entity,
+            _ => Intent::Web,
         };
+        let ttl = cache_ttl(intent, qpart);
         if Duration::from_secs(age) < ttl {
             map.insert(
                 key,
@@ -632,4 +765,17 @@ pub fn render_meta(out: &SearchOutcome) -> Value {
             "egress": if r.egress == "direct" { "direct".to_string() } else { "proxy".to_string() },
         })).collect::<Vec<_>>(),
     })
+}
+
+/// Removes the inflight key when the leader finishes
+/// (success or failure) so the set never grows unbounded.
+struct InflightGuard<'a> {
+    map: &'a Mutex<std::collections::HashSet<String>>,
+    key: String,
+}
+
+impl Drop for InflightGuard<'_> {
+    fn drop(&mut self) {
+        self.map.lock().unwrap().remove(&self.key);
+    }
 }

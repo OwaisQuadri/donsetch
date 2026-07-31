@@ -74,7 +74,9 @@ pub fn engines_for(intent: Intent) -> &'static [&'static str] {
 /// Verticals to fan out per intent (keyless JSON APIs).
 pub fn verticals_for(intent: Intent) -> &'static [&'static str] {
     match intent {
-        Intent::Code => &["github", "hn"],
+        // Official keyless APIs first: near-100% reliable,
+        // zero egress budget spent on engines for code.
+        Intent::Code => &["stackexchange", "mdn", "github", "hn"],
         Intent::Paper => &["scholar", "arxiv"],
         Intent::News => &["news", "hn"],
         Intent::Entity => &["wikipedia"],

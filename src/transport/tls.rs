@@ -5,7 +5,7 @@
 //! ALPS, brotli cert compression), configured from live-captured Chrome data.
 
 use boring::ssl::{
-    NameType, Ssl, SslConnector, SslMethod, SslSession, SslSessionCacheMode, SslVersion,
+    Ssl, SslConnector, SslMethod, SslSession, SslVersion,
 };
 use boring::x509::X509;
 use foreign_types::ForeignType;
@@ -80,7 +80,7 @@ fn alps_h2_payload(profile: &BrowserProfile) -> Vec<u8> {
 
 pub fn build_connector(
     profile: &BrowserProfile,
-    sessions: SessionStore,
+    _sessions: SessionStore,
 ) -> Result<SslConnector, FetchError> {
     let mut b = SslConnector::builder(SslMethod::tls()).map_err(tls_err)?;
     b.set_min_proto_version(Some(SslVersion::TLS1_2)).map_err(tls_err)?;
@@ -92,15 +92,10 @@ pub fn build_connector(
     b.set_grease_enabled(true);
     b.set_permute_extensions(true);
 
-    // Client-side session cache: capture tickets per origin for resumption.
-    b.set_session_cache_mode(SslSessionCacheMode::CLIENT);
-    b.set_new_session_callback(move |ssl, session| {
-        if let Some(host) = ssl.servername(NameType::HOST_NAME) {
-            if let Ok(mut guard) = sessions.lock() {
-                guard.insert(host.to_string(), session);
-            }
-        }
-    });
+    // Session storage lives in connect(): tickets are
+    // egress-scoped there (a proxy's ticket must never
+    // resume from the direct IP or another proxy — that
+    // would link the lanes at the edge).
 
     // OCSP stapling request (status_request extension), like Chrome.
     unsafe { boring_sys::SSL_CTX_enable_ocsp_stapling(b.as_ptr()) };
@@ -146,6 +141,7 @@ pub async fn connect(
     domain: &str,
     tcp: TcpStream,
     sessions: &SessionStore,
+    session_key: &str,
 ) -> Result<SslStream<TcpStream>, FetchError> {
     let mut ssl: Ssl = connector
         .configure()
@@ -155,7 +151,7 @@ pub async fn connect(
 
     // Session resumption (ticket from a previous visit to this origin).
     if let Ok(guard) = sessions.lock() {
-        if let Some(session) = guard.get(domain) {
+        if let Some(session) = guard.get(session_key) {
             // Safe: session belongs to this client ctx; stale ticket just
             // falls back to a full handshake.
             let _ = unsafe { ssl.set_session(session) };
@@ -180,8 +176,20 @@ pub async fn connect(
         return Err(FetchError::Tls("ALPS registration failed".into()));
     }
 
-    SslStreamBuilder::new(ssl, tcp)
+    let stream = SslStreamBuilder::new(ssl, tcp)
         .connect()
         .await
-        .map_err(|e| FetchError::Tls(format!("{e:?}")))
+        .map_err(|e| FetchError::Tls(format!("{e:?}")))?;
+
+    // Chrome caches session tickets aggressively — so do
+    // we, but EGRESS-SCOPED (session_key carries the
+    // proxy id when proxied; see fetch/client.rs).
+    if let Some(sess) = stream.ssl().session() {
+        let mut store = sessions.lock().unwrap();
+        if store.len() >= 512 {
+            store.clear(); // sessions are short-lived; wipe + refill
+        }
+        store.insert(session_key.to_string(), sess.to_owned());
+    }
+    Ok(stream)
 }

@@ -217,16 +217,20 @@ impl Fetcher {
         url_str: &str,
         conditional: &[(String, String)],
     ) -> Result<FetchOutcome, FetchError> {
-        self.fetch_once_via(url_str, conditional, None).await
+        self.fetch_once_via(url_str, conditional, None, true).await
     }
 
     /// Same, optionally through a CONNECT proxy. Pool keys
     /// are proxy-scoped so egress IPs never share conns.
+    /// `use_jar=false` keeps cookies out entirely — search
+    /// engines get cookie-less requests so egress lanes
+    /// stay unlinked and the fetch-tool jar stays clean.
     pub async fn fetch_once_via(
         &self,
         url_str: &str,
         conditional: &[(String, String)],
         proxy: Option<&proxy::Proxy>,
+        use_jar: bool,
     ) -> Result<FetchOutcome, FetchError> {
         let url = url::Url::parse(url_str).map_err(|_| FetchError::InvalidUrl(url_str.into()))?;
         let host = url.host_str().ok_or_else(|| FetchError::InvalidUrl(url_str.into()))?;
@@ -246,7 +250,7 @@ impl Fetcher {
 
         // Header set from profile (Chrome order, coherence) + cookie + conditionals.
         let mut req_headers = self.profile.h1_headers(&authority);
-        {
+        if use_jar {
             let jar = self.jar.lock().unwrap();
             if let Some(cookie) = jar.header_for(host, &path) {
                 let pos = req_headers
@@ -307,9 +311,13 @@ impl Fetcher {
             Some(p) => p.connect(host, port).await?,
             None => tcp::happy_connect(host, port).await?,
         };
+        let session_key = match proxy {
+            Some(p) => format!("{}|{}", p.id(), host),
+            None => host.to_string(),
+        };
         let mut tls_stream = tokio::time::timeout(
             Duration::from_secs(15),
-            tls::connect(&self.profile, &self.connector, host, tcp, &self.sessions),
+            tls::connect(&self.profile, &self.connector, host, tcp, &self.sessions, &session_key),
         )
         .await
         .map_err(|_| FetchError::Timeout)??;

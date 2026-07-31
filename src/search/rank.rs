@@ -18,7 +18,10 @@ const MAX_PER_DOMAIN: usize = 2;
 const VERTICAL_WEIGHT: f64 = 0.6;
 
 fn is_vertical(engine: &str) -> bool {
-    matches!(engine, "github" | "hn" | "wikipedia" | "scholar" | "news" | "arxiv")
+    matches!(
+        engine,
+        "github" | "hn" | "wikipedia" | "scholar" | "news" | "arxiv" | "stackexchange" | "mdn"
+    )
 }
 
 /// A merged, scored result.

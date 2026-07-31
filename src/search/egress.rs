@@ -251,6 +251,19 @@ impl EgressPool {
             .insert(egress_id.to_string(), Instant::now() + BURN_COOLDOWN);
     }
 
+    /// Preflight guard: un-bench every lane (used when the
+    /// probe endpoint itself died and burned all proxies).
+    pub fn revive_all(&self) {
+        self.dead.lock().unwrap().clear();
+    }
+
+    /// True when the pool has any proxy lanes at all — the
+    /// no-proxy default changes lane policy (direct serves
+    /// all engines, with strict pacing).
+    pub fn has_proxies(&self) -> bool {
+        self.egresses.len() > 1
+    }
+
     /// Proxy auth failed (CONNECT 407): credentials wrong.
     /// Bench long — wrong creds don't heal by waiting.
     pub fn report_auth_fail(&self, egress_id: &str) {

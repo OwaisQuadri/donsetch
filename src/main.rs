@@ -366,7 +366,7 @@ async fn main() {
             let u = args.get(2).map(String::as_str).unwrap_or("");
             let px = args.get(3).and_then(|s| proxy::Proxy::parse(s).ok());
             let f = Fetcher::new(BrowserProfile::host_default()).expect("fetcher");
-            match f.fetch_once_via(u, &[], px.as_ref()).await {
+            match f.fetch_once_via(u, &[], px.as_ref(), false).await {
                 Ok(out) => {
                     println!("status={} alpn={} bytes={} verdict={:?} t={:.2}s",
                         out.status, out.alpn, out.body.len(), out.verdict,
