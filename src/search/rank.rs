@@ -247,16 +247,30 @@ fn engine_family(engine: &str) -> &str {
     }
 }
 
-/// Weak-results honesty: no cross-family consensus and a
-/// low top score means the merge is not trustworthy.
-pub fn is_weak(results: &[Merged]) -> bool {
+/// Weak-results honesty: no cross-family consensus on the
+/// TOP result and a shallow merge means the answer is not
+/// trustworthy. `merged_total` is the PRE-truncation count
+/// — a max_results=4 call must not read as shallow when
+/// fifty results merged underneath it.
+pub fn is_weak(results: &[Merged], merged_total: usize) -> bool {
     if results.is_empty() {
         return true;
     }
     let top = &results[0];
     let families: std::collections::HashSet<&str> =
         top.sources.iter().map(|(e, _)| engine_family(e)).collect();
-    families.len() < 2 && results.len() < 5
+    families.len() < 2 && merged_total < 8
+}
+
+/// Total results before truncation — feed to is_weak.
+pub fn merged_total(per_engine: &[(String, Vec<super::engines::Hit>)]) -> usize {
+    let mut keys = std::collections::HashSet::new();
+    for (_, hits) in per_engine {
+        for h in hits {
+            keys.insert(norm_key(&h.url));
+        }
+    }
+    keys.len()
 }
 
 #[cfg(test)]
@@ -327,7 +341,7 @@ mod tests {
         let trust = std::collections::HashMap::new();
         let out = merge(&[], "anything", Intent::Web, &trust, 10);
         assert!(out.is_empty());
-        assert!(is_weak(&out));
+        assert!(is_weak(&out, 0));
     }
 
     #[test]

@@ -33,7 +33,7 @@ pub struct Searcher {
     /// engine -> trust EWMA (1.0 seed; 0.2..2.0 clamp).
     trust: Mutex<HashMap<String, f64>>,
     /// exact-query cache: zero egress cost on repeats.
-    cache: Mutex<HashMap<String, (Instant, Vec<Merged>)>>,
+    cache: Mutex<HashMap<String, (Instant, Vec<Merged>, usize)>>,
     /// Chronic-failure quarantine: engine -> (consecutive
     /// failures, last failure). 3 strikes across any
     /// egresses = benched for QUARANTINE_TTL so a walled
@@ -98,11 +98,12 @@ impl Searcher {
         let intent = forced_intent.unwrap_or_else(|| intent::detect(query));
         let cache_key = format!("{query}|{max_results}|{intent:?}");
 
-        if let Some((at, cached)) = self.cache.lock().unwrap().get(&cache_key) {
+        if let Some((at, cached, total)) = self.cache.lock().unwrap().get(&cache_key) {
             if at.elapsed() < CACHE_TTL {
+                let weak = rank::is_weak(cached, *total);
                 return Ok(SearchOutcome {
                     results: cached.clone(),
-                    weak: rank::is_weak(cached),
+                    weak,
                     intent,
                     report: Vec::new(),
                     cached: true,
@@ -281,12 +282,13 @@ impl Searcher {
         }
 
         let trust = self.trust.lock().unwrap().clone();
+        let total = rank::merged_total(&per_engine);
         let results = rank::merge(&per_engine, query, intent, &trust, max_results);
-        let weak = rank::is_weak(&results);
+        let weak = rank::is_weak(&results, total);
         self.cache
             .lock()
             .unwrap()
-            .insert(cache_key, (Instant::now(), results.clone()));
+            .insert(cache_key, (Instant::now(), results.clone(), total));
 
         Ok(SearchOutcome {
             results,
