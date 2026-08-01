@@ -131,17 +131,45 @@ pub fn merge(
     trust: &HashMap<String, f64>,
     max_results: usize,
 ) -> Vec<Merged> {
-    // Group by normalized URL.
+    // Group by normalized URL. RRF mass is counted
+    // PER INDEX FAMILY, not per engine: brave/bing/ddg
+    // share the Bing tail index, so a farm ranked by all
+    // three is ONE opinion — the family dedup already
+    // applied to the consensus bonus now applies to the
+    // mass itself. Otherwise correlated engines let
+    // keyword-stuffed farms out-mass independent sources
+    // (measured in bench round 3: 3×Bing-family farms
+    // beat full-weight Wikipedia on conceptual queries).
     let mut groups: HashMap<String, Merged> = HashMap::new();
+    let mut family_best: HashMap<(String, String), f64> = HashMap::new();
+    let conceptual = super::intent::is_conceptual(query);
     for (engine, hits) in per_engine {
         let base = trust.get(engine).copied().unwrap_or(1.0);
-        let tw = if is_vertical(engine) {
+        // Wikipedia on a conceptual query is not a "vertical
+        // hint" — it IS the canonical encyclopedia engine.
+        // Full weight keeps farm consensus from outranking
+        // the explainer humans actually trust.
+        let authoritative = conceptual && engine == "wikipedia";
+        let tw = if is_vertical(engine) && !authoritative {
             base * VERTICAL_WEIGHT
         } else {
             base
         };
+        // Verticals are independent sources — each is its
+        // OWN family (deduping arxiv against scholar or
+        // github against hn would destroy their mass).
+        let family = if is_vertical(engine) {
+            format!("vertical:{engine}")
+        } else {
+            engine_family(engine).to_string()
+        };
         for hit in hits {
             let key = norm_key(&hit.url);
+            let contribution = tw / (RRF_K + hit.rank as f64 + 1.0);
+            let best = family_best
+                .entry((key.clone(), family.clone()))
+                .or_insert(0.0);
+            *best = best.max(contribution);
             let entry = groups.entry(key).or_insert_with(|| Merged {
                 title: hit.title.clone(),
                 url: hit.url.clone(),
@@ -173,8 +201,13 @@ pub fn merge(
             if entry.published.is_none() && hit.published.is_some() {
                 entry.published = hit.published.clone();
             }
-            entry.score += tw / (RRF_K + hit.rank as f64 + 1.0);
             entry.sources.push((engine.clone(), hit.rank));
+        }
+    }
+    // Sum the per-family best contributions.
+    for ((key, _family), contribution) in family_best {
+        if let Some(entry) = groups.get_mut(&key) {
+            entry.score += contribution;
         }
     }
 
@@ -209,7 +242,8 @@ pub fn merge(
 
     // Domain prior bonus.
     for r in &mut results {
-        let prior = intent::domain_prior(intent, &host_of(&r.url));
+        let host = host_of(&r.url);
+        let prior = intent::domain_prior(intent, &host, query);
         r.score += PRIOR_WEIGHT * prior;
     }
 

@@ -252,7 +252,7 @@ impl Searcher {
         }
 
         let engines = intent::engines_for(intent);
-        let verticals = intent::verticals_for(intent);
+        let verticals = intent::verticals_for(intent, query);
 
         // Fan out: engines each get their own egress
         // (spreading is the anti-rate-limit move).
