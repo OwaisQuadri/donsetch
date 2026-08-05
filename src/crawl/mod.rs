@@ -152,27 +152,75 @@ impl Default for CrawlOptions {
 }
 
 /// State carried in a resume token.
+#[derive(serde::Serialize, serde::Deserialize)]
 struct ResumeState {
+    seed: String,
     queue: Vec<(String, f64, u32)>,
-    fetched: usize,
-    total_chars: usize,
+    /// Seen-set from run 1 — without it, run-2 pages re-link
+    /// to already-fetched pages and they crawl AGAIN.
+    seen: Vec<String>,
+}
+
+/// Disk-backed resume store: tokens survive process restarts,
+/// so both the MCP daemon AND one-shot CLI runs can continue a
+/// crawl. ~/.cache/donsetch/crawl-resumes.json, 30-min TTL.
+fn resumes_path() -> std::path::PathBuf {
+    dirs_cache().join("crawl-resumes.json")
+}
+
+fn dirs_cache() -> std::path::PathBuf {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".cache"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    base.join("donsetch")
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct ResumeFile {
+    /// token -> (state, issued_at_unix)
+    entries: std::collections::HashMap<String, (ResumeState, u64)>,
+}
+
+impl ResumeFile {
+    fn load() -> Self {
+        std::fs::read_to_string(resumes_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self) {
+        let p = resumes_path();
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(s) = serde_json::to_string(self) {
+            let _ = std::fs::write(p, s);
+        }
+    }
+
+    fn sweep(&mut self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.entries.retain(|_, (_, at)| now.saturating_sub(*at) < 30 * 60);
+    }
 }
 
 pub struct Crawler {
     fetch: PageFetcher,
     governor: Arc<Governor>,
-    resumes: Mutex<std::collections::HashMap<String, (ResumeState, Instant)>>,
     token_seq: AtomicUsize,
 }
 
 impl Crawler {
     pub fn new(fetch: PageFetcher, governor: Arc<Governor>) -> Self {
-        Self {
-            fetch,
-            governor,
-            resumes: Mutex::new(std::collections::HashMap::new()),
-            token_seq: AtomicUsize::new(0),
-        }
+        Self { fetch, governor, token_seq: AtomicUsize::new(0) }
     }
 
     /// Run one crawl. Returns when a stop condition hits.
@@ -255,21 +303,22 @@ impl Crawler {
 
         // ── Frontier seeding ───────────────────────────────
         let mut queue = FrontierQueue::new();
-        let mut fetched_pages = 0usize;
-        let mut total_chars = 0usize;
+        // Budgets are PER-CALL: a resume continues from the saved
+        // position but the caller's page/char budgets apply to
+        // the NEW work. (Run 2 must not instantly exhaust itself
+        // against run 1's spend.)
+        let fetched_pages = 0usize;
+        let total_chars = 0usize;
         let seed_norm = frontier::normalize(&seed_url);
         if let Some(tok) = resume_token {
-            let mut resumes = self.resumes.lock().unwrap();
-            // Sweep expired (30 min TTL).
-            resumes.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(30 * 60));
-            if let Some((state, _)) = resumes.remove(tok) {
+            let mut store = ResumeFile::load();
+            store.sweep();
+            if let Some((state, _)) = store.entries.remove(tok) {
+                queue.restore_seen(state.seen);
                 for (u, s, d) in state.queue {
-                    if let Ok(u) = Url::parse(&u) {
-                        queue.push(u, s, d);
-                    }
+                    queue.push_to_heap(u, s, d);
                 }
-                fetched_pages = state.fetched;
-                total_chars = state.total_chars;
+                store.save();
             } else {
                 return Err(format!("resume token expired or unknown: {tok}"));
             }
@@ -606,17 +655,37 @@ impl Crawler {
                 if !queued_entries.is_empty() {
                     let id = {
                         let n = self.token_seq.fetch_add(1, Ordering::Relaxed);
-                        let nanos = started.elapsed().subsec_nanos();
-                        format!("c{nanos:x}{n:x}")
+                        let micros = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_micros())
+                            .unwrap_or(0);
+                        format!("c{micros:x}{n:x}")
                     };
                     let state = ResumeState {
+                        seed: seed.to_string(),
                         queue: queued_entries.iter().map(|(u, s, d)| (u.clone(), *s, *d)).collect(),
-                        fetched: pages_done.load(Ordering::SeqCst),
-                        total_chars: chars_total.load(Ordering::SeqCst),
+                        seen: sh_queue.lock().unwrap().seen_snapshot(),
                     };
-                    let mut resumes = self.resumes.lock().unwrap();
-                    resumes.retain(|_, (_, at)| at.elapsed() < Duration::from_secs(30 * 60));
-                    resumes.insert(id.clone(), (state, Instant::now()));
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let mut store = ResumeFile::load();
+                    store.sweep();
+                    store.entries.insert(id.clone(), (state, now));
+                    // Cap the file: drop oldest beyond 50 tokens.
+                    if store.entries.len() > 50 {
+                        let mut keyed: Vec<(u64, String)> = store
+                            .entries
+                            .iter()
+                            .map(|(k, (_, at))| (*at, k.clone()))
+                            .collect();
+                        keyed.sort();
+                        for (_, k) in keyed.into_iter().take(store.entries.len() - 50) {
+                            store.entries.remove(&k);
+                        }
+                    }
+                    store.save();
                     Some(id)
                 } else {
                     None

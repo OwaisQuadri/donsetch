@@ -186,6 +186,24 @@ impl FrontierQueue {
         self.heap.push(f);
     }
 
+    /// Restore the seen-set from a resume state (run-1 fetches
+    /// must not refetch in run 2).
+    pub fn restore_seen(&mut self, urls: Vec<String>) {
+        for u in urls {
+            self.seen.insert(u);
+        }
+    }
+
+    /// Push an entry the seen-set already recorded (resume).
+    pub fn push_to_heap(&mut self, url: String, score: f64, depth: u32) {
+        self.heap.push(Frontier { url, score, depth });
+    }
+
+    /// Full seen-set snapshot for resume persistence.
+    pub fn seen_snapshot(&self) -> Vec<String> {
+        self.seen.iter().cloned().collect()
+    }
+
     pub fn pop(&mut self) -> Option<Frontier> {
         self.heap.pop()
     }

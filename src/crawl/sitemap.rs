@@ -106,6 +106,9 @@ impl Robots {
 pub struct SitemapEntry {
     pub loc: String,
     pub lastmod: Option<String>,
+    /// True when the entry came from a `<sitemap>` index block
+    /// (a CHILD sitemap to fetch), false for `<url>` (a page).
+    pub is_index: bool,
 }
 
 /// Streaming sitemap parser: finds `<url>`/`<sitemap>` blocks
@@ -120,7 +123,8 @@ pub fn parse_sitemap(xml: &str, out: &mut Vec<SitemapEntry>, cap: usize) {
         let block = &xml[tag_off..end];
         if let Some(loc) = extract_tag(block, "loc") {
             let lastmod = extract_tag(block, "lastmod");
-            out.push(SitemapEntry { loc, lastmod });
+            let is_index = close == "</sitemap>";
+            out.push(SitemapEntry { loc, lastmod, is_index });
         }
         pos = end + close.len();
     }
@@ -227,10 +231,26 @@ pub async fn discover(
         let body = maybe_gunzip(&page.body);
         let Ok(text) = String::from_utf8(body) else { continue };
         let mut here = Vec::new();
-        parse_sitemap(&text, &mut here, 10_000);
+        if text.trim_start().starts_with("<") {
+            // XML sitemap.
+            parse_sitemap(&text, &mut here, 10_000);
+        } else {
+            // Plain-text sitemap: one URL per line (doc.rust-lang
+            // publishes sitemap.txt).
+            for line in text.lines().take(10_000) {
+                let u = line.trim();
+                if u.starts_with("http") {
+                    here.push(SitemapEntry {
+                        loc: u.to_string(),
+                        lastmod: None,
+                        is_index: false,
+                    });
+                }
+            }
+        }
         // Child sitemaps recurse; pages go straight to the map.
         for e in here {
-            if e.loc.ends_with(".xml") || e.loc.ends_with(".xml.gz") {
+            if e.is_index {
                 if queue.len() < 32 {
                     queue.push(e.loc);
                 }
