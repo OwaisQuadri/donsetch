@@ -13,9 +13,13 @@ mod charset;
 mod focus;
 mod inline;
 mod junk;
+mod language;
 mod metadata;
 mod render;
 mod score;
+
+#[cfg(test)]
+mod tests;
 
 use scraper::Html;
 
@@ -79,6 +83,14 @@ pub struct Extracted {
     /// Best-guess content kind from block composition.
     /// Conservative: only non-Page when confident.
     pub content_kind: ContentKind,
+    /// Detected language (BCP-47 code: "en", "zh", "ja", etc.).
+    #[allow(dead_code)]
+    pub lang: String,
+    /// Quality score 0.0..1.0 — content density, metadata
+    /// completeness, structure diversity. Helps agents
+    /// decide if content is trustworthy.
+    #[allow(dead_code)]
+    pub quality: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +114,72 @@ impl std::fmt::Display for ExtractError {
             ExtractError::BadSelector(s) => write!(f, "invalid CSS selector: {s}"),
         }
     }
+}
+
+/// Quality score 0.0..1.0 — content density, metadata
+/// completeness, structure diversity, and language
+/// coherence. Helps agents decide if the extracted
+/// content is trustworthy enough to quote.
+fn quality_score(
+    meta: &metadata::Meta,
+    kept: &[&blocks::Block],
+    blocks_total: usize,
+    raw_len: usize,
+    lang_info: &language::LanguageInfo,
+) -> f32 {
+    let mut score = 0.0;
+
+    // 1. Content density: extracted chars vs raw HTML bytes.
+    let text_len: usize = kept.iter().map(|b| b.chars()).sum();
+    if raw_len > 0 {
+    let density = text_len as f64 / raw_len as f64;
+        score += (density * 4.0).min(1.0) * 0.25;
+    }
+
+    // 2. Metadata completeness.
+    if meta.title.is_some() { score += 0.1; }
+    if meta.byline.is_some() { score += 0.05; }
+    if meta.published.is_some() { score += 0.05; }
+    if meta.site.is_some() { score += 0.05; }
+
+    // 3. Structure diversity: headings + paragraphs + lists.
+    let mut headings = 0;
+    let mut paras = 0;
+    let mut lists = 0;
+    let mut code = 0;
+    let mut tables = 0;
+    let mut quotes = 0;
+    for b in kept {
+    match b {
+            blocks::Block::Heading { .. } => headings += 1,
+            blocks::Block::Para { .. } => paras += 1,
+            blocks::Block::List { .. } => lists += 1,
+            blocks::Block::Code { .. } => code += 1,
+            blocks::Block::Table { .. } => tables += 1,
+            blocks::Block::Quote { .. } => quotes += 1,
+            _ => {}
+        }
+    }
+    let structure_types = [headings > 0, paras > 0, lists > 0, code > 0, tables > 0, quotes > 0]
+        .iter()
+        .filter(|&&b| b)
+        .count();
+    score += (structure_types as f64 / 6.0) * 0.2;
+
+    // 4. Block count health: enough blocks to be real content.
+    if blocks_total >= 5 { score += 0.1; }
+    if blocks_total >= 20 { score += 0.05; }
+
+    // 5. Language detected (not unknown).
+    if lang_info.code != "unknown" && lang_info.code != "und" {
+        score += 0.05;
+    }
+
+    // 6. Text volume: actual prose exists.
+    if text_len > 500 { score += 0.1; }
+    if text_len > 2000 { score += 0.05; }
+
+    score.min(1.0) as f32
 }
 
 /// Classify content from block composition.
@@ -188,6 +266,8 @@ pub fn extract(
             blocks_shown: 0,
             thin: false,
             content_kind: ContentKind::Page,
+            lang: "unknown".to_string(),
+            quality: 0.0,
         });
     }
 
@@ -196,6 +276,7 @@ pub fn extract(
     let doc = Html::parse_document(&html_text);
     let base = metadata::base_url(&doc).unwrap_or_else(|| url.to_string());
     let meta = metadata::metadata(&doc);
+    let lang_info = language::detect(&doc);
 
     // A large page that yields almost nothing is a JS
     // shell (Medium, SPAs) — flag it for tier 2 routing.
@@ -246,6 +327,8 @@ pub fn extract(
             blocks_shown: shown,
             thin: false,
             content_kind: ContentKind::Page,
+            lang: lang_info.code.clone(),
+            quality: 0.0,
         });
     }
 
@@ -288,7 +371,7 @@ pub fn extract(
     // Focus: BM25 block filter. fell_back = query matched
     // nothing → full content returned, MUST be signaled.
     let (kept, focus_fell_back): (Vec<&blocks::Block>, bool) = match &opts.focus {
-        Some(q) => focus::filter(&all_blocks, q),
+        Some(q) => focus::filter(&all_blocks, q, &lang_info),
         None => (all_blocks.iter().collect(), false),
     };
     let blocks_shown = kept.len();
@@ -326,6 +409,8 @@ pub fn extract(
     let (slice, next) = paginate(&full, opts.offset, max_chars);
     let tokens_est = slice.len() / 4;
 
+    let content_kind = classify(&kept);
+    let quality = quality_score(&meta, &kept, blocks_total, raw_len, &lang_info);
     Ok(Extracted {
         markdown: slice,
         title: meta.title,
@@ -338,7 +423,9 @@ pub fn extract(
         blocks_shown,
         tokens_est,
         thin,
-        content_kind: classify(&kept),
+        content_kind,
+        lang: lang_info.code.clone(),
+        quality,
     })
 }
 
@@ -355,7 +442,7 @@ fn paginate(text: &str, offset: usize, max_chars: usize) -> (String, Option<usiz
     }
     if end < text.len() {
         // Prefer a block boundary within the last quarter of the window.
-        let window_start = start + (end - start) * 3 / 4;
+        let window_start = ceil_char_boundary(text, start + (end - start) * 3 / 4);
         if let Some(pos) = text[window_start..end].rfind("\n\n") {
             end = window_start + pos;
         }

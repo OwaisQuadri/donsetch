@@ -60,6 +60,7 @@ fn render(
                             continue;
                         }
                         *link += text.len();
+                        *total += text.len();
                         if opts.include_links {
                             if let Some(href) = c.value().attr("href") {
                                 if let Some(abs) = absolutize(base, href) {

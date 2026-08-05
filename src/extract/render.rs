@@ -32,7 +32,15 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
         out.push('\n');
     }
     out.push_str(url);
-    out.push_str("\n\n");
+    out.push_str("\n");
+    // Description as a one-line summary — agents use it to
+    // decide relevance before reading the body.
+    if let Some(d) = &meta.description {
+        if d.len() < 300 {
+            out.push_str(&format!("> {d}\n"));
+        }
+    }
+    out.push_str("\n");
 
     let mut last_path: Vec<String> = Vec::new();
     let mut last_was_heading = true; // frontmatter counts
@@ -44,10 +52,14 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
     for block in kept {
         match block {
             Block::Heading { level, text, .. } => {
-                // Skip the H1 that repeats the frontmatter title.
+                // Skip the H1 that repeats the frontmatter title —
+                // but only if the frontmatter title was actually
+                // shown. If first_is_title, the frontmatter was
+                // skipped, so this H1 IS the title display.
                 if !title_heading_dropped
                     && *level == 1
                     && Some(text) == meta.title.as_ref()
+                    && !first_is_title
                 {
                     title_heading_dropped = true;
                     continue;

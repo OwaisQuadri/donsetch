@@ -176,6 +176,22 @@ fn walk<'a>(
                 push_block(Block::Quote { md, path: current_path(headings) }, out);
             }
         }
+        "dl" => {
+            // Definition list: dt (term) + dd (definition) pairs.
+            // Rendered as a list with "**term** — definition".
+            let items = def_list_items(el, base, opts);
+            if !items.is_empty() {
+                push_block(
+                    Block::List {
+                        ordered: false,
+                        items,
+                        link_density: 0.0,
+                        path: current_path(headings),
+                    },
+                    out,
+                );
+            }
+        }
         "figure" | "img" if opts.include_media => {
             media_block(el, base, headings, out);
         }
@@ -310,6 +326,45 @@ fn list_items(
     }
     let ld = if total > 0 { link as f32 / total as f32 } else { 0.0 };
     (items, ld)
+}
+
+/// Definition list (dl/dt/dd) — render as
+/// "**term** — definition" list items.
+fn def_list_items(
+    dl: ElementRef<'_>,
+    base: &str,
+    opts: &super::ExtractOptions,
+) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut current_term: Option<String> = None;
+    for child in dl.children() {
+        let Some(el) = ElementRef::wrap(child) else { continue };
+        if crate::extract::junk::skip(el) {
+            continue;
+        }
+        match el.value().name() {
+            "dt" => {
+                let term = inline::plain(el);
+                if !term.is_empty() {
+                    current_term = Some(term);
+                }
+            }
+            "dd" => {
+                let (def, _) = inline::markdown(el, base, opts);
+                let def = def.trim().to_string();
+                if def.is_empty() {
+                    continue;
+                }
+                if let Some(term) = &current_term {
+                    items.push(format!("**{term}** — {def}"));
+                } else {
+                    items.push(def);
+                }
+            }
+            _ => {}
+        }
+    }
+    items
 }
 
 fn table_block(el: ElementRef<'_>, headings: &[(u8, String)]) -> Option<Block> {
