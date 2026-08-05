@@ -250,7 +250,9 @@ pub fn extract(
 
     // Non-HTML passthrough (json/text/xml): no extraction lies.
     let ct = content_type.to_lowercase();
-    if !ct.is_empty() && !ct.contains("html") {
+    let is_pdf =
+        body.len() >= 5 && body.starts_with(b"%PDF-") || ct.contains("pdf");
+    if !ct.is_empty() && !ct.contains("html") && !is_pdf {
         let text = String::from_utf8_lossy(body);
         let (slice, next) = paginate(&text, opts.offset, max_chars);
         return Ok(Extracted {
@@ -271,6 +273,44 @@ pub fn extract(
         });
     }
 
+    // --- PDF: DonSheet parses bytes into the same block model. ---
+    if is_pdf {
+        match crate::pdf::parse(body) {
+            Ok(parsed) => {
+                return downstream(
+                    &parsed.meta,
+                    parsed.blocks,
+                    body.len(),
+                    false,
+                    parsed.notes,
+                    parsed.lang_info,
+                    url,
+                    opts,
+                    max_chars,
+                );
+            }
+            Err(crate::pdf::PdfFailure::Encrypted) => {
+                return Ok(empty_pdf(url, "encrypted document — a password is required; could not extract text"));
+            }
+            Err(crate::pdf::PdfFailure::Corrupt(msg)) => {
+                return Ok(empty_pdf(url, &format!("{msg}; could not extract text")));
+            }
+            Err(crate::pdf::PdfFailure::TooLarge(n)) => {
+                return Ok(empty_pdf(
+                    url,
+                    &format!(
+                        "document too large ({:.0} MB > limit); could not extract text",
+                        n as f64 / 1_048_576.0
+                    ),
+                ));
+            }
+            Err(crate::pdf::PdfFailure::NotPdf) => {
+                return Ok(empty_pdf(url, "bytes do not decode as a PDF; could not extract text"));
+            }
+        }
+    }
+
+    // --- HTML upstream ---
     let html_text = charset::decode(body, &ct);
     let raw_len = body.len();
     let doc = Html::parse_document(&html_text);
@@ -280,7 +320,7 @@ pub fn extract(
 
     // A large page that yields almost nothing is a JS
     // shell (Medium, SPAs) — flag it for tier 2 routing.
-    let thin = raw_len > 50_000;
+    let thin_flag = raw_len > 50_000;
 
     // Scope: explicit selector or scored main-content detection.
     let roots: Vec<scraper::ElementRef<'_>> = if let Some(sel) = &opts.selector {
@@ -296,6 +336,47 @@ pub fn extract(
     for root in &roots {
         blocks::segment(*root, &base, opts, &mut all_blocks);
     }
+
+    downstream(&meta, all_blocks, raw_len, thin_flag, Vec::new(), lang_info, url, opts, max_chars)
+}
+
+/// Honest stub for PDFs that could not be parsed.
+fn empty_pdf(url: &str, reason: &str) -> Extracted {
+    let md = format!("{url}\n\n*[pdf: {reason}]*\n");
+    Extracted {
+        tokens_est: md.len() / 4,
+        total_chars: md.len(),
+        markdown: md,
+        title: None,
+        byline: None,
+        published: None,
+        site: None,
+        next_offset: None,
+        blocks_total: 0,
+        blocks_shown: 0,
+        thin: false,
+        content_kind: ContentKind::Page,
+        lang: "unknown".to_string(),
+        quality: 0.0,
+    }
+}
+
+/// Shared downstream: TOC → section scope → focus BM25 → render →
+/// trust signals → pagination → quality. Identical for HTML and PDF;
+/// PDF upstream produces blocks + meta + notes + language and hands
+/// them here.
+#[allow(clippy::too_many_arguments)]
+fn downstream(
+    meta: &crate::extract::metadata::Meta,
+    mut all_blocks: Vec<blocks::Block>,
+    raw_len: usize,
+    thin_flag: bool,
+    notes: Vec<String>,
+    lang_info: language::LanguageInfo,
+    url: &str,
+    opts: &ExtractOptions,
+    max_chars: usize,
+) -> Result<Extracted, ExtractError> {
 
     // TOC mode: heading tree only.
     if opts.toc {
@@ -318,10 +399,10 @@ pub fn extract(
             tokens_est: md.len() / 4,
             total_chars: md.len(),
             markdown: md,
-            title: meta.title,
-            byline: meta.byline,
-            published: meta.published,
-            site: meta.site,
+            title: meta.title.clone(),
+            byline: meta.byline.clone(),
+            published: meta.published.clone(),
+            site: meta.site.clone(),
             next_offset: None,
             blocks_total: all_blocks.len(),
             blocks_shown: shown,
@@ -377,7 +458,13 @@ pub fn extract(
     let blocks_shown = kept.len();
 
     // Render markdown (frontmatter + blocks) then paginate.
-    let mut full = render::render(&meta, url, &kept, opts);
+    let mut full = render::render(meta, url, &kept, opts);
+
+    // Engine notes first (PDF scan flags etc.) — they frame any
+    // other trust signal that follows.
+    for note in &notes {
+        full = format!("*[pdf: {note}]*\n\n{full}");
+    }
 
     // Agent-trust signals, inline in the content:
     // - focus miss → agent must not quote wrong content
@@ -400,7 +487,7 @@ pub fn extract(
 
     // JS-shell warning: agent must know the content
     // below is likely incomplete.
-    let thin = thin && full.len() < 800;
+    let thin = thin_flag && full.len() < 800;
     if thin {
         full = format!(
             "*[note: large page rendered almost no content — likely JS-rendered (SPA). Content below may be a shell; tier 2 renders JS.]*\n\n{full}"
@@ -410,13 +497,13 @@ pub fn extract(
     let tokens_est = slice.len() / 4;
 
     let content_kind = classify(&kept);
-    let quality = quality_score(&meta, &kept, blocks_total, raw_len, &lang_info);
+    let quality = quality_score(meta, &kept, blocks_total, raw_len, &lang_info);
     Ok(Extracted {
         markdown: slice,
-        title: meta.title,
-        byline: meta.byline,
-        published: meta.published,
-        site: meta.site,
+        title: meta.title.clone(),
+        byline: meta.byline.clone(),
+        published: meta.published.clone(),
+        site: meta.site.clone(),
         total_chars: full.len(),
         next_offset: next,
         blocks_total,

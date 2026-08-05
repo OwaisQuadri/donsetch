@@ -17,3 +17,10 @@ Thumbs.db
 .idea/
 .vscode/
 bench/results.json
+
+# Vendored PDFium static libraries (build.rs auto-downloads)
+vendor/
+
+# PDF corpus binaries (download via scripts/download-corpus.sh)
+tests/pdf-corpus/*.pdf
+!tests/pdf-corpus/corpus.md

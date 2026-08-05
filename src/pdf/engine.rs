@@ -1,0 +1,463 @@
+//! Safe wrapper over the PDFium C API.
+//!
+//! This module is the ONLY place `unsafe` PDFium calls live. Every call
+//! is serialized behind a single global lock (`core()`) because PDFium
+//! keeps process-global state and is not thread-safe. Handles never
+//! escape: a document is loaded, walked, and closed entirely inside
+//! `load_document`, which hands plain Rust data to the caller.
+//!
+//! Coordinates are normalized to screen space (origin top-left, y grows
+//! downward, points) using the page height at load time — the rest of
+//! the pipeline never has to think about PDF's bottom-left origin.
+
+use std::ffi::{c_char, c_void, CString};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+use super::sys::*;
+
+/// One extracted character, normalized to screen-space points.
+#[derive(Clone, Debug)]
+pub struct PdfChar {
+    /// The unicode scalar (private-use / unmapped glyphs become '\0').
+    pub cp: char,
+    /// Normalized bbox: x0 left, y0 top, x1 right, y1 bottom (screen space).
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    /// Font size in points.
+    pub size: f32,
+    /// Font weight 100..900 (-1 when unknown).
+    pub weight: i32,
+    /// PDF descriptor flags (sys::FONT_*).
+    pub flags: u32,
+    /// Interned font family name index (into RawDoc.fonts).
+    pub font: u16,
+    /// Text rotation in degrees (0 = normal horizontal).
+    pub angle: f32,
+    /// Character index order in the content stream.
+    pub order: u32,
+    /// Dingbat-font glyph (checkbox/seal art — picture, not text).
+    pub dingbat: bool,
+}
+
+pub struct PageChars {
+    pub index: usize,
+    pub width: f32,
+    pub height: f32,
+    pub chars: Vec<PdfChar>,
+    /// Count of image page-objects (for scanned-PDF detection).
+    pub images: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RawMeta {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub subject: Option<String>,
+    pub keywords: Option<String>,
+    pub creator: Option<String>,
+    pub producer: Option<String>,
+    pub created: Option<String>,
+    pub modified: Option<String>,
+}
+
+#[allow(dead_code)] // consumed when outline wires into MCP meta
+#[derive(Clone, Debug)]
+pub struct OutlineItem {
+    pub title: String,
+    pub level: usize,
+    pub page: Option<usize>,
+}
+
+#[derive(Default)]
+pub struct RawDoc {
+    pub fonts: Vec<String>,
+    pub meta: RawMeta,
+    pub outline: Vec<OutlineItem>,
+    pub page_count: usize,
+}
+
+/// What the wrapper itself can fail with.
+#[derive(Debug)]
+pub enum LoadError {
+    /// PDFium reported a password is required.
+    Encrypted,
+    /// PDFium could not parse the bytes (corrupt / unsupported).
+    Corrupt(u32),
+    /// Not actually a PDF (magic sniff mismatch upstream would
+    /// normally catch this; defended here too).
+    NotPdf,
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoadError::Encrypted => write!(f, "encrypted PDF (password required)"),
+            LoadError::Corrupt(code) => write!(f, "PDF load failed (pdfium error {code})"),
+            LoadError::NotPdf => write!(f, "not a PDF document"),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
+/// The global PDFium core. Initialized once, destroyed never (the
+/// process owns it; calling DestroyLibrary mid-process can tear down
+/// state other threads still reference).
+pub struct PdfiumCore {
+    _priv: (),
+}
+
+static CORE: OnceLock<Mutex<PdfiumCore>> = OnceLock::new();
+
+pub fn core() -> MutexGuard<'static, PdfiumCore> {
+    CORE.get_or_init(|| {
+        unsafe {
+            FPDF_InitLibraryWithConfig(&FpdfLibraryConfig {
+                version: 2,
+                m_pUserFontPaths: std::ptr::null_mut(),
+                m_pIsolate: std::ptr::null_mut(),
+                m_pV8EmbedderSlot: std::ptr::null_mut(),
+            });
+        }
+        Mutex::new(PdfiumCore { _priv: () })
+    })
+    .lock()
+    .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Decode a UTF-16LE buffer returned by PDFium meta/bookmark APIs.
+/// `len_units` includes the terminating NUL when > 0.
+fn decode_utf16(buf: &[u16], len_units: usize) -> String {
+    let end = if len_units > 0 {
+        len_units.saturating_sub(1).min(buf.len())
+    } else {
+        0
+    };
+    String::from_utf16_lossy(&buf[..end])
+}
+
+/// Fonts whose glyphs are pictures, not text (checkboxes, seals,
+/// logo art). Detected once at intern time.
+pub fn is_dingbat_family(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("wingdings")
+        || n.contains("zapf")
+        || n.contains("webdings")
+        || n.contains("marlett")
+        || n.contains("monotype sorts")
+        || n.contains("ms outlook")
+        || n.contains("bookdings")
+}
+
+/// Mark a font as monospace when its NAME says so (the descriptor's
+/// FixedPitch bit is dropped by many subset pipelines — books &
+/// guides embed mono fonts without it).
+pub const DONSHEET_MONO_HINT: u32 = 0x8000_0000;
+
+fn mono_font_name(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.contains("mono")
+        || n.contains("courier")
+        || n.contains("consol")
+        || n.contains("code")
+        || n.contains("menlo")
+        || n.contains("monaco")
+        || n.contains("terminal")
+        || n.contains("typewriter")
+        || n.contains("mplus1m")
+        || n.contains("source code")
+        || n.contains("inconsolata")
+        || n.contains("jetbrains")
+        || n.contains("fira code")
+}
+
+/// Fill `buf` with a meta tag value; returns None when empty.
+fn get_meta(doc: FpdfDocument, tag: &str, buf: &mut Vec<u16>) -> Option<String> {
+    let tag = CString::new(tag).ok()?;
+    unsafe {
+        buf.clear();
+        buf.resize(512, 0);
+        let n = FPDF_GetMetaText(
+            doc,
+            tag.as_ptr(),
+            buf.as_mut_ptr() as *mut c_void,
+            512 * 2,
+        ) as usize;
+        if n < 2 {
+            return None;
+        }
+        if n > 512 * 2 {
+            buf.resize(n / 2 + 2, 0);
+            let n2 = FPDF_GetMetaText(
+                doc,
+                tag.as_ptr(),
+                buf.as_mut_ptr() as *mut c_void,
+                (buf.len() * 2) as u64,
+            ) as usize;
+            if n2 < 2 {
+                return None;
+            }
+        }
+        let s = decode_utf16(buf, n.min(buf.len()));
+        let cleaned: String = s.chars().filter(|&c| c != '\0').collect();
+        let s = cleaned.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    }
+}
+
+fn bookmark_title(bm: FpdfBookmark) -> String {
+    unsafe {
+        let n = FPDFBookmark_GetTitle(bm, std::ptr::null_mut(), 0) as usize;
+        if n < 2 || n > 64 * 1024 {
+            return String::new();
+        }
+        let mut buf = vec![0u16; n / 2 + 2];
+        let n2 = FPDFBookmark_GetTitle(
+            bm,
+            buf.as_mut_ptr() as *mut c_void,
+            (buf.len() * 2) as u64,
+        ) as usize;
+        decode_utf16(&buf, n2.min(buf.len()))
+    }
+}
+
+/// Walk the outline tree depth-first, flattened with levels.
+fn walk_outlines(doc: FpdfDocument) -> Vec<OutlineItem> {
+    let mut out = Vec::new();
+    fn walk_level(doc: FpdfDocument, parent: FpdfBookmark, level: usize, out: &mut Vec<OutlineItem>) {
+        if level > 12 || out.len() > 10_000 {
+            return;
+        }
+        let mut bm = unsafe { FPDFBookmark_GetFirstChild(doc, parent) };
+        while !bm.is_null() {
+            let title = bookmark_title(bm);
+            let dest = unsafe { FPDFBookmark_GetDest(doc, bm) };
+            let page = if !dest.is_null() {
+                let idx = unsafe { FPDFDest_GetDestPageIndex(doc, dest) };
+                if idx >= 0 {
+                    Some(idx as usize)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            out.push(OutlineItem { title, level, page });
+            walk_level(doc, bm, level + 1, out);
+            bm = unsafe { FPDFBookmark_GetNextSibling(doc, bm) };
+        }
+    }
+    walk_level(doc, std::ptr::null_mut(), 0, &mut out);
+    out
+}
+
+/// Load `bytes` as a document, walking every page and converting chars
+/// to the normalized pure-Rust model. `page_sink` receives each page's
+/// chars (and may transform them into the caller's per-page type `P`).
+///
+/// The PDFium lock is held for the entire walk — handles never escape.
+#[allow(clippy::too_many_arguments)]
+pub fn load_document<P, F>(bytes: &[u8], mut page_sink: F) -> Result<(RawDoc, Vec<P>), LoadError>
+where
+    F: FnMut(PageChars) -> P,
+{
+    if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
+        return Err(LoadError::NotPdf);
+    }
+    let _lock = core();
+    unsafe {
+        let doc = FPDF_LoadMemDocument64(
+            bytes.as_ptr() as *const c_void,
+            bytes.len(),
+            std::ptr::null::<c_char>(),
+        );
+        if doc.is_null() {
+            let code = FPDF_GetLastError();
+            return Err(if code == FPDF_ERR_PASSWORD {
+                LoadError::Encrypted
+            } else {
+                LoadError::Corrupt(code)
+            });
+        }
+        // RAII: guaranteed close on all paths below.
+        struct DocGuard(FpdfDocument);
+        impl Drop for DocGuard {
+            fn drop(&mut self) {
+                unsafe { FPDF_CloseDocument(self.0) };
+            }
+        }
+        let guard = DocGuard(doc);
+
+        let page_count = FPDF_GetPageCount(doc).max(0) as usize;
+        let mut raw = RawDoc {
+            fonts: Vec::new(),
+            meta: RawMeta::default(),
+            outline: walk_outlines(doc),
+            page_count,
+        };
+        let mut pages_out: Vec<P> = Vec::with_capacity(page_count);
+        let mut font_index: std::collections::HashMap<String, u16> =
+            std::collections::HashMap::new();
+        let mut font_dingbat: Vec<bool> = Vec::new();
+        let mut mbuf: Vec<u16> = Vec::with_capacity(512);
+        raw.meta.title = get_meta(doc, "Title", &mut mbuf);
+        raw.meta.author = get_meta(doc, "Author", &mut mbuf);
+        raw.meta.subject = get_meta(doc, "Subject", &mut mbuf);
+        raw.meta.keywords = get_meta(doc, "Keywords", &mut mbuf);
+        raw.meta.creator = get_meta(doc, "Creator", &mut mbuf);
+        raw.meta.producer = get_meta(doc, "Producer", &mut mbuf);
+        raw.meta.created = get_meta(doc, "CreationDate", &mut mbuf);
+        raw.meta.modified = get_meta(doc, "ModDate", &mut mbuf);
+
+        for pi in 0..page_count {
+            let page = FPDF_LoadPage(doc, pi as i32);
+            if page.is_null() {
+                continue;
+            }
+            struct PageGuard(FpdfPage);
+            impl Drop for PageGuard {
+                fn drop(&mut self) {
+                    unsafe { FPDF_ClosePage(self.0) };
+                }
+            }
+            let _pguard = PageGuard(page);
+
+            let width = FPDF_GetPageWidthF(page) as f32;
+            let height = FPDF_GetPageHeightF(page) as f32;
+
+            // Image-object count (scanned detection).
+            let mut images = 0usize;
+            let nobj = FPDFPage_CountObjects(page);
+            for oi in 0..nobj.max(0).min(4096) {
+                let obj = FPDFPage_GetObject(page, oi);
+                if !obj.is_null() && FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_IMAGE {
+                    images += 1;
+                }
+            }
+
+            let mut chars = Vec::new();
+            let tp = FPDFText_LoadPage(page);
+            if !tp.is_null() {
+                struct TpGuard(FpdfTextpage);
+                impl Drop for TpGuard {
+                    fn drop(&mut self) {
+                        unsafe { FPDFText_ClosePage(self.0) };
+                    }
+                }
+                let _tg = TpGuard(tp);
+                let n = FPDFText_CountChars(tp).max(0) as usize;
+                chars.reserve(n.min(262_144));
+                for i in 0..n.min(1_048_576) {
+                    let i32_i = i as i32;
+                    let cp_raw = FPDFText_GetUnicode(tp, i32_i);
+                    let cp = char::from_u32(cp_raw).unwrap_or('\0');
+                    // Skip NUL / non-printable pseudo-chars pdfium emits
+                    // for unmapped glyphs.
+                    let (mut x0, mut x1, mut y_b, mut y_t) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+                    FPDFText_GetCharBox(tp, i32_i, &mut x0, &mut x1, &mut y_b, &mut y_t);
+                    let size = FPDFText_GetFontSize(tp, i32_i);
+                    let weight = FPDFText_GetFontWeight(tp, i32_i);
+
+                    // Font size truth: GetFontSize degenerates to 1.0
+                    // on Type3/matrix fonts (report generators). The
+                    // text matrix scale is the reliable source:
+                    // hypot(a,b) is the size for any rotation.
+                    let mut m = FsMatrix::default();
+                    FPDFText_GetMatrix(tp, i32_i, &mut m);
+                    let mscale = (m.a * m.a + m.b * m.b).sqrt();
+                    let angle = if m.a == 0.0 && m.b == 0.0 {
+                        0.0
+                    } else {
+                        m.b.atan2(m.a).to_degrees()
+                    };
+                    let size = if size.is_finite() && size > 1.5 {
+                        size as f32
+                    } else if mscale > 0.5 {
+                        mscale
+                    } else {
+                        0.0
+                    };
+
+                    // Font name (skip the roundtrip when flags are all we need).
+                    let mut flags: i32 = 0;
+                    let mut namebuf = [0u8; 256];
+                    let need = FPDFText_GetFontInfo(
+                        tp,
+                        i32_i,
+                        namebuf.as_mut_ptr() as *mut c_void,
+                        namebuf.len() as u64,
+                        &mut flags,
+                    ) as usize;
+                    let family = if need > 0 && need <= namebuf.len() {
+                        let nul = namebuf
+                            .iter()
+                            .position(|&b| b == 0)
+                            .unwrap_or(namebuf.len());
+                        let mut s = String::from_utf8_lossy(&namebuf[..nul]).into_owned();
+                        // Strip the six-letter subset prefix ("ABCDEF+Font").
+                        if let Some(p) = s.find('+') {
+                            if p <= 8 {
+                                s = s[p + 1..].to_string();
+                            }
+                        }
+                        match font_index.get(&s) {
+                            Some(&idx) => idx,
+                            None => {
+                                let idx = if raw.fonts.len() < u16::MAX as usize {
+                                    font_dingbat.push(is_dingbat_family(&s));
+                                    raw.fonts.push(s.clone());
+                                    (raw.fonts.len() - 1) as u16
+                                } else {
+                                    0
+                                };
+                                font_index.insert(s, idx);
+                                idx
+                            }
+                        }
+                    } else {
+                        0
+                    };
+
+                    chars.push(PdfChar {
+                        cp,
+                        x0: x0 as f32,
+                        y0: height - y_t.max(y_b) as f32,
+                        x1: x1 as f32,
+                        y1: height - y_t.min(y_b) as f32,
+                        size,
+                        weight,
+                        flags: flags as u32
+                            | if mono_font_name(&raw.fonts[family as usize]) {
+                                DONSHEET_MONO_HINT
+                            } else {
+                                0
+                            },
+                        font: family,
+                        angle,
+                        order: i as u32,
+                        dingbat: font_dingbat.get(family as usize).copied().unwrap_or(false),
+                    });
+                }
+            }
+            pages_out.push(page_sink(PageChars {
+                index: pi,
+                width,
+                height,
+                chars,
+                images,
+            }));
+            if std::env::var("DONSHEET_DEBUG").is_ok() && pi % 50 == 0 {
+                eprintln!("[engine] page {pi}/{page_count} done");
+            }
+        }
+
+        drop(guard);
+        Ok((raw, pages_out))
+    }
+}

@@ -6,6 +6,7 @@ mod fetch;
 mod ghost;
 mod mcp;
 mod paths;
+mod pdf;
 mod search;
 mod memory;
 mod profile;
@@ -108,7 +109,13 @@ async fn main() {
             if let Some(path) = input_file {
                 let body = std::fs::read(&path).expect("read input");
                 let t0 = std::time::Instant::now();
-                let ex = match extract::extract(&body, "text/html", "https://local/", &opts) {
+                // Sniff bytes so the same path covers HTML and PDF.
+                let sniff_ct = if body.starts_with(b"%PDF-") {
+                    "application/pdf"
+                } else {
+                    "text/html"
+                };
+                let ex = match extract::extract(&body, sniff_ct, "https://local/", &opts) {
                     Ok(e) => e,
                     Err(e) => {
                         eprintln!("error: {e}");
