@@ -17,6 +17,7 @@ pub mod cache;
 pub mod cdp;
 pub mod manager;
 pub mod ops;
+pub mod proc;
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -25,8 +26,8 @@ use std::time::Instant;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt as _;
 
 use crate::error::FetchError;
 use crate::profile::BrowserProfile;
@@ -41,6 +42,7 @@ pub const REAP_AFTER: std::time::Duration =
 
 pub struct Ghost {
     child: Child,
+    proc: proc::Proc,
     pub cdp: cdp::Cdp,
     /// Attached page session id.
     pub session: String,
@@ -53,36 +55,29 @@ pub struct Ghost {
 /// Persistent profile dir: aged state passes challenges
 /// easier, and clearance cookies survive daemon restarts.
 pub fn profile_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let home = std::env::var_os("HOME").unwrap_or_default();
-            PathBuf::from(home).join(".cache")
-        });
-    base.join("donsetch").join("ghost-profile")
+    crate::paths::cache_dir().join("ghost-profile")
 }
 
-/// Locate a Chrome-family binary. Env override first.
+/// Locate a Chrome-family binary. Env override first, then
+/// platform-specific known paths, then PATH search. No `which`
+/// subprocess — works on Linux, macOS, and Windows.
 fn chrome_binary() -> Result<String, FetchError> {
     if let Some(p) = std::env::var_os("DONGHOST_CHROME") {
         return Ok(p.to_string_lossy().into_owned());
     }
-    for name in [
-        "chromium",
-        "chromium-browser",
-        "google-chrome",
-        "google-chrome-stable",
-        "chrome",
-    ] {
-        if let Ok(out) = std::process::Command::new("which")
-            .arg(name)
-            .output()
-        {
-            if out.status.success() {
-                let p =
-                    String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !p.is_empty() {
-                    return Ok(p);
+    // Known install locations (most reliable, no PATH needed).
+    for path in known_chrome_paths() {
+        if is_executable(&path) {
+            return Ok(path.to_string_lossy().into_owned());
+        }
+    }
+    // PATH search.
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            for name in chrome_names() {
+                let candidate = dir.join(name);
+                if is_executable(&candidate) {
+                    return Ok(candidate.to_string_lossy().into_owned());
                 }
             }
         }
@@ -90,6 +85,72 @@ fn chrome_binary() -> Result<String, FetchError> {
     Err(FetchError::ghost(
         "no chromium/chrome binary found (set DONGHOST_CHROME)",
     ))
+}
+
+#[cfg(target_os = "linux")]
+fn known_chrome_paths() -> Vec<PathBuf> {
+    [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/snap/bin/chromium",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn known_chrome_paths() -> Vec<PathBuf> {
+    [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+#[cfg(windows)]
+fn known_chrome_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(pf) = std::env::var_os("ProgramFiles") {
+        paths.push(PathBuf::from(&pf).join("Google\\Chrome\\Application\\chrome.exe"));
+    }
+    if let Some(pf) = std::env::var_os("ProgramFiles(x86)") {
+        paths.push(PathBuf::from(&pf).join("Google\\Chrome\\Application\\chrome.exe"));
+    }
+    if let Some(la) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(PathBuf::from(&la).join("Google\\Chrome\\Application\\chrome.exe"));
+    }
+    paths
+}
+
+#[cfg(windows)]
+fn chrome_names() -> &'static [&'static str] {
+    // Edge is Chromium-based, pre-installed on Windows — often
+    // the only available CDP-capable browser.
+    &["chrome.exe", "msedge.exe", "chromium.exe"]
+}
+
+#[cfg(not(windows))]
+fn chrome_names() -> &'static [&'static str] {
+    &["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"]
+}
+
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
 }
 
 impl Ghost {
@@ -110,49 +171,49 @@ impl Ghost {
             let _ = std::fs::remove_file(dir.join(f));
         }
         let mut cmd = Command::new(bin);
-        cmd.args([
-            "--headless=new",
-            "--remote-debugging-port=0",
-            &format!("--user-data-dir={}", dir.display()),
-            &format!("--user-agent={}", profile.user_agent),
-            "--window-size=1920,1080",
-            "--window-position=0,0",
-            "--lang=en-US",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-background-networking",
-            "--disable-component-update",
-            "--disable-sync",
-            "--disable-translate",
-            "--mute-audio",
-            "--use-angle=vulkan",
-            // Modern Chrome (136+) sets navigator.webdriver
-            // under --headless/--remote-debugging-port even
-            // raw. This blink switch restores the real-
-            // browser default; not JS-enumerable.
-            "--disable-blink-features=AutomationControlled",
-            "about:blank",
-        ])
-        // Own process group: freeze/thaw signal the
-        // whole tree (browser + renderers + GPU).
-        .process_group(0)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-        // No orphans even if donsetch itself dies.
-        #[cfg(unix)]
+        let mut chrome_args: Vec<String> = vec![
+            "--headless=new".into(),
+            "--remote-debugging-port=0".into(),
+            format!("--user-data-dir={}", dir.display()),
+            format!("--user-agent={}", profile.user_agent),
+            "--window-size=1920,1080".into(),
+            "--window-position=0,0".into(),
+            "--lang=en-US".into(),
+            "--no-first-run".into(),
+            "--no-default-browser-check".into(),
+            "--disable-background-networking".into(),
+            "--disable-component-update".into(),
+            "--disable-sync".into(),
+            "--disable-translate".into(),
+            "--mute-audio".into(),
+        ];
+        // ANGLE GPU backend: Vulkan on Linux (headless needs it);
+        // Windows/macOS use their native defaults (D3D11/Metal).
+        #[cfg(target_os = "linux")]
+        chrome_args.push("--use-angle=vulkan".into());
+        // Modern Chrome (136+) sets navigator.webdriver
+        // under --headless/--remote-debugging-port even
+        // raw. This blink switch restores the real-
+        // browser default; not JS-enumerable.
+        chrome_args.push("--disable-blink-features=AutomationControlled".into());
+        chrome_args.push("about:blank".into());
+        cmd.args(&chrome_args);
+        // Own process group (Unix) / Job Object (Windows):
+        // freeze/thaw/kill the whole browser tree.
+        proc::Proc::prepare_cmd(&mut cmd);
+        cmd.stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        // No orphans even if donsetch dies hard. Linux-only:
+        // macOS has no prctl; Windows uses the Job Object's
+        // KILL_ON_JOB_CLOSE.
+        #[cfg(target_os = "linux")]
         unsafe {
-            cmd.as_std_mut().pre_exec(|| {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL)
-                    != 0
-                {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
+            cmd.as_std_mut().pre_exec(proc::pdeath_pre_exec);
         }
         let mut child = cmd
             .spawn()
             .map_err(|e| FetchError::ghost(format!("spawn: {e}")))?;
+        let proc = proc::Proc::from_child(&child)?;
 
         // The ws endpoint arrives on stderr:
         // "DevTools listening on ws://127.0.0.1:PORT/..."
@@ -250,6 +311,7 @@ impl Ghost {
 
         Ok(Self {
             child,
+            proc,
             cdp,
             session,
             target,
@@ -258,25 +320,22 @@ impl Ghost {
         })
     }
 
+    #[allow(dead_code)] // useful accessor for debugging/agent surface
     pub fn pid(&self) -> Option<u32> {
         self.child.id()
     }
 
-    /// SIGSTOP the whole process group. CPU → 0, RAM goes
+    /// Freeze the whole process tree. CPU → 0, RAM goes
     /// cold and swappable. Resume is ~ms.
     pub fn freeze(&mut self) {
         if self.frozen {
             return;
         }
-        if let Some(pid) = self.pid() {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGSTOP);
-            }
-            self.frozen = true;
-        }
+        self.proc.freeze();
+        self.frozen = true;
     }
 
-    /// SIGCONT the group. False if the browser died while
+    /// Resume the process tree. False if the browser died while
     /// frozen (caller relaunches).
     pub fn thaw(&mut self) -> bool {
         if !self.frozen {
@@ -284,11 +343,7 @@ impl Ghost {
         }
         match self.child.try_wait() {
             Ok(None) => {
-                if let Some(pid) = self.pid() {
-                    unsafe {
-                        libc::kill(-(pid as i32), libc::SIGCONT);
-                    }
-                }
+                self.proc.thaw();
                 self.frozen = false;
                 true
             }
@@ -301,15 +356,12 @@ impl Ghost {
         self.frozen
     }
 
-    /// Reap the browser entirely — the whole process
-    /// group, plus crashpad handlers (they daemonize
-    /// into their own groups and escape the group kill).
+    /// Reap the browser entirely — the whole process tree,
+    /// plus crashpad handlers on Unix (they daemonize into
+    /// their own groups and escape the group kill; on Windows
+    /// the Job Object already owns them).
     pub async fn kill(&mut self) {
-        if let Some(pid) = self.pid() {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-        }
+        self.proc.kill_group();
         sweep_crashpad();
         let _ = self.child.wait().await;
     }
@@ -470,8 +522,10 @@ impl Ghost {
 
 /// Kill chrome_crashpad processes belonging to our
 /// ghost profile (they daemonize into their own
-/// process groups and escape group kills).
-#[cfg(unix)]
+/// process groups and escape group kills). Linux-only:
+/// uses /proc; macOS has no /proc and Windows's Job
+/// Object already owns the crashpad handlers.
+#[cfg(target_os = "linux")]
 fn sweep_crashpad() {
     let marker = profile_dir().to_string_lossy().into_owned();
     let Ok(entries) = std::fs::read_dir("/proc") else {
@@ -496,7 +550,7 @@ fn sweep_crashpad() {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(target_os = "linux"))]
 fn sweep_crashpad() {}
 
 /// Minimal base64 decode (avoids a dep for one call).

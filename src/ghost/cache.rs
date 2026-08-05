@@ -47,10 +47,7 @@ fn now() -> u64 {
 }
 
 fn path() -> PathBuf {
-    super::profile_dir()
-        .parent()
-        .map(|p| p.join("ghost-state.json"))
-        .unwrap_or_else(|| PathBuf::from("ghost-state.json"))
+    crate::paths::cache_dir().join("ghost-state.json")
 }
 
 /// Clearance typically expires in ~30-60 min. Treat a

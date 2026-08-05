@@ -179,8 +179,9 @@ impl Fetcher {
                     let next = base
                         .join(&loc)
                         .map_err(|_| FetchError::Http(format!("bad redirect target: {loc}")))?;
-                    if next.scheme() != "https" {
-                        // Plain-http downgrade: returned honestly, not followed blind.
+                    if !matches!(next.scheme(), "http" | "https") {
+                        // Non-web scheme (file://, ftp://, …):
+                        // returned honestly, not followed.
                         out.elapsed = started.elapsed();
                         out.redirects = redirects;
                         return Ok(out);
@@ -253,8 +254,14 @@ impl Fetcher {
         use_jar: bool,
     ) -> Result<FetchOutcome, FetchError> {
         let url = url::Url::parse(url_str).map_err(|_| FetchError::InvalidUrl(url_str.into()))?;
+        let scheme = url.scheme();
+        if scheme != "http" && scheme != "https" {
+            return Err(FetchError::InvalidUrl(url_str.into()));
+        }
+        let is_https = scheme == "https";
         let host = url.host_str().ok_or_else(|| FetchError::InvalidUrl(url_str.into()))?;
-        let port = url.port().unwrap_or(443);
+        let default_port = if is_https { 443 } else { 80 };
+        let port = url.port().unwrap_or(default_port);
         let mut path = match url.query() {
             Some(q) => format!("{}?{q}", url.path()),
             None => url.path().to_string(),
@@ -262,7 +269,7 @@ impl Fetcher {
         if path.is_empty() {
             path = "/".into();
         }
-        let authority = if port == 443 { host.to_string() } else { format!("{host}:{port}") };
+        let authority = if port == default_port { host.to_string() } else { format!("{host}:{port}") };
         let origin = match proxy {
             Some(p) => format!("{}|{}", p.id(), authority),
             None => authority.clone(),
@@ -299,7 +306,7 @@ impl Fetcher {
         let mut last_err = FetchError::Http("unreachable".into());
         for attempt in 0..2 {
             match self
-                .fresh_request(&origin, host, port, &authority, &path, &req_headers, proxy)
+                .fresh_request(is_https, &origin, host, port, &authority, &path, &req_headers, proxy)
                 .await
             {
                 Ok(mut out) => {
@@ -319,6 +326,7 @@ impl Fetcher {
 
     async fn fresh_request(
         &self,
+        is_https: bool,
         origin: &str,
         host: &str,
         port: u16,
@@ -331,6 +339,28 @@ impl Fetcher {
             Some(p) => p.connect(host, port).await?,
             None => tcp::happy_connect(host, port).await?,
         };
+
+        // ── Plaintext http://: raw TCP straight into h1. ──
+        // No h2 over plaintext (no browser does h2c); no TLS,
+        // no session resumption, no ALPN.
+        if !is_https {
+            let mut stream = tcp;
+            let resp = tokio::time::timeout(
+                RESPONSE_TIMEOUT,
+                h1::get(&mut stream, path, req_headers),
+            )
+            .await
+            .map_err(|_| FetchError::Timeout)??;
+            return finish(
+                url_of("http", authority, path),
+                "h1",
+                resp.status,
+                resp.headers,
+                resp.body,
+                false,
+            );
+        }
+
         let session_key = match proxy {
             Some(p) => format!("{}|{}", p.id(), host),
             None => host.to_string(),
@@ -359,7 +389,7 @@ impl Fetcher {
             )
             .await
             .map_err(|_| FetchError::Timeout)??;
-            finish(url_of(authority, path), "h1", resp.status, resp.headers, resp.body, false)
+            finish(url_of("https", authority, path), "h1", resp.status, resp.headers, resp.body, false)
         }
     }
 
@@ -379,12 +409,12 @@ impl Fetcher {
         let resp = tokio::time::timeout(RESPONSE_TIMEOUT, conn.get(authority, path, &h2_headers))
             .await
             .map_err(|_| FetchError::Timeout)??;
-        finish(url_of(authority, path), "h2", resp.status, resp.headers, resp.body, used_pool)
+        finish(url_of("https", authority, path), "h2", resp.status, resp.headers, resp.body, used_pool)
     }
 }
 
-fn url_of(authority: &str, path: &str) -> String {
-    format!("https://{authority}{path}")
+fn url_of(scheme: &str, authority: &str, path: &str) -> String {
+    format!("{scheme}://{authority}{path}")
 }
 
 fn finish(

@@ -609,8 +609,7 @@ fn cache_path() -> Option<std::path::PathBuf> {
 }
 
 fn dirs_cache() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let dir = std::path::PathBuf::from(home).join(".cache/donsetch");
+    let dir = crate::paths::cache_dir();
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }

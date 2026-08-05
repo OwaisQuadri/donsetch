@@ -1,9 +1,7 @@
 //! Minimal HTTP/1.1 client with Chrome's exact header order (fallback for
 //! origins without h2).
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio_boring::SslStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::error::FetchError;
 
@@ -13,11 +11,17 @@ pub struct H1Response {
     pub body: Vec<u8>,
 }
 
-pub async fn get(
-    stream: &mut SslStream<TcpStream>,
+/// Generic over any async stream — works for both TLS
+/// (`SslStream<TcpStream>`) and raw plaintext `TcpStream`
+/// (the http:// path).
+pub async fn get<S>(
+    stream: &mut S,
     path: &str,
     headers: &[(String, String)],
-) -> Result<H1Response, FetchError> {
+) -> Result<H1Response, FetchError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut req = format!("GET {path} HTTP/1.1\r\n");
     for (n, v) in headers {
         req.push_str(&format!("{n}: {v}\r\n"));
@@ -106,10 +110,13 @@ impl H2Placeholder {
 }
 
 /// Decode chunked transfer coding from `prefix` (already-read bytes) + stream.
-async fn read_chunked(
-    stream: &mut SslStream<TcpStream>,
+async fn read_chunked<S>(
+    stream: &mut S,
     prefix: Vec<u8>,
-) -> Result<Vec<u8>, FetchError> {
+) -> Result<Vec<u8>, FetchError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut raw = prefix;
     let mut tmp = [0u8; 16384];
     let mut out = Vec::new();

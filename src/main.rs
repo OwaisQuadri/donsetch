@@ -5,6 +5,7 @@ mod extract;
 mod fetch;
 mod ghost;
 mod mcp;
+mod paths;
 mod search;
 mod memory;
 mod profile;
