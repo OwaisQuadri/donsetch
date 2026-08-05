@@ -109,6 +109,79 @@ pub fn list() -> Value {
                 },
                 "required": ["query"]
             }
+        }, {
+            "name": "crawl",
+            "description": concat!(
+                "Crawl a site from a seed URL: sitemap-map first ",
+                "(cheap URL inventory), then fetch focus-ranked ",
+                "pages as clean markdown through DonSift. The ",
+                "Governor paces per (host, lane) with adaptive ",
+                "backoff — crawl big sites without triggering ",
+                "rate limits. Set focus to spend budget only on ",
+                "relevant pages; mode=map for the URL inventory ",
+                "alone; resume to continue a stopped crawl."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Seed http(s) URL to crawl from."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["full", "map", "content"],
+                        "description": "full (default): map + content. map: URL inventory only (very cheap). content: skip sitemap, BFS from seed."
+                    },
+                    "focus": {
+                        "type": "string",
+                        "description": "BM25 query — rank frontier by relevance; crawl only what matters."
+                    },
+                    "max_pages": {
+                        "type": "integer",
+                        "description": "Max pages to fetch and extract (default 10, cap 200)."
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Max link depth from the seed (default 2)."
+                    },
+                    "max_total_chars": {
+                        "type": "integer",
+                        "description": "Total extracted-characters budget across all pages (default 60000)."
+                    },
+                    "per_page_max": {
+                        "type": "integer",
+                        "description": "Max markdown characters per page (default 8000)."
+                    },
+                    "include_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Path globs to include (e.g. [\"/docs/*\"]). Empty = all."
+                    },
+                    "exclude_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Path globs to exclude (e.g. [\"*/tags/*\"])."
+                    },
+                    "same_host": {
+                        "type": "boolean",
+                        "description": "Stay on the seed's host (default true)."
+                    },
+                    "respect_robots": {
+                        "type": "boolean",
+                        "description": "Obey robots.txt Disallow + crawl-delay (default true)."
+                    },
+                    "deadline_s": {
+                        "type": "integer",
+                        "description": "Hard crawl deadline in seconds; partial results return after it (default 120)."
+                    },
+                    "resume": {
+                        "type": "string",
+                        "description": "Resume token from a previous response to continue the crawl."
+                    }
+                },
+                "required": ["url"]
+            }
         }]
     })
 }

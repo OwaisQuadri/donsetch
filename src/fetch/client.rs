@@ -85,6 +85,30 @@ impl Fetcher {
 
     /// Fetch with browser-correct redirects, cookies, cache revalidation.
     pub async fn fetch(&self, url_str: &str) -> Result<FetchOutcome, FetchError> {
+        self.fetch_via(url_str, None).await
+    }
+
+    /// Fetch through a specific egress lane (proxy). Redirects,
+    /// cookies, revalidation all follow the lane — pool keys are
+    /// proxy-scoped so egress IPs never share conns.
+    pub async fn fetch_via(
+        &self,
+        url_str: &str,
+        proxy: Option<&proxy::Proxy>,
+    ) -> Result<FetchOutcome, FetchError> {
+        self.fetch_via_jar(url_str, proxy, true).await
+    }
+
+    /// Full lane control: `use_jar=false` keeps the shared cookie
+    /// jar OUT of the request. Proxy lanes stay unlinked — the
+    /// direct lane's session cookies must never transit a third
+    /// egress IP.
+    pub async fn fetch_via_jar(
+        &self,
+        url_str: &str,
+        proxy: Option<&proxy::Proxy>,
+        use_jar: bool,
+    ) -> Result<FetchOutcome, FetchError> {
         let started = Instant::now();
 
         // Fresh-window cache hit: no request at all (browser-true).
@@ -116,7 +140,9 @@ impl Fetcher {
 
         loop {
             let host = host_of(&current)?;
-            let mut out = self.fetch_once(&current, &conditional).await?;
+            let mut out = self
+                .fetch_once_via(&current, &conditional, proxy, use_jar)
+                .await?;
             {
                 let mut jar = self.jar.lock().unwrap();
                 jar.store_from_headers(&host, &out.headers);
@@ -177,7 +203,9 @@ impl Fetcher {
                             .unwrap()
                             .update(&host, |m| m.challenged = true);
                         if header_value(&out.headers, "set-cookie").is_some() {
-                            if let Ok(mut retry) = self.fetch_once(&current, &[]).await {
+                            if let Ok(mut retry) =
+                                self.fetch_once_via(&current, &[], proxy, use_jar).await
+                            {
                                 {
                                     let mut jar = self.jar.lock().unwrap();
                                     jar.store_from_headers(&host, &retry.headers);
@@ -210,14 +238,6 @@ impl Fetcher {
                 }
             }
         }
-    }
-
-    async fn fetch_once(
-        &self,
-        url_str: &str,
-        conditional: &[(String, String)],
-    ) -> Result<FetchOutcome, FetchError> {
-        self.fetch_once_via(url_str, conditional, None, true).await
     }
 
     /// Same, optionally through a CONNECT proxy. Pool keys

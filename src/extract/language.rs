@@ -99,6 +99,47 @@ pub fn needs_char_tokenize(s: Script) -> bool {
     matches!(s, Script::Han | Script::Kana | Script::Hangul | Script::Thai)
 }
 
+/// Detect language from raw text (no HTML). Used by crawl
+/// scoring on focus queries + anchor text. Samples up to 5000
+/// chars and classifies by script census.
+pub fn detect_from_text(text: &str) -> LanguageInfo {
+    let mut counts: std::collections::HashMap<Script, usize> =
+        std::collections::HashMap::new();
+    let mut sampled = 0usize;
+    for c in text.chars() {
+        let s = char_script(c);
+        if s != Script::Other && (s != Script::Latin || c.is_alphabetic()) {
+            *counts.entry(s).or_insert(0) += 1;
+        }
+        sampled += 1;
+        if sampled > 5000 {
+            break;
+        }
+    }
+    // Count threshold: long samples need c>5 to matter, but a
+    // 4-char CJK query (机器学习) must still detect — 4 < 6
+    // would wrongly fall through to Latin.
+    let min_count = if sampled < 30 { 1 } else { 5 };
+    let mut scripts: Vec<Script> = counts
+        .iter()
+        .filter(|&(_, &c)| c > min_count)
+        .map(|(&s, _)| s)
+        .collect();
+    scripts.sort_by(|a, b| {
+        counts.get(b).copied().unwrap_or(0).cmp(&counts.get(a).copied().unwrap_or(0))
+    });
+    if scripts.is_empty() {
+        return LanguageInfo {
+            code: "en".to_string(),
+            script: Script::Latin,
+            scripts: vec![Script::Latin],
+        };
+    }
+    let dominant = *scripts.first().unwrap();
+    let code = script_to_lang(dominant, &scripts);
+    LanguageInfo { code, script: dominant, scripts }
+}
+
 /// Detect language from an HTML document. Checks
 /// `<html lang>`, `<meta http-equiv=content-language>`,
 /// then falls back to script analysis of text content.
@@ -156,8 +197,6 @@ fn meta_content_language(doc: &Html) -> Option<String> {
 }
 
 fn script_analysis(doc: &Html) -> LanguageInfo {
-    let mut counts: std::collections::HashMap<Script, usize> =
-        std::collections::HashMap::new();
     let body_sel = scraper::Selector::parse("body").ok();
     let root: scraper::ElementRef<'_> = if let Some(sel) = &body_sel {
         doc.select(sel).next().unwrap_or_else(|| {
@@ -171,56 +210,16 @@ fn script_analysis(doc: &Html) -> LanguageInfo {
             .unwrap()
     };
 
-    // Sample text from the body (don't parse entire huge pages).
-    let mut sampled = 0usize;
+    // Sample body text, then classify with the same census the
+    // text path uses.
+    let mut sampled = String::new();
     for t in root.text() {
-        for c in t.chars() {
-            let s = char_script(c);
-            if s != Script::Other && s != Script::Latin || c.is_alphabetic() {
-                *counts.entry(s).or_insert(0) += 1;
-            }
-            sampled += 1;
-            if sampled > 5000 {
-                break;
-            }
-        }
-        if sampled > 5000 {
+        sampled.push_str(t);
+        if sampled.len() > 20_000 {
             break;
         }
     }
-
-    let mut scripts: Vec<Script> = counts
-        .iter()
-        .filter(|&(_, &c)| c > 5)
-        .map(|(&s, _)| s)
-        .collect();
-
-    // Sort by count descending.
-    scripts.sort_by(|a, b| {
-        counts
-            .get(b)
-            .copied()
-            .unwrap_or(0)
-            .cmp(&counts.get(a).copied().unwrap_or(0))
-    });
-
-    if scripts.is_empty() {
-        // Default: Latin (English or other Latin-script lang).
-        return LanguageInfo {
-            code: "en".to_string(),
-            script: Script::Latin,
-            scripts: vec![Script::Latin],
-        };
-    }
-
-    let dominant = *scripts.first().unwrap();
-    let code = script_to_lang(dominant, &scripts);
-
-    LanguageInfo {
-        code,
-        script: dominant,
-        scripts,
-    }
+    detect_from_text(&sampled)
 }
 
 /// Map a BCP-47 tag to its dominant script.

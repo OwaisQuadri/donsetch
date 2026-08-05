@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc};
 
+use crate::crawl::real as crawl_real;
+use crate::crawl::{Crawler, CrawlMode, CrawlOptions};
 use crate::detect::walls::Verdict;
 use crate::extract::{self, ExtractOptions};
 use crate::fetch::client::Fetcher;
@@ -22,28 +24,36 @@ use super::tools;
 
 /// Shared daemon state, built once, lives forever.
 pub struct Daemon {
-    fetcher: Fetcher,
+    fetcher: Arc<Fetcher>,
     profile: BrowserProfile,
     ghost_mgr: Arc<GhostManager>,
     state: Mutex<GhostState>,
     searcher: Arc<Searcher>,
+    crawler: Crawler,
 }
 
 impl Daemon {
     pub fn new() -> Result<Self, crate::error::FetchError> {
         let profile = BrowserProfile::host_default();
-        let fetcher = Fetcher::new(profile.clone())?;
+        let fetcher = Arc::new(Fetcher::new(profile.clone())?);
         let searcher = Arc::new(Searcher::new(
             Fetcher::new(profile.clone())?,
             EgressPool::from_env(),
         ));
         searcher.preflight();
+        let proxies = std::env::var("DONSEEK_PROXIES")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|s| crate::transport::proxy::Proxy::parse(s.trim()).ok())
+            .collect::<Vec<_>>();
+        let (crawler, _gov) = crawl_real::build(Arc::clone(&fetcher), proxies);
         Ok(Self {
             fetcher,
             profile,
             ghost_mgr: GhostManager::new(),
             state: Mutex::new(GhostState::load()),
             searcher,
+            crawler,
         })
     }
 }
@@ -162,8 +172,131 @@ async fn call_tool(
     match name {
         "fetch" => Ok(fetch_tool(daemon, &args).await),
         "search" => Ok(search_tool(daemon, &args).await),
+        "crawl" => Ok(crawl_tool(daemon, &args).await),
         _ => Err((-32602, format!("unknown tool: {name}"))),
     }
+}
+
+/// The crawl tool: two-phase site walk. Phase 1 = sitemap
+/// discovery (a map costs ~2 requests instead of N fetches);
+/// Phase 2 = Governor-paced frontier walk riding DonShadow +
+/// DonSift. Resume tokens make huge sites paginable.
+async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
+    let url = match args.get("url").and_then(Value::as_str) {
+        Some(u) if u.starts_with("http://") || u.starts_with("https://") => {
+            u.to_string()
+        }
+        _ => return tool_error("crawl: url must be http(s)"),
+    };
+    let mut opts = CrawlOptions::default();
+    opts.focus = args.get("focus").and_then(Value::as_str).map(String::from);
+    opts.mode = match args.get("mode").and_then(Value::as_str).unwrap_or("full") {
+        "map" => CrawlMode::Map,
+        "content" => CrawlMode::Content,
+        _ => CrawlMode::Full,
+    };
+    if let Some(n) = args.get("max_pages").and_then(Value::as_u64) {
+        opts.max_pages = n.clamp(1, 200) as usize;
+    }
+    if let Some(n) = args.get("max_depth").and_then(Value::as_u64) {
+        opts.max_depth = n.clamp(0, 8) as u32;
+    }
+    if let Some(n) = args.get("max_total_chars").and_then(Value::as_u64) {
+        opts.max_total_chars = (n as usize).clamp(4_000, 500_000);
+    }
+    if let Some(n) = args.get("per_page_max").and_then(Value::as_u64) {
+        opts.per_page_max = (n as usize).clamp(400, 40_000);
+    }
+    if let Some(a) = args.get("include_paths").and_then(Value::as_array) {
+        opts.include_paths = a.iter().filter_map(Value::as_str).map(String::from).collect();
+    }
+    if let Some(a) = args.get("exclude_paths").and_then(Value::as_array) {
+        opts.exclude_paths = a.iter().filter_map(Value::as_str).map(String::from).collect();
+    }
+    if let Some(b) = args.get("same_host").and_then(Value::as_bool) {
+        opts.same_host = b;
+    }
+    if let Some(b) = args.get("respect_robots").and_then(Value::as_bool) {
+        opts.respect_robots = b;
+    }
+    if let Some(n) = args.get("deadline_s").and_then(Value::as_u64) {
+        opts.deadline = std::time::Duration::from_secs(n.clamp(5, 600));
+    }
+    let resume = args.get("resume").and_then(Value::as_str).map(String::from);
+
+    // Ghost-warm: if this host was tier-2 solved recently, the
+    // clearance cookies ride tier 1 from page one.
+    if let Some(host) = url::Url::parse(&url).ok().and_then(|u| u.host_str().map(String::from)) {
+        let state = daemon.state.lock().await;
+        if let Some(rec) = state.solved_for(&host) {
+            let cookies = rec.cookies.clone();
+            drop(state);
+            daemon.fetcher.import_cookies(&cookies).await;
+        }
+    }
+
+    let result = match daemon.crawler.crawl(&url, opts, resume.as_deref()).await {
+        Ok(r) => r,
+        Err(e) => return tool_error(format!("crawl: {e}")),
+    };
+
+    // Content text: the map (if any) + pages. Keep the lead-in
+    // small; the pages are the payload.
+    let mut text = String::new();
+    text.push_str(&format!(
+        "# crawl: {} ({} pages, stop={:?}, {:.1}s)\n\n",
+        result.seed,
+        result.pages.len(),
+        result.stop,
+        result.elapsed.as_secs_f64()
+    ));
+    if !result.map.is_empty() {
+        text.push_str("## map\n");
+        for u in &result.map {
+            text.push_str(&format!("- {u}\n"));
+        }
+        text.push('\n');
+    }
+    for p in &result.pages {
+        if p.duplicate {
+            continue;
+        }
+        text.push_str(&format!("## [{}] {}\n", p.title, p.url));
+        text.push_str(&format!("kind={:?} quality={:.2} {} chars\n\n", p.kind, p.quality, p.chars));
+        text.push_str(&p.markdown);
+        text.push_str("\n\n---\n\n");
+    }
+    if !result.skipped.is_empty() {
+        text.push_str("## skipped\n");
+        for (u, why) in &result.skipped {
+            text.push_str(&format!("- {u}: {why}\n"));
+        }
+    }
+    if let Some(tok) = &result.resume {
+        text.push_str(&format!("\nresume: call crawl again with resume={tok} to continue.\n"));
+    }
+
+    let structured = json!({
+        "seed": result.seed,
+        "pages": result.pages.iter().filter(|p| !p.duplicate).map(|p| json!({
+            "url": p.url,
+            "title": p.title,
+            "kind": format!("{:?}", p.kind),
+            "chars": p.chars,
+            "quality": p.quality,
+        })).collect::<Vec<_>>(),
+        "map": result.map,
+        "queued": result.queued,
+        "filtered_out": result.filtered_out,
+        "skipped": result.skipped.iter().map(|(u, w)| json!({"url": u, "reason": w})).collect::<Vec<_>>(),
+        "stop": format!("{:?}", result.stop),
+        "elapsed_s": result.elapsed.as_secs_f64(),
+        "resume": result.resume,
+    });
+    json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": structured
+    })
 }
 
 /// The fetch tool: tier 1 → verdict → ghost solve/render

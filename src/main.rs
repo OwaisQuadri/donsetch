@@ -1,3 +1,4 @@
+mod crawl;
 mod detect;
 mod error;
 mod extract;
@@ -353,6 +354,82 @@ async fn main() {
                         out.intent, out.weak, out.cached, out.elapsed.as_secs_f64());
                 }
                 Err(e) => { eprintln!("search: {e}"); std::process::exit(1); }
+            }
+        }
+        "crawl" => {
+            // donsetch crawl <url> [--focus x] [--mode map|content|full]
+            // [--max-pages n] [--depth n] [--max-total n] [--per-page n]
+            // [--include pat] [--exclude pat] [--no-robots] [--any-host]
+            // [--workers n] [--deadline s] [--resume tok]
+            let mut url = String::new();
+            let mut opts = crawl::CrawlOptions::default();
+            let mut resume: Option<String> = None;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--focus" => { i += 1; opts.focus = args.get(i).cloned(); }
+                    "--mode" => {
+                        i += 1;
+                        opts.mode = match args.get(i).map(|s| s.as_str()) {
+                            Some("map") => crawl::CrawlMode::Map,
+                            Some("content") => crawl::CrawlMode::Content,
+                            _ => crawl::CrawlMode::Full,
+                        };
+                    }
+                    "--max-pages" => { i += 1; opts.max_pages = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(10); }
+                    "--depth" => { i += 1; opts.max_depth = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(2); }
+                    "--max-total" => { i += 1; opts.max_total_chars = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(60_000); }
+                    "--per-page" => { i += 1; opts.per_page_max = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(8_000); }
+                    "--include" => { i += 1; opts.include_paths.push(args.get(i).cloned().unwrap_or_default()); }
+                    "--exclude" => { i += 1; opts.exclude_paths.push(args.get(i).cloned().unwrap_or_default()); }
+                    "--no-robots" => opts.respect_robots = false,
+                    "--any-host" => opts.same_host = false,
+                    "--workers" => { i += 1; opts.concurrency = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(1); }
+                    "--deadline" => {
+                        i += 1;
+                        let s: u64 = args.get(i).and_then(|s| s.parse().ok()).unwrap_or(120);
+                        opts.deadline = std::time::Duration::from_secs(s);
+                    }
+                    "--resume" => { i += 1; resume = args.get(i).cloned(); }
+                    other => url = other.to_string(),
+                }
+                i += 1;
+            }
+            let profile = BrowserProfile::host_default();
+            let fetcher = std::sync::Arc::new(Fetcher::new(profile).expect("fetcher"));
+            let proxies = std::env::var("DONSEEK_PROXIES")
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|s| transport::proxy::Proxy::parse(s.trim()).ok())
+                .collect::<Vec<_>>();
+            let (crawler, _gov) = crawl::real::build(fetcher, proxies);
+            match crawler.crawl(&url, opts, resume.as_deref()).await {
+                Ok(r) => {
+                    println!("# crawl: {} ({} pages, stop={:?}, {:.1}s)\n",
+                        r.seed, r.pages.len(), r.stop, r.elapsed.as_secs_f64());
+                    if !r.map.is_empty() {
+                        println!("## map");
+                        for u in &r.map { println!("- {u}"); }
+                        println!();
+                    }
+                    for p in &r.pages {
+                        if p.duplicate { continue; }
+                        println!("## [{}] {}", p.title, p.url);
+                        println!("kind={:?} quality={:.2} {} chars\n", p.kind, p.quality, p.chars);
+                        println!("{}", p.markdown);
+                        println!("\n---\n");
+                    }
+                    if !r.skipped.is_empty() {
+                        println!("## skipped");
+                        for (u, w) in &r.skipped { println!("- {u}: {w}"); }
+                    }
+                    eprintln!("── queued={} filtered={} skipped={} map={}",
+                        r.queued.len(), r.filtered_out, r.skipped.len(), r.map.len());
+                    if let Some(tok) = &r.resume {
+                        eprintln!("── resume token: {tok}");
+                    }
+                }
+                Err(e) => { eprintln!("crawl: {e}"); std::process::exit(1); }
             }
         }
         "mcp" => {

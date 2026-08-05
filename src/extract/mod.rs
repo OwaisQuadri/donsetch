@@ -8,15 +8,15 @@
 //! scope (selector or density-scored main) → segment blocks →
 //! focus filter → render markdown → paginate.
 
-mod blocks;
-mod charset;
-mod focus;
-mod inline;
-mod junk;
-mod language;
-mod metadata;
-mod render;
-mod score;
+pub mod blocks;
+pub mod charset;
+pub mod focus;
+pub mod inline;
+pub mod junk;
+pub mod language;
+pub mod metadata;
+pub mod render;
+pub mod score;
 
 #[cfg(test)]
 mod tests;
