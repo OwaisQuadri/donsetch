@@ -1,4 +1,9 @@
-//! Tool schemas + the fetch handler.
+//! Tool schemas for the MCP tools/list response.
+//!
+//! Descriptions are LLM-optimized: dense, self-contained,
+//! and actionable. An agent reading only the description
+//! (never our source) should know exactly when to call,
+//! which params to set, and how to interpret the response.
 
 use serde_json::{Value, json};
 
@@ -13,18 +18,7 @@ pub fn list() -> Value {
     json!({
         "tools": [{
             "name": "fetch",
-            "description": concat!(
-                "Fetch a web page as clean markdown. Two-tier: ",
-                "fast stealth HTTP first; on a bot-wall or JS-only ",
-                "page it auto-escalates to a real ghost browser, ",
-                "solves the challenge, and downgrades back to fast ",
-                "fetch. Returns markdown in content and machine ",
-                "metadata (status, tier, verdict, next_offset, ",
-                "tokens_est) in structuredContent. ",
-                "Use focus for query-relevant blocks only; toc for ",
-                "the heading outline then section to read one part; ",
-                "paginate long pages with offset."
-            ),
+            "description": "Fetch one URL as clean markdown — use when you have a specific URL to read. For finding URLs, use search; for multi-page sites, use crawl.\n\nAuto-escalation: fast HTTP first; on bot-wall or JS-only page, opens a headless browser, solves the challenge, downgrades back. PDFs auto-detected and parsed (text + OCR for scanned). Non-HTML (JSON/XML/text) passes through.\n\nToken savers: focus returns only BM25-relevant blocks (if nothing matches, returns full page with a notice); links and images stripped by default (enable with links=true, media=true).\n\nLong-page workflow: toc=true → heading outline, then section=\"heading\" → that section only. Or use focus to get relevant blocks.\n\nPagination: if structuredContent.next_offset is present, call again with offset=that value.\n\nResponse: content[0].text = markdown; structuredContent = {status, tier, verdict, thin, content_kind, title, byline, published, site, blocks_shown, blocks_total, total_chars, next_offset, tokens_est, url}. thin=true = JS shell (content may be incomplete). content_kind: Article|Listing|Forum|Docs|Table|Page. isError=true on failure (blocked, captcha, network).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -34,61 +28,51 @@ pub fn list() -> Value {
                     },
                     "focus": {
                         "type": "string",
-                        "description": "BM25 query — return only blocks relevant to it. On no match the full page is returned and the content says so."
+                        "description": "BM25 query — return only blocks relevant to it. #1 token saver on long pages. If nothing matches, returns full page with a notice."
                     },
                     "max_chars": {
                         "type": "integer",
-                        "description": "Max characters of markdown (default 16000). Long pages truncate with a next_offset marker."
+                        "description": "Max markdown chars (default 16000). Truncated pages include next_offset for resumption."
                     },
                     "offset": {
                         "type": "integer",
-                        "description": "Resume from a previous response's next_offset."
+                        "description": "Resume from a previous response's next_offset to continue a truncated page."
                     },
                     "section": {
                         "type": "string",
-                        "description": "Heading name (substring, case-insensitive) — return only that section."
+                        "description": "Heading name (substring, case-insensitive) — return only that section. Use after toc to target a specific part."
                     },
                     "toc": {
                         "type": "boolean",
-                        "description": "true = heading outline only. Read structure first, then target with section."
+                        "description": "true = heading outline only, no body text. Read structure first, then target with section or focus."
                     },
                     "selector": {
                         "type": "string",
-                        "description": "CSS selector to scope extraction."
+                        "description": "CSS selector — extract only from matching elements. Narrows scope precisely."
                     },
                     "tier": {
                         "type": "string",
                         "enum": ["auto", "1", "2"],
-                        "description": "auto (default, recommended): tier 1 first, ghost escalation on wall/JS-shell. 1 = fast HTTP only. 2 = ghost browser directly."
+                        "description": "auto (default): HTTP first, browser escalation on wall/JS-shell. \"1\": HTTP only (fastest, fails on JS sites). \"2\": browser directly (slower, for known JS-heavy sites)."
                     },
                     "links": {
                         "type": "boolean",
-                        "description": "Include link URLs (default stripped, saves ~30% tokens)."
+                        "description": "Include [text](url) link URLs. Default false — saves ~30% tokens. Enable only when you need the URLs."
                     },
                     "media": {
                         "type": "boolean",
-                        "description": "Include image alt text and sources."
+                        "description": "Include image alt text and sources. Default false."
                     },
                     "shot": {
                         "type": "string",
-                        "description": "Absolute path — save a PNG of what the ghost saw (only when blocked)."
+                        "description": "File path — saves a PNG screenshot when blocked by interactive captcha. Only fires on captcha walls; not a general screenshot tool."
                     }
                 },
                 "required": ["url"]
             }
         }, {
             "name": "search",
-            "description": concat!(
-                "Web search: returns urls + titles + short ",
-                "snippets — just enough to decide WHAT to fetch, ",
-                "not the content itself (use the fetch tool for ",
-                "that). Multi-engine (independent indexes + Bing ",
-                "family) fused by cross-engine consensus ranking, ",
-                "plus keyless verticals (GitHub, Wikipedia, HN, ",
-                "Scholar, news). structuredContent carries urls, ",
-                "scores, consensus counts, engine health. ",
-                "weak=true means low consensus, treat carefully."
-            ),
+            "description": "Web search — returns URLs + titles + short snippets. Use to discover WHAT to fetch, not to read content (use fetch for content). Multi-engine (independent indexes + Bing family) fused by cross-engine consensus + semantic reranking (automatic, no config). Keyless verticals: GitHub, Wikipedia, HN, Scholar, news, StackExchange, MDN.\n\nResponse: content[0].text = numbered markdown list (N. **Title** — domain / snippet / URL). structuredContent = {intent, weak, cached, elapsed_ms, results: [{title, url, snippet, score, consensus, engines}], engines: [{engine, status, hits, ms}]}.\n\nKey signals: weak=true = low cross-engine consensus, treat with care. consensus = how many independent engines returned this URL (higher = more authoritative). engines[].status shows per-engine health (ok|blocked:NNN|timeout|no-results).\n\nAfter search, use fetch on the best URL(s) to get actual content. Default 7 results is usually enough — don't increase unless the first 7 are all weak.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -98,28 +82,19 @@ pub fn list() -> Value {
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "Max results (default 7; the most relevant results almost always live within the top 7)."
+                        "description": "Max results (default 7, max 12). The most relevant results almost always live in the top 7. Increase only when results are weak."
                     },
                     "intent": {
                         "type": "string",
                         "enum": ["auto", "web", "code", "paper", "news", "entity"],
-                        "description": "auto (default) detects intent. code adds GitHub+HN; paper adds Semantic Scholar; news adds Google News; entity adds Wikipedia."
+                        "description": "auto (default) detects from query. code: adds GitHub, HN, StackExchange, MDN verticals. paper: adds Scholar, arXiv. news: adds Google News, HN. entity: adds Wikipedia. web: general only."
                     }
                 },
                 "required": ["query"]
             }
         }, {
             "name": "crawl",
-            "description": concat!(
-                "Crawl a site from a seed URL: sitemap-map first ",
-                "(cheap URL inventory), then fetch focus-ranked ",
-                "pages as clean markdown through DonSift. The ",
-                "Governor paces per (host, lane) with adaptive ",
-                "backoff — crawl big sites without triggering ",
-                "rate limits. Set focus to spend budget only on ",
-                "relevant pages; mode=map for the URL inventory ",
-                "alone; resume to continue a stopped crawl."
-            ),
+            "description": "Crawl an entire site from a seed URL — for multi-page extraction (docs, API refs, wikis). For a single page, use fetch; for finding pages across the web, use search.\n\nTwo-phase: sitemap discovery first (cheap URL inventory), then fetch focus-ranked pages as markdown. Adaptive pacing per host prevents rate-limit triggers.\n\nModes: full (default) = sitemap map + content. map = URL inventory only (very cheap, no content — use to see what a site has before committing). content = skip sitemap, BFS from seed (use when sitemap is missing).\n\nBudget control: focus ranks pages by relevance and crawls only matching ones — essential for large sites. max_pages, max_total_chars, deadline_s cap the crawl. Resume tokens let you continue large crawls across calls.\n\nResponse: content[0].text = map (if any) + pages as markdown. structuredContent = {seed, pages: [{url, title, kind, chars, quality}], map, queued, filtered_out, skipped: [{url, reason}], stop, elapsed_s, resume}.\n\nstop = why crawl stopped: FrontierEmpty (done), MaxPages|CharBudget|DepthLimit|Deadline (budget — use resume to continue), ThrottledOut (site blocked you — wait and resume). resume = token to continue when stopped by budget/deadline. quality = 0.0-1.0 content trust per page.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -130,27 +105,27 @@ pub fn list() -> Value {
                     "mode": {
                         "type": "string",
                         "enum": ["full", "map", "content"],
-                        "description": "full (default): map + content. map: URL inventory only (very cheap). content: skip sitemap, BFS from seed."
+                        "description": "full (default): sitemap map + content. map: URL inventory only (very cheap). content: skip sitemap, BFS from seed."
                     },
                     "focus": {
                         "type": "string",
-                        "description": "BM25 query — rank frontier by relevance; crawl only what matters."
+                        "description": "BM25 query — rank pages by relevance, crawl only matching ones. Essential for large sites; without it the crawl wastes budget on noise."
                     },
                     "max_pages": {
                         "type": "integer",
-                        "description": "Max pages to fetch and extract (default 10, cap 200)."
+                        "description": "Max pages to fetch+extract (default 10, cap 200)."
                     },
                     "max_depth": {
                         "type": "integer",
-                        "description": "Max link depth from the seed (default 2)."
+                        "description": "Max link depth from seed (default 2). 0 = seed only."
                     },
                     "max_total_chars": {
                         "type": "integer",
-                        "description": "Total extracted-characters budget across all pages (default 60000)."
+                        "description": "Total extracted-char budget across all pages (default 60000, range 4000-500000)."
                     },
                     "per_page_max": {
                         "type": "integer",
-                        "description": "Max markdown characters per page (default 8000)."
+                        "description": "Max markdown chars per page (default 8000, range 400-40000)."
                     },
                     "include_paths": {
                         "type": "array",
@@ -160,11 +135,11 @@ pub fn list() -> Value {
                     "exclude_paths": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Path globs to exclude (e.g. [\"*/tags/*\"])."
+                        "description": "Path globs to exclude (e.g. [\"*/tags/*\", \"*/archive/*\"])."
                     },
                     "same_host": {
                         "type": "boolean",
-                        "description": "Stay on the seed's host (default true)."
+                        "description": "Stay on seed's host (default true). false = follow cross-domain links."
                     },
                     "respect_robots": {
                         "type": "boolean",
@@ -172,11 +147,11 @@ pub fn list() -> Value {
                     },
                     "deadline_s": {
                         "type": "integer",
-                        "description": "Hard crawl deadline in seconds; partial results return after it (default 120)."
+                        "description": "Hard crawl deadline in seconds (default 120, range 5-600). Partial results return after."
                     },
                     "resume": {
                         "type": "string",
-                        "description": "Resume token from a previous response to continue the crawl."
+                        "description": "Resume token from a previous response to continue a stopped crawl. Valid for 30 min."
                     }
                 },
                 "required": ["url"]
