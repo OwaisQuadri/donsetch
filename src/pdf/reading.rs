@@ -13,20 +13,31 @@ use super::layout::{Line, PageLines};
 
 /// Normalized text for cross-page furniture matching.
 fn norm_key(t: &str) -> String {
+    // Digit RUNS collapse to one '#': otherwise the same footer on pages
+    // 81 and 733 fragments into different keys and recurring furniture
+    // slips below the frequency threshold.
     let mut out = String::with_capacity(t.len());
     let mut ws = false;
+    let mut in_digits = false;
     for c in t.trim().to_lowercase().chars() {
         if c.is_ascii_digit() {
-            out.push('#');
+            if !in_digits {
+                out.push('#');
+            }
+            in_digits = true;
             ws = false;
         } else if c.is_whitespace() {
+            in_digits = false;
             ws = true;
         } else if !ws || !out.is_empty() {
+            in_digits = false;
             if ws {
                 out.push(' ');
             }
             ws = false;
             out.push(c);
+        } else {
+            in_digits = false;
         }
     }
     out
@@ -77,6 +88,59 @@ pub fn suppress_furniture(pages: &mut [PageLines]) {
                 None => true,
             }
         });
+    }
+
+    // ---- pass 2: band bigram families --------------------------------------
+    // Exact keys fragment on per-page variation (roman numerals, mixed
+    // prefixes). A footer family like "© adobe systems incorporated …
+    // reserved 81 / iii / 420" shares word bigrams that recur broadly;
+    // suppress any SHORT band line containing a high-frequency band
+    // bigram. Lines >90 chars are live content and never family-killed.
+    if pages.len() >= 4 {
+        let mut bfreq: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let sample = pages.len().min(6);
+        for p in pages.iter().take(sample) {
+            let h = p.height;
+            let mut seen: [std::collections::HashSet<String>; 2] =
+                [std::collections::HashSet::new(), std::collections::HashSet::new()];
+            for l in &p.lines {
+                let band = if l.y1 <= h * 0.10 {
+                    Some(0usize)
+                } else if l.y0 >= h * 0.92 {
+                    Some(1usize)
+                } else {
+                    None
+                };
+                let Some(b) = band else { continue };
+                let k = norm_key(&l.text);
+                let words: Vec<&str> = k.split_whitespace().collect();
+                for w in words.windows(2) {
+                    let bg = format!("{} {}", w[0], w[1]);
+                    if seen[b].insert(bg.clone()) {
+                        *bfreq.entry(bg).or_default() += 1;
+                    }
+                }
+            }
+        }
+        let cutoff = (sample / 2).max(2);
+        for p in pages.iter_mut() {
+            let h = p.height;
+            p.lines.retain(|l| {
+                let in_band = l.y1 <= h * 0.10 || l.y0 >= h * 0.92;
+                if !in_band || l.text.len() > 90 {
+                    return true;
+                }
+                let k = norm_key(&l.text);
+                let words: Vec<&str> = k.split_whitespace().collect();
+                !words.windows(2).any(|w| {
+                    bfreq
+                        .get(&format!("{} {}", w[0], w[1]))
+                        .map(|&n| n >= cutoff)
+                        .unwrap_or(false)
+                })
+            });
+        }
     }
 }
 

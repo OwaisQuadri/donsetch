@@ -125,7 +125,7 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
                 let mut h = headers.clone();
                 h.resize(cols, String::new());
                 out.push_str(&format!("| {} |\n", h.join(" | ")));
-                out.push_str(&format!("|{}|\n", " --- |".repeat(cols)));
+                out.push_str(&format!("|{}\n", " --- |".repeat(cols)));
                 for row in rows {
                     let mut r = row.clone();
                     r.resize(cols, String::new());

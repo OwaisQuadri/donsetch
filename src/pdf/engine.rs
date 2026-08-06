@@ -39,6 +39,10 @@ pub struct PdfChar {
     pub order: u32,
     /// Dingbat-font glyph (checkbox/seal art — picture, not text).
     pub dingbat: bool,
+    /// Canonicalized from a rotated/vertical run (rotate.rs set it).
+    pub rt: bool,
+    /// Text came from the OCR tier, not the glyph stream.
+    pub ocr: bool,
 }
 
 pub struct PageChars {
@@ -257,15 +261,156 @@ fn walk_outlines(doc: FpdfDocument) -> Vec<OutlineItem> {
     out
 }
 
+/// What beyond raw chars a load should gather per page.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LoadOpts {
+    /// Rasterize each page (96dpi + annotation layer) for the pixel
+    /// engine. Lazy callers (raw dumps) keep this off.
+    pub want_pixels: bool,
+    /// Enumerate AcroForm widgets per page.
+    pub want_forms: bool,
+    /// DPi override (0.0 = 96). Higher for OCR; forms do not need this.
+    pub dpi: f32,
+}
+
+/// The per-page bundle the sink receives. Pixel/form extras empty unless
+/// requested via LoadOpts.
+pub struct PageInput {
+    pub chars: PageChars,
+    /// Rasterized page (transient — treat as scratch, extract what you
+    /// need during the sink call).
+    pub bitmap: Option<super::pixels::PageBitmap>,
+    pub widgets: Vec<super::forms::FormWidget>,
+}
+
+/// Rasterize an already-loaded page (white background, annotations on).
+/// Must be called while the global core lock is held.
+fn rasterize_page(
+    page: FpdfPage,
+    width_pt: f32,
+    height_pt: f32,
+    dpi: f32,
+) -> Option<super::pixels::PageBitmap> {
+    let dpi = if dpi <= 0.0 { 96.0 } else { dpi };
+    let scale = dpi / 72.0;
+    let w = ((width_pt * scale).ceil() as i32).max(1);
+    let h = ((height_pt * scale).ceil() as i32).max(1);
+    // Guard against pathological page sizes.
+    if (w as i64) * (h as i64) > 80_000_000 {
+        return None;
+    }
+    unsafe {
+        let bmp = FPDFBitmap_Create(w, h, 1);
+        if bmp.is_null() {
+            return None;
+        }
+        FPDFBitmap_FillRect(bmp, 0, 0, w, h, 0xFFFF_FFFF);
+        FPDF_RenderPageBitmap(
+            bmp,
+            page,
+            0,
+            0,
+            w,
+            h,
+            0,
+            FPDF_RENDER_FLAG_LCD_TEXT | FPDF_RENDER_FLAG_ANNOT,
+        );
+        let stride = FPDFBitmap_GetStride(bmp) as usize;
+        let ptr = FPDFBitmap_GetBuffer(bmp) as *const u8;
+        let (wu, hu) = (w as usize, h as usize);
+        let mut buf = vec![0u8; wu * hu * 4];
+        if !ptr.is_null() && stride >= wu * 4 {
+            for row in 0..hu {
+                std::ptr::copy_nonoverlapping(
+                    ptr.add(row * stride),
+                    buf.as_mut_ptr().add(row * wu * 4),
+                    wu * 4,
+                );
+            }
+        }
+        FPDFBitmap_Destroy(bmp);
+        Some(super::pixels::PageBitmap {
+            w: wu,
+            h: hu,
+            buf,
+            page_w_pt: width_pt,
+            page_h_pt: height_pt,
+        })
+    }
+}
+
+/// Re-open a document and rasterize selected pages (OCR orchestration
+/// needs high-dpi pixels after the main walk has closed the doc).
+pub fn rasterize_pages(
+    bytes: &[u8],
+    indices: &[usize],
+    dpi: f32,
+) -> Result<Vec<Option<super::pixels::PageBitmap>>, LoadError> {
+    if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
+        return Err(LoadError::NotPdf);
+    }
+    let _lock = core();
+    unsafe {
+        let doc = FPDF_LoadMemDocument64(
+            bytes.as_ptr() as *const c_void,
+            bytes.len(),
+            std::ptr::null::<c_char>(),
+        );
+        if doc.is_null() {
+            let code = FPDF_GetLastError();
+            return Err(if code == FPDF_ERR_PASSWORD {
+                LoadError::Encrypted
+            } else {
+                LoadError::Corrupt(code)
+            });
+        }
+        struct DocGuard2(FpdfDocument);
+        impl Drop for DocGuard2 {
+            fn drop(&mut self) {
+                unsafe { FPDF_CloseDocument(self.0) };
+            }
+        }
+        let _guard = DocGuard2(doc);
+        let count = FPDF_GetPageCount(doc).max(0) as usize;
+        let mut out = Vec::with_capacity(indices.len());
+        for &pi in indices {
+            if pi >= count {
+                out.push(None);
+                continue;
+            }
+            let page = FPDF_LoadPage(doc, pi as i32);
+            if page.is_null() {
+                out.push(None);
+                continue;
+            }
+            struct Pg2(FpdfPage);
+            impl Drop for Pg2 {
+                fn drop(&mut self) {
+                    unsafe { FPDF_ClosePage(self.0) };
+                }
+            }
+            let _pg = Pg2(page);
+            let w = FPDF_GetPageWidthF(page) as f32;
+            let h = FPDF_GetPageHeightF(page) as f32;
+            out.push(rasterize_page(page, w, h, dpi));
+        }
+        Ok(out)
+    }
+}
+
 /// Load `bytes` as a document, walking every page and converting chars
 /// to the normalized pure-Rust model. `page_sink` receives each page's
-/// chars (and may transform them into the caller's per-page type `P`).
+/// bundle (and may transform it into the caller's per-page type `P`).
 ///
 /// The PDFium lock is held for the entire walk — handles never escape.
 #[allow(clippy::too_many_arguments)]
-pub fn load_document<P, F>(bytes: &[u8], mut page_sink: F) -> Result<(RawDoc, Vec<P>), LoadError>
+pub fn load_document<P, F>(
+    bytes: &[u8],
+    opts: &LoadOpts,
+    mut page_sink: F,
+) -> Result<(RawDoc, Vec<P>), LoadError>
 where
-    F: FnMut(PageChars) -> P,
+    F: FnMut(PageInput) -> P,
 {
     if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
         return Err(LoadError::NotPdf);
@@ -293,6 +438,28 @@ where
             }
         }
         let guard = DocGuard(doc);
+
+        // Optional form-fill environment for widget enumeration.
+        struct FormGuard(FpdfFormhandle);
+        impl Drop for FormGuard {
+            fn drop(&mut self) {
+                unsafe { FPDFDOC_ExitFormFillEnvironment(self.0) };
+            }
+        }
+        let mut finfo = FpdfFormfillInfo {
+            version: 2,
+            _callbacks: [0; 128],
+        };
+        let _form_guard = if opts.want_forms {
+            let h = FPDFDOC_InitFormFillEnvironment(doc, &mut finfo);
+            if h.is_null() {
+                None
+            } else {
+                Some(FormGuard(h))
+            }
+        } else {
+            None
+        };
 
         let page_count = FPDF_GetPageCount(doc).max(0) as usize;
         let mut raw = RawDoc {
@@ -376,6 +543,9 @@ where
                     } else {
                         m.b.atan2(m.a).to_degrees()
                     };
+                    if std::env::var("DONSHEET_DEBUG_MATRIX").is_ok() && i < 8 {
+                        eprintln!("[matrix] i={i} a={:.3} b={:.3} c={:.3} d={:.3} angle={angle:.1}", m.a, m.b, m.c, m.d);
+                    }
                     let size = if size.is_finite() && size > 1.5 {
                         size as f32
                     } else if mscale > 0.5 {
@@ -442,15 +612,28 @@ where
                         angle,
                         order: i as u32,
                         dingbat: font_dingbat.get(family as usize).copied().unwrap_or(false),
+                        rt: false,
+                        ocr: false,
                     });
                 }
             }
-            pages_out.push(page_sink(PageChars {
-                index: pi,
-                width,
-                height,
-                chars,
-                images,
+            pages_out.push(page_sink(PageInput {
+                chars: PageChars {
+                    index: pi,
+                    width,
+                    height,
+                    chars,
+                    images,
+                },
+                bitmap: if opts.want_pixels {
+                    rasterize_page(page, width, height, opts.dpi)
+                } else {
+                    None
+                },
+                widgets: match &_form_guard {
+                    Some(fg) => super::forms::collect_widgets(fg.0, page),
+                    None => Vec::new(),
+                },
             }));
             if std::env::var("DONSHEET_DEBUG").is_ok() && pi % 50 == 0 {
                 eprintln!("[engine] page {pi}/{page_count} done");

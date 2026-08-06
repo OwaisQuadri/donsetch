@@ -49,6 +49,9 @@ pub struct PageLines {
     pub height: f32,
     pub lines: Vec<Line>,
     pub images: usize,
+    /// Pixel-engine fusion results (regions, rules, trust). None when the
+    /// rasterizer was skipped for this page.
+    pub fusion: Option<crate::pdf::fusion::FusionData>,
 }
 
 /// Map unusual glyphs to readable text; returns the number of output
@@ -110,6 +113,7 @@ pub fn assemble(page: PageChars) -> PageLines {
         height: page.height,
         lines: Vec::new(),
         images: page.images,
+        fusion: None,
     };
 
     if chars.is_empty() {
@@ -138,7 +142,7 @@ pub fn assemble(page: PageChars) -> PageLines {
     let peek = std::env::var("DONSHEET_DEBUG_CHARS").is_ok();
     for c in chars {
         if peek {
-            eprintln!("stream y1={:6.1} cp={:?} s={:4.1}", c.y1, c.cp, c.size);
+            eprintln!("stream y1={:6.1} cp={:?} s={:4.1} x0={:6.1} x1={:6.1}", c.y1, c.cp, c.size, c.x0, c.x1);
         }
         if cur.is_empty() {
             cur.push(c);
@@ -258,9 +262,16 @@ fn build_line(cluster: &[&PdfChar], page_index: usize) -> Line {
     // the word-break threshold robust to letterspaced text (forms,
     // small-caps) where every advance is stretched uniformly.
     let mut g: Vec<f32> = Vec::new();
-    // Real glyphs only: space glyphs (zero-width boundary decorations)
-    // are invisible to every decision in this function.
-    let reals: Vec<&&PdfChar> = cluster.iter().filter(|c| c.cp != ' ').collect();
+    // Real glyphs only. Space glyphs are SPLIT INTO TWO KINDS:
+    //  - "real spaces": an actual drawn space claiming advance width
+    //    (word boundary — Korean, Devanagari, CJK↔Latin junctions)
+    //  - decorations: near-zero-width run markers, invisible.
+    // Distinguisher is measured WIDTH, not presence.
+    let space_width_real = |c: &&PdfChar| (c.x1 - c.x0) > 0.18 * c.size.max(2.0);
+    let reals: Vec<&&PdfChar> = cluster
+        .iter()
+        .filter(|c| c.cp != ' ' || space_width_real(c))
+        .collect();
     for w in reals.windows(2) {
         g.push(w[1].x0 - w[0].x1);
     }
@@ -302,18 +313,29 @@ fn build_line(cluster: &[&PdfChar], page_index: usize) -> Line {
             let gap = c.x0 - prev_x1;
             let widen = 0.16 * prev_size;
             let adaptive = (1.4 * med_gap).max(widen);
-            // CJK pairs never break.
-            let cjk_pair = is_cjk(prev_cp) && is_cjk(c.cp);
-            let cjk_mix = is_cjk(prev_cp) || is_cjk(c.cp);
+            // Script-aware pairing. "Spaceless pairs" never break inside a
+            // run: Han/Kana (and Yi) have no word spaces at all;
+            // Devanagari words are conjunct clusters where font-run
+            // boundaries fake gaps. Hangul IS space-using (Korean) and
+            // rides the Latin thresholds.
+            let pair_cjk = is_han_kana(prev_cp) && is_han_kana(c.cp);
+            let pair_deva = is_devanagari(prev_cp) && is_devanagari(c.cp);
+            let mix_cjk = is_han_kana(prev_cp) || is_han_kana(c.cp);
             let decor = decor_spaces
                 .iter()
                 .any(|&sx| sx > prev_x1 - 0.5 && sx < c.x0 + 0.5);
-            let break_here = if cjk_pair {
-                false
-            } else if cjk_mix {
-                gap > 0.55 * prev_size
+            // A real space glyph reaching this position is a hard break.
+            let real_space = prev_cp == ' ' && space_width_real(&reals[i - 1]);
+            let break_here = if pair_cjk {
+                real_space
+            } else if pair_deva {
+                gap > (2.0 * med_gap).max(0.06 * prev_size)
+            } else if mix_cjk {
+                gap > 0.55 * prev_size || (decor && gap > 0.10 * prev_size)
             } else {
-                gap > adaptive || (decor && gap > 0.10 * prev_size)
+                gap > adaptive
+                    || (decor && gap > 0.10 * prev_size)
+                    || (real_space && gap > 0.02)
             };
             if break_here {
                 // Close the current word.
@@ -363,6 +385,18 @@ fn build_line(cluster: &[&PdfChar], page_index: usize) -> Line {
 
     // Collapse runs of spaces and trim.
     let text = collapse_spaces(&text);
+    if std::env::var("DONSHEET_DEBUG_WORDS").is_ok() {
+        eprintln!("[words] {:?} -> {:?}", text, words.iter().map(|w| &w.text).collect::<Vec<_>>());
+    }
+    // BiDi: the stream is VISUAL order; any strong RTL char means the line
+    // needs logical-ordering. Latin-only lines are an identity pass.
+    let (text, words) = if text.chars().any(super::rotate::is_rtl_char) {
+        let mut w = words;
+        w.reverse();
+        (super::rotate::bidi_reorder(&text), w)
+    } else {
+        (text, words)
+    };
     // Words track the pre-collapse text spans; text cleanup is cosmetic.
 
     size_count.sort_by_key(|(_, _, n)| usize::MAX - n);
@@ -387,26 +421,43 @@ fn build_line(cluster: &[&PdfChar], page_index: usize) -> Line {
     }
 }
 
-/// CJK scripts have no word spaces — spacing rules differ.
-fn is_cjk(cp: char) -> bool {
+/// Han + Kana + fullwidth CJK forms (no word spaces in these scripts).
+fn is_han_kana(cp: char) -> bool {
     let c = cp as u32;
     matches!(c,
-        0x1100..=0x11FF | 0x2E80..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
-        | 0xA000..=0xA4CF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFF65
+        0x2E80..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF
+        | 0xA000..=0xA4CF | 0xF900..=0xFAFF | 0xFF00..=0xFF65
         | 0x20000..=0x2FA1F)
 }
 
-/// Split off the last whitespace-separated word (words are tracked
-/// against the raw assembly string).
+/// Devanagari (Hindi, Nepali, Sanskrit, Marathi) + Vedic extensions.
+fn is_devanagari(cp: char) -> bool {
+    matches!(cp as u32, 0x0900..=0x097F | 0x1CD0..=0x1CFF | 0xA800..=0xA8FF)
+}
+
+/// Back-compat name for legacy callers (includes Hangul)
+#[allow(dead_code)]
+fn is_cjk(cp: char) -> bool {
+    is_han_kana(cp) || matches!(cp as u32, 0x1100..=0x11FF | 0xAC00..=0xD7AF)
+}
+
+/// Split off the last whitespace-separated word. Read-only on `text`:
+/// trailing whitespace is skipped BEFORE locating the word start
+/// (real-space glyphs in the stream make trailing spaces common).
 fn take_last_word(text: &mut String) -> String {
-    // find start index of last word (byte-index safe for multibyte ws)
-    let start = text
+    let end = text
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !c.is_whitespace())
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    let start = text[..end]
         .char_indices()
         .rev()
         .find(|(_, c)| c.is_whitespace())
         .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(0);
-    text[start..].to_string()
+    text[start..end].to_string()
 }
 
 fn collapse_spaces(s: &str) -> String {

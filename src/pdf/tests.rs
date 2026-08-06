@@ -65,8 +65,12 @@ fn smoke_load_attention() {
     let Some(bytes) = read("attention.pdf") else {
         return;
     };
-    let (raw, pages) = crate::pdf::engine::load_document(&bytes, |p| p.chars.len())
-        .expect("load failed");
+    let (raw, pages) = crate::pdf::engine::load_document(
+        &bytes,
+        &Default::default(),
+        |p: crate::pdf::engine::PageInput| p.chars.chars.len(),
+    )
+    .expect("load failed");
     assert!(raw.page_count >= 4);
     assert_eq!(pages.len(), raw.page_count);
     let total_chars: usize = pages.iter().sum();
@@ -81,9 +85,26 @@ fn smoke_scanned_detection() {
     };
     let parsed = crate::pdf::parse(&bytes).expect("scanned pdf parses");
     assert!(
-        parsed.notes.iter().any(|n| n.contains("scanned")),
-        "expected scanned note, got {:?}", parsed.notes
+        parsed.notes.iter().any(|n| n.contains("scanned") || n.contains("OCR")),
+        "expected scanned/ocr note, got {:?}", parsed.notes
     );
+    // When the OCR model cache exists locally, content must be recovered.
+    if crate::pdf::ocr::ocr_cache_dir()
+        .join("en_pp-ocrv5_mobile_rec.onnx")
+        .exists()
+    {
+        let all: String = parsed
+            .blocks
+            .iter()
+            .map(|b| match b {
+                crate::extract::blocks::Block::Para { md, .. } => md.clone(),
+                crate::extract::blocks::Block::Heading { text, .. } => text.clone(),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(all.contains("DonSheet") || all.contains("Scanned"), "ocr failed: {all:?}");
+    }
 }
 
 #[test]

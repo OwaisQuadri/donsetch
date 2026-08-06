@@ -23,6 +23,9 @@ use std::os::raw::{c_char, c_double, c_float, c_int, c_uint, c_ulong, c_ushort, 
 #[repr(C)] pub struct FpdfDestT { _private: [u8; 0] }
 #[repr(C)] pub struct FpdfPageObjectT { _private: [u8; 0] }
 #[repr(C)] pub struct FpdfActionT { _private: [u8; 0] }
+#[repr(C)] pub struct FpdfBitmapT { _private: [u8; 0] }
+#[repr(C)] pub struct FpdfAnnotationT { _private: [u8; 0] }
+#[repr(C)] pub struct FpdfFormT { _private: [u8; 0] }
 
 pub type FpdfDocument = *mut FpdfDocumentT;
 pub type FpdfPage = *mut FpdfPageT;
@@ -31,6 +34,9 @@ pub type FpdfBookmark = *mut FpdfBookmarkT;
 pub type FpdfDest = *mut FpdfDestT;
 pub type FpdfPageobject = *mut FpdfPageObjectT;
 pub type FpdfAction = *mut FpdfActionT;
+pub type FpdfBitmap = *mut FpdfBitmapT;
+pub type FpdfAnnotation = *mut FpdfAnnotationT;
+pub type FpdfFormhandle = *mut FpdfFormT;
 
 // ---- shared structs ------------------------------------------------------
 
@@ -83,6 +89,46 @@ pub const FPDF_PAGEOBJ_PATH: c_int = 2;
 pub const FPDF_PAGEOBJ_IMAGE: c_int = 3;
 pub const FPDF_PAGEOBJ_SHADING: c_int = 4;
 pub const FPDF_PAGEOBJ_FORM: c_int = 5;
+
+// ---- bitmap formats / render flags (fpdfview.h) ---------------------------
+
+pub const FPDF_BITMAP_UNKNOWN: c_int = 0;
+pub const FPDF_BITMAP_GRAY: c_int = 1;
+pub const FPDF_BITMAP_BGRA: c_int = 4;
+pub const FPDF_BITMAP_BGRX: c_int = 3;
+pub const FPDF_BITMAP_BGR: c_int = 2;
+
+pub const FPDF_RENDER_FLAG_ANNOT: c_int = 0x01;
+pub const FPDF_RENDER_FLAG_LCD_TEXT: c_int = 0x02;
+pub const FPDF_RENDER_FLAG_NO_NATIVETEXT: c_int = 0x04;
+pub const FPDF_RENDER_FLAG_GRAYSCALE: c_int = 0x08;
+pub const FPDF_RENDER_FLAG_REVERSE_BYTE_ORDER: c_int = 0x10;
+
+// ---- annotation subtypes (fpdf_annot.h) ------------------------------------
+
+pub const FPDF_ANNOT_ANNOTATION_UNKNOWN: c_int = 0;
+pub const FPDF_ANNOT_ANNOTATION_WIDGET: c_int = 20;
+
+// ---- form field types & flags ---------------------------------------------
+
+pub const FPDF_FORMFIELD_UNKNOWN: c_int = 0;
+pub const FPDF_FORMFIELD_PUSHBUTTON: c_int = 1;
+pub const FPDF_FORMFIELD_CHECKBOX: c_int = 2;
+pub const FPDF_FORMFIELD_RADIOBUTTON: c_int = 3;
+pub const FPDF_FORMFIELD_COMBOBOX: c_int = 4;
+pub const FPDF_FORMFIELD_LISTBOX: c_int = 5;
+pub const FPDF_FORMFIELD_TEXTFIELD: c_int = 6;
+pub const FPDF_FORMFIELD_SIGNATURE: c_int = 7;
+
+/// FPDF_FORMFILLINFO is a long struct of function pointers ending in
+/// `m_pJsPlatform` (v2). Read-only form-field getters never invoke the
+/// callbacks, so a generously sized zeroed allocation with version=2 set
+/// is sufficient — same approach pdfium-render uses.
+#[repr(C)]
+pub struct FpdfFormfillInfo {
+    pub version: c_int,
+    pub _callbacks: [usize; 128],
+}
 
 // ---- library config --------------------------------------------------------
 
@@ -180,4 +226,65 @@ unsafe extern "C" {
         page: FpdfPage,
         image_object: FpdfPageobject,
     ) -> *mut c_void;
+
+    // ---- fpdfview.h: bitmap + page rasterization ----
+    pub fn FPDFBitmap_Create(width: c_int, height: c_int, alpha: c_int) -> FpdfBitmap;
+    pub fn FPDFBitmap_FillRect(
+        bitmap: FpdfBitmap,
+        left: c_int,
+        top: c_int,
+        width: c_int,
+        height: c_int,
+        color: c_ulong,
+    );
+    pub fn FPDFBitmap_GetBuffer(bitmap: FpdfBitmap) -> *mut c_void;
+    pub fn FPDFBitmap_GetStride(bitmap: FpdfBitmap) -> c_int;
+    pub fn FPDFBitmap_Destroy(bitmap: FpdfBitmap);
+    /// Renders the page (with annotations when FPDF_RENDER_FLAG_ANNOT) into
+    /// a caller-supplied BGRA bitmap. `start_x`/`start_y` offset the page
+    /// origin inside the bitmap; rotation is 0..3 = quarter turns.
+    pub fn FPDF_RenderPageBitmap(
+        bitmap: FpdfBitmap,
+        page: FpdfPage,
+        start_x: c_int,
+        start_y: c_int,
+        size_x: c_int,
+        size_y: c_int,
+        rotate: c_int,
+        flags: c_int,
+    );
+
+    // ---- fpdf_annot.h + fpdf_formfill.h (read-only form extraction) ----
+    pub fn FPDFDOC_InitFormFillEnvironment(
+        document: FpdfDocument,
+        form_info: *mut FpdfFormfillInfo,
+    ) -> FpdfFormhandle;
+    pub fn FPDFDOC_ExitFormFillEnvironment(
+        form_handle: FpdfFormhandle,
+    );
+    pub fn FPDFPage_GetAnnotCount(page: FpdfPage) -> c_int;
+    pub fn FPDFPage_GetAnnot(page: FpdfPage, index: c_int) -> FpdfAnnotation;
+    pub fn FPDFPage_CloseAnnot(annot: FpdfAnnotation);
+    pub fn FPDFAnnot_GetSubtype(annot: FpdfAnnotation) -> c_int;
+    pub fn FPDFAnnot_GetRect(annot: FpdfAnnotation, rect: *mut FsRect) -> c_int;
+    pub fn FPDFAnnot_GetFormFieldType(handle: FpdfFormhandle, annot: FpdfAnnotation) -> c_int;
+    pub fn FPDFAnnot_GetFormFieldFlags(handle: FpdfFormhandle, annot: FpdfAnnotation) -> c_int;
+    pub fn FPDFAnnot_GetFormFieldName(
+        handle: FpdfFormhandle,
+        annot: FpdfAnnotation,
+        buffer: *mut c_void,
+        buflen: c_ulong,
+    ) -> c_ulong;
+    pub fn FPDFAnnot_GetFormFieldValue(
+        handle: FpdfFormhandle,
+        annot: FpdfAnnotation,
+        buffer: *mut c_void,
+        buflen: c_ulong,
+    ) -> c_ulong;
+    pub fn FPDFAnnot_GetFormFieldExportValue(
+        handle: FpdfFormhandle,
+        annot: FpdfAnnotation,
+        buffer: *mut c_void,
+        buflen: c_ulong,
+    ) -> c_ulong;
 }

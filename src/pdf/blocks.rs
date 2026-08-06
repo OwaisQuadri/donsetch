@@ -54,7 +54,8 @@ pub fn classify(pages: &[PageLines], ordered_by_page: &[Vec<Line>], ctx: &FontCt
         if lines.is_empty() {
             continue;
         }
-        classify_page(lines, ctx, n_pages > 1, &mut blocks);
+        let fusion = pages[pi].fusion.as_ref();
+        classify_page_fused(lines, ctx, n_pages > 1, &mut blocks, fusion);
         if std::env::var("DONSHEET_DEBUG").is_ok() {
             eprintln!("[classify] page {pi}/{} done ({} blocks)", n_pages, blocks.len());
         }
@@ -65,7 +66,19 @@ pub fn classify(pages: &[PageLines], ordered_by_page: &[Vec<Line>], ctx: &FontCt
     blocks
 }
 
+#[allow(dead_code)]
 fn classify_page(lines: &[Line], ctx: &FontCtx, multi: bool, blocks: &mut Vec<Block>) {
+    classify_page_fused(lines, ctx, multi, blocks, None)
+}
+
+#[allow(clippy::too_many_lines)]
+fn classify_page_fused(
+    lines: &[Line],
+    ctx: &FontCtx,
+    multi: bool,
+    blocks: &mut Vec<Block>,
+    fusion: Option<&crate::pdf::fusion::FusionData>,
+) {
     let mut i = 0;
     while i < lines.len() {
         let line = &lines[i];
@@ -145,13 +158,18 @@ fn classify_page(lines: &[Line], ctx: &FontCtx, multi: bool, blocks: &mut Vec<Bl
             i += 1;
         }
         let run = &lines[start..i];
-        emit_prose_run(run, ctx, blocks);
+        emit_prose_run(run, ctx, blocks, fusion);
     }
 }
 
 /// Replace prose runs with tables where the geometry says so.
-fn emit_prose_run(run: &[Line], _ctx: &FontCtx, blocks: &mut Vec<Block>) {
-    let found = tables::detect(run);
+fn emit_prose_run(
+    run: &[Line],
+    _ctx: &FontCtx,
+    blocks: &mut Vec<Block>,
+    fusion: Option<&crate::pdf::fusion::FusionData>,
+) {
+    let found = tables::detect(run, fusion);
     if found.is_empty() {
         emit_paragraph(run, blocks);
         return;
@@ -189,14 +207,28 @@ fn emit_paragraph(run: &[Line], blocks: &mut Vec<Block>) {
     }
 }
 
-/// Separator between two prose lines: "" for hyphen-merge,
-/// " " otherwise. (Applies only to the seam; never appends text.)
+/// Separator between two prose lines. Scripts without word spaces
+/// (Han, Kana, Thai) join with NOTHING; a Latin hyphen_merge joins
+/// with ""; everything else joins with " ".
 fn join_separator(md: &str, next: &str) -> &'static str {
-    if md.ends_with('-') && next.chars().next().map(|c| c.is_lowercase()).unwrap_or(false) {
+    let last = md.chars().last().unwrap_or(' ');
+    let first = next.chars().next().unwrap_or(' ');
+    if is_spaceless_script(last) || is_spaceless_script(first) {
+        return "";
+    }
+    if md.ends_with('-') && first.is_lowercase() {
         ""
     } else {
         " "
     }
+}
+
+/// Han + Kana + Thai: these scripts have no word spaces, and line-wrap
+/// seams between them must never introduce one.
+fn is_spaceless_script(c: char) -> bool {
+    matches!(c as u32,
+        0x2E80..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
+        | 0x20000..=0x2FA1F | 0x0E00..=0x0E7F)
 }
 
 /// Are two lines in different typographic bands? (list/grouping breaker)
@@ -355,6 +387,12 @@ fn match_prefix(t: &str, re: &str) -> Option<usize> {
 pub fn is_heading(l: &Line, ctx: &FontCtx) -> bool {
     let t = l.text.trim();
     if t.len() > 140 {
+        return false;
+    }
+    // A line that starts with a list marker is a list item. Never a
+    // heading — AcroForm widgets emit as "- **name**: value" lines and
+    // must not promote into the heading ladder on small-body forms.
+    if t.starts_with("- ") || t.starts_with("* ") {
         return false;
     }
     // Sentence-terminal punctuation is a strong NOT-heading signal:

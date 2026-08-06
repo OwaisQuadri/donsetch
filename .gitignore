@@ -17,6 +17,8 @@ Thumbs.db
 .idea/
 .vscode/
 bench/results.json
+bench/results/
+bench/battle-corpus/
 
 # Vendored PDFium static libraries (build.rs auto-downloads)
 vendor/
