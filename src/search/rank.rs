@@ -239,6 +239,11 @@ pub fn merge(
         r.score += PRIOR_WEIGHT * prior;
     }
 
+    // Cross-encoder semantic reranking: re-score by semantic
+    // relevance (query ↔ title+snippet through full attention).
+    // Skipped gracefully if model unavailable or feature disabled.
+    crate::search::rerank::rerank(query, &mut results);
+
     results.sort_by(|a, b| b.score.total_cmp(&a.score));
 
     // Diversity cap: max MAX_PER_DOMAIN per domain.

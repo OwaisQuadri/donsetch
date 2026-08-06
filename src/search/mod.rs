@@ -8,6 +8,7 @@ pub mod egress;
 pub mod engines;
 pub mod intent;
 pub mod rank;
+pub mod rerank;
 pub mod verticals;
 
 use std::collections::HashMap;

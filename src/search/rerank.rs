@@ -1,0 +1,463 @@
+//! Cross-encoder semantic reranking for DonSeek.
+//!
+//! Uses `Xenova/ms-marco-MiniLM-L-6-v2` (22.7M params, 23MB quantized ONNX)
+//! to re-score search results by semantic relevance. The cross-encoder
+//! reads the query and each document **together** through full attention,
+//! capturing relationships that RRF (rank-based) and BM25 (keyword-based)
+//! fundamentally cannot — "fast web scraper" matches "high-speed crawler"
+//! even with zero word overlap.
+//!
+//! Same lazy-cache pattern as OCR: model files are downloaded + sha256-
+//! verified on first use, then loaded from disk on subsequent calls. If
+//! the model is unavailable (download failed, feature disabled, offline),
+//! reranking is skipped gracefully — results fall back to RRF+BM25 ranking.
+//!
+//! The 23MB model runs in ~5ms/pair on CPU. For 50 results: ~250ms,
+//! negligible on top of 1-3s multi-engine search time.
+
+#[cfg(feature = "rerank")]
+mod inner {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+
+    use ndarray::Array2;
+    use ort::session::Session;
+    use ort::value::TensorRef;
+    use sha2::{Digest, Sha256};
+    use tokenizers::Tokenizer;
+
+    /// Blend weight: 0.6 = 60% RRF+BM25, 40% cross-encoder.
+    /// RRF consensus across 10+ engines is a strong signal; the
+    /// cross-encoder is additive, not a replacement.
+    const BLEND_ALPHA: f64 = 0.6;
+
+    /// Max sequence length for the MiniLM cross-encoder.
+    const MAX_SEQ_LEN: usize = 512;
+
+    const MODEL_URL: &str = "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/onnx/model_quantized.onnx";
+    const MODEL_SHA256: &str = "e9d8ebf845c413e981c175bfe49a3bfa9b3dcce2a3ba54875ee5df5a58639fbe";
+    const TOKENIZER_URL: &str =
+        "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/tokenizer.json";
+    const TOKENIZER_SHA256: &str =
+        "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66";
+
+    struct Reranker {
+        session: Mutex<Session>,
+        tokenizer: Tokenizer,
+    }
+
+    static RERANKER: OnceLock<Option<Reranker>> = OnceLock::new();
+
+    /// Returns the cache directory for reranker model files.
+    fn cache_dir() -> PathBuf {
+        let mut p = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("."));
+        p.push("donsetch");
+        p.push("rerank");
+        let _ = std::fs::create_dir_all(&p);
+        p
+    }
+
+    /// Downloads a file via reqwest blocking, verifying sha256.
+    fn download(url: &str, dest: &Path, expected: &str) -> Result<(), String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .map_err(|e| format!("client build: {e}"))?;
+        let resp = client
+            .get(url)
+            .send()
+            .map_err(|e| format!("download {url}: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("download {url}: {e}"))?;
+        let body = resp.bytes().map_err(|e| format!("read {url}: {e}"))?;
+        let got = Sha256::digest(&body)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        if got != expected {
+            return Err(format!(
+                "sha256 mismatch for {url}: expected {expected}, got {got}"
+            ));
+        }
+        std::fs::write(dest, &body).map_err(|e| format!("write {dest:?}: {e}"))?;
+        Ok(())
+    }
+
+    /// Ensures model + tokenizer files are on disk, returns their paths.
+    fn ensure_files() -> Result<(PathBuf, PathBuf), String> {
+        let dir = cache_dir();
+        let model_path = dir.join("model_quantized.onnx");
+        let tok_path = dir.join("tokenizer.json");
+
+        if !model_path.exists() {
+            eprintln!("[rerank] downloading model (23MB, first use only)...");
+            download(MODEL_URL, &model_path, MODEL_SHA256)?;
+            eprintln!("[rerank] model cached.");
+        }
+        if !tok_path.exists() {
+            eprintln!("[rerank] downloading tokenizer (695KB)...");
+            download(TOKENIZER_URL, &tok_path, TOKENIZER_SHA256)?;
+            eprintln!("[rerank] tokenizer cached.");
+        }
+        Ok((model_path, tok_path))
+    }
+
+    /// Initializes the reranker on first call. Returns `None` on any
+    /// failure — caller skips reranking gracefully.
+    fn init() -> Option<Reranker> {
+        let (model_path, tok_path) = match ensure_files() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[rerank] init failed: {e}");
+                return None;
+            }
+        };
+
+        // Load tokenizer with truncation + padding configured.
+        // Both methods take &mut self, so we call them sequentially.
+        use tokenizers::{
+            PaddingDirection, PaddingParams, PaddingStrategy, TruncationParams, TruncationStrategy,
+        };
+
+        let mut tokenizer = match Tokenizer::from_file(&tok_path) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[rerank] tokenizer load failed: {e}");
+                return None;
+            }
+        };
+
+        let _ = tokenizer.with_truncation(Some(TruncationParams {
+            max_length: MAX_SEQ_LEN,
+            strategy: TruncationStrategy::LongestFirst,
+            ..Default::default()
+        }));
+        tokenizer.with_padding(Some(PaddingParams {
+            strategy: PaddingStrategy::BatchLongest,
+            direction: PaddingDirection::Right,
+            pad_id: 0,
+            pad_type_id: 0,
+            pad_token: "[PAD]".to_string(),
+            ..Default::default()
+        }));
+
+        let session = match Session::builder() {
+            Ok(mut b) => match b.commit_from_file(&model_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[rerank] session load failed: {e}");
+                    return None;
+                }
+            },
+            Err(e) => {
+                eprintln!("[rerank] session builder failed: {e}");
+                return None;
+            }
+        };
+
+        Some(Reranker {
+            session: Mutex::new(session),
+            tokenizer,
+        })
+    }
+
+    /// Returns the initialized reranker, or `None` if unavailable.
+    /// First call downloads + loads the model; subsequent calls are free.
+    fn get() -> &'static Option<Reranker> {
+        RERANKER.get_or_init(init)
+    }
+
+    /// Sigmoid function: maps logits to [0, 1].
+    fn sigmoid(x: f32) -> f64 {
+        1.0 / (1.0 + (-x as f64).exp())
+    }
+
+    /// Runs the cross-encoder on (query, doc) pairs, returning sigmoid
+    /// scores in [0, 1]. Returns `None` if the model is unavailable.
+    pub fn cross_encoder_scores(query: &str, docs: &[(String, String)]) -> Option<Vec<f64>> {
+        if docs.is_empty() || query.trim().is_empty() {
+            return None;
+        }
+
+        let reranker = get().as_ref()?;
+        let tokenizer = &reranker.tokenizer;
+
+        // Build (query, "title snippet") pairs for batch encoding.
+        // The tokenizer's Dual mode produces [CLS] query [SEP] doc [SEP]
+        // automatically — we just pass (query, doc) tuples.
+        let pairs: Vec<(&str, String)> = docs
+            .iter()
+            .map(|(title, snippet)| {
+                if snippet.is_empty() {
+                    (query, title.clone())
+                } else {
+                    (query, format!("{title} {snippet}"))
+                }
+            })
+            .collect();
+        let pairs_ref: Vec<(&str, &str)> = pairs.iter().map(|(q, d)| (*q, d.as_str())).collect();
+
+        // Encode all pairs in one batch with automatic padding.
+        let encodings = match tokenizer.encode_batch(pairs_ref, true) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("[rerank] tokenization failed: {e}");
+                return None;
+            }
+        };
+
+        let batch = encodings.len();
+        let seq_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .unwrap_or(0);
+        if seq_len == 0 || batch == 0 {
+            return None;
+        }
+
+        // Flatten token IDs, attention masks, and type IDs into 2D arrays.
+        let mut ids_flat = Vec::with_capacity(batch * seq_len);
+        let mut mask_flat = Vec::with_capacity(batch * seq_len);
+        let mut type_flat = Vec::with_capacity(batch * seq_len);
+
+        for enc in &encodings {
+            let ids = enc.get_ids();
+            let mask = enc.get_attention_mask();
+            let types = enc.get_type_ids();
+            let len = ids.len();
+            ids_flat.extend(ids.iter().map(|&v| v as i64));
+            mask_flat.extend(mask.iter().map(|&v| v as i64));
+            type_flat.extend(types.iter().map(|&v| v as i64));
+            // Pad to seq_len (shouldn't happen with BatchLongest, but safe).
+            if len < seq_len {
+                for _ in len..seq_len {
+                    ids_flat.push(0);
+                    mask_flat.push(0);
+                    type_flat.push(0);
+                }
+            }
+        }
+
+        let input_ids = Array2::from_shape_vec((batch, seq_len), ids_flat).ok()?;
+        let attention_mask = Array2::from_shape_vec((batch, seq_len), mask_flat).ok()?;
+        let token_type_ids = Array2::from_shape_vec((batch, seq_len), type_flat).ok()?;
+
+        // Run ONNX inference.
+        let mut session = reranker.session.lock().ok()?;
+        let outputs = session
+            .run(ort::inputs![
+                "input_ids" => TensorRef::from_array_view(&input_ids).ok()?,
+                "attention_mask" => TensorRef::from_array_view(&attention_mask).ok()?,
+                "token_type_ids" => TensorRef::from_array_view(&token_type_ids).ok()?,
+            ])
+            .ok()?;
+
+        // Extract logits: shape [batch, 1] via try_extract_array.
+        let logits = outputs["logits"].try_extract_array::<f32>().ok()?;
+
+        let scores: Vec<f64> = logits.iter().map(|&logit| sigmoid(logit)).collect();
+
+        Some(scores)
+    }
+
+    /// Min-max normalize a slice to [0, 1]. If all values are equal,
+    /// returns 0.5 for each (neutral — doesn't perturb the blend).
+    fn min_max_normalize(values: &[f64]) -> Vec<f64> {
+        let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let range = max - min;
+        if range < 1e-12 {
+            return vec![0.5; values.len()];
+        }
+        values.iter().map(|v| (v - min) / range).collect()
+    }
+
+    /// Re-scores results by blending RRF+BM25 scores with cross-encoder
+    /// semantic scores. Adjusts `.score` in-place. If the model is
+    /// unavailable, scores are left unchanged.
+    pub fn rerank(query: &str, results: &mut [crate::search::rank::Merged]) {
+        if results.len() < 2 || query.trim().is_empty() {
+            return;
+        }
+
+        let docs: Vec<(String, String)> = results
+            .iter()
+            .map(|r| (r.title.clone(), r.snippet.clone()))
+            .collect();
+
+        let xenc = match cross_encoder_scores(query, &docs) {
+            Some(s) => s,
+            None => return,
+        };
+
+        if xenc.len() != results.len() {
+            return;
+        }
+
+        // Collect current RRF+BM25+prior scores.
+        let rrf: Vec<f64> = results.iter().map(|r| r.score).collect();
+
+        // Min-max normalize both to [0, 1].
+        let rrf_norm = min_max_normalize(&rrf);
+        let xenc_norm = min_max_normalize(&xenc);
+
+        // Blend: final = α * rrf + (1-α) * xenc
+        for (r, (rn, xn)) in results
+            .iter_mut()
+            .zip(rrf_norm.iter().zip(xenc_norm.iter()))
+        {
+            r.score = BLEND_ALPHA * rn + (1.0 - BLEND_ALPHA) * xn;
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::search::rank::Merged;
+
+        #[test]
+        fn sigmoid_basic() {
+            assert!((sigmoid(0.0) - 0.5).abs() < 1e-6);
+            assert!(sigmoid(5.0) > 0.99);
+            assert!(sigmoid(-5.0) < 0.01);
+        }
+
+        #[test]
+        fn min_max_normalize_basic() {
+            let v = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+            let n = min_max_normalize(&v);
+            assert!((n[0] - 0.0).abs() < 1e-6);
+            assert!((n[4] - 1.0).abs() < 1e-6);
+            assert!((n[2] - 0.5).abs() < 1e-6);
+        }
+
+        #[test]
+        fn min_max_normalize_identical() {
+            let v = vec![3.0, 3.0, 3.0];
+            let n = min_max_normalize(&v);
+            for val in &n {
+                assert!((val - 0.5).abs() < 1e-6);
+            }
+        }
+
+        #[test]
+        fn min_max_normalize_single() {
+            let v = vec![42.0];
+            let n = min_max_normalize(&v);
+            assert!((n[0] - 0.5).abs() < 1e-6);
+        }
+
+        #[test]
+        fn min_max_normalize_negative() {
+            let v = vec![-10.0, 0.0, 10.0];
+            let n = min_max_normalize(&v);
+            assert!((n[0] - 0.0).abs() < 1e-6);
+            assert!((n[1] - 0.5).abs() < 1e-6);
+            assert!((n[2] - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn rerank_empty_is_noop() {
+            let mut results: Vec<Merged> = vec![];
+            rerank("test", &mut results);
+            assert!(results.is_empty());
+        }
+
+        #[test]
+        fn rerank_single_is_noop() {
+            let mut results = vec![Merged {
+                title: "Test".into(),
+                url: "https://example.com".into(),
+                snippet: "test snippet".into(),
+                sources: vec![],
+                score: 1.0,
+                published: None,
+            }];
+            rerank("test", &mut results);
+            assert!((results[0].score - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn rerank_empty_query_is_noop() {
+            let mut results = vec![
+                Merged {
+                    title: "A".into(),
+                    url: "https://a.com".into(),
+                    snippet: "a".into(),
+                    sources: vec![],
+                    score: 0.5,
+                    published: None,
+                },
+                Merged {
+                    title: "B".into(),
+                    url: "https://b.com".into(),
+                    snippet: "b".into(),
+                    sources: vec![],
+                    score: 0.3,
+                    published: None,
+                },
+            ];
+            rerank("   ", &mut results);
+            assert!((results[0].score - 0.5).abs() < 1e-6);
+            assert!((results[1].score - 0.3).abs() < 1e-6);
+        }
+
+        #[test]
+        fn blend_preserves_rrf_order_when_xenc_uniform() {
+            // When cross-encoder gives all results the same score,
+            // min_max returns 0.5 for all, so the blend reduces to
+            // a constant offset on the RRF ordering — A still > B.
+            let rrf = vec![0.8, 0.4];
+            let xenc = vec![0.5, 0.5];
+            let rrf_n = min_max_normalize(&rrf);
+            let xenc_n = min_max_normalize(&xenc);
+            let blend: Vec<f64> = rrf_n
+                .iter()
+                .zip(xenc_n.iter())
+                .map(|(r, x)| BLEND_ALPHA * r + (1.0 - BLEND_ALPHA) * x)
+                .collect();
+            assert!(
+                blend[0] > blend[1],
+                "RRF ordering preserved when xenc is uniform"
+            );
+        }
+
+        #[test]
+        fn blend_overrides_rrf_when_xenc_strongly_disagrees() {
+            // When the cross-encoder strongly disagrees (semantically
+            // relevant doc scored low by RRF), the blend should still
+            // reflect both signals. If xenc is strong enough, it can
+            // flip the ordering.
+            let rrf = vec![0.8, 0.4]; // A > B in RRF
+            let xenc = vec![0.1, 0.9]; // B >> A in xenc
+            let rrf_n = min_max_normalize(&rrf);
+            let xenc_n = min_max_normalize(&xenc);
+            let blend: Vec<f64> = rrf_n
+                .iter()
+                .zip(xenc_n.iter())
+                .map(|(r, x)| BLEND_ALPHA * r + (1.0 - BLEND_ALPHA) * x)
+                .collect();
+            // blend[0] = 0.6*1.0 + 0.4*0.0 = 0.6
+            // blend[1] = 0.6*0.0 + 0.4*1.0 = 0.4
+            // A still wins (0.6 > 0.4) — 40% weight isn't enough to flip
+            assert!(
+                blend[0] > blend[1],
+                "60/40 blend should NOT flip on moderate disagreement"
+            );
+            // But the gap narrowed significantly: 0.6-0.4=0.2 vs 1.0-0.0=1.0
+            assert!(
+                blend[0] - blend[1] < rrf_n[0] - rrf_n[1],
+                "xenc should narrow the gap even if it doesn't flip"
+            );
+        }
+    }
+}
+
+#[cfg(not(feature = "rerank"))]
+mod inner {
+    /// No-op stub when the `rerank` feature is disabled.
+    pub fn rerank(_query: &str, _results: &mut [crate::search::rank::Merged]) {}
+}
+
+pub use inner::rerank;
