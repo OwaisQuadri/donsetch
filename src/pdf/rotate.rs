@@ -42,7 +42,10 @@ pub fn canonicalize(pc: &mut PageChars) -> Option<f32> {
     }
     if std::env::var("DONSHEET_DEBUG_MATRIX").is_ok() {
         for (i, c) in pc.chars.iter().take(6).enumerate() {
-            eprintln!("[rot_dbg] i={i} cp={:?} angle={:.2} size={:.2} rt={}", c.cp, c.angle, c.size, c.rt);
+            eprintln!(
+                "[rot_dbg] i={i} cp={:?} angle={:.2} size={:.2} rt={}",
+                c.cp, c.angle, c.size, c.rt
+            );
         }
     }
     let total: f32 = mass.iter().sum();
@@ -52,7 +55,13 @@ pub fn canonicalize(pc: &mut PageChars) -> Option<f32> {
     if std::env::var("DONSHEET_DEBUG").is_ok() {
         eprintln!(
             "[rotate] page {} mass: 0deg={:.0} 90deg={:.0} 180deg={:.0} 270deg={:.0} chars={} total={:.0}",
-            pc.index, mass[0], mass[1], mass[2], mass[3], pc.chars.len(), total
+            pc.index,
+            mass[0],
+            mass[1],
+            mass[2],
+            mass[3],
+            pc.chars.len(),
+            total
         );
     }
     let (winner, wmass) = mass
@@ -195,8 +204,7 @@ pub fn is_rtl_char(ch: char) -> bool {
 /// their embedded runs intact.
 pub fn bidi_reorder(text: &str) -> String {
     let info = unicode_bidi::BidiInfo::new(text, None);
-    info
-        .paragraphs
+    info.paragraphs
         .first()
         .map(|p| info.reorder_line(p, 0..text.len()).into_owned())
         .unwrap_or_else(|| text.to_string())

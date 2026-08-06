@@ -29,7 +29,9 @@ pub fn metadata(doc: &Html) -> Meta {
         .or_else(|| meta_attr(doc, "meta[name='twitter:title']", "content"))
         .or_else(|| {
             let sel = scraper::Selector::parse("title").ok()?;
-            doc.select(&sel).next().map(|t| t.text().collect::<String>().trim().to_string())
+            doc.select(&sel)
+                .next()
+                .map(|t| t.text().collect::<String>().trim().to_string())
         })
         .filter(|t| !t.is_empty());
 
@@ -66,7 +68,14 @@ pub fn metadata(doc: &Html) -> Meta {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    Meta { title, byline, published, site, description, canonical }
+    Meta {
+        title,
+        byline,
+        published,
+        site,
+        description,
+        canonical,
+    }
 }
 
 fn meta_attr(doc: &Html, selector: &str, attr: &str) -> Option<String> {
@@ -90,12 +99,16 @@ fn json_ld_find(doc: &Html, key: &str, subkey: &str) -> Option<String> {
         let hay = if subkey.is_empty() {
             region
         } else {
-            let Some(si) = region.find(subkey) else { continue };
+            let Some(si) = region.find(subkey) else {
+                continue;
+            };
             &region[si + subkey.len()..]
         };
         // First "..." string after the key.
         let Some(q1) = hay.find('"') else { continue };
-        let Some(q2) = hay[q1 + 1..].find('"') else { continue };
+        let Some(q2) = hay[q1 + 1..].find('"') else {
+            continue;
+        };
         let val = &hay[q1 + 1..q1 + 1 + q2];
         if !val.is_empty() && val.len() < 200 {
             return Some(decode_unicode_escapes(val));
@@ -117,14 +130,13 @@ fn decode_unicode_escapes(s: &str) -> String {
     while let Some(pos) = rest.find("\\u") {
         result.push_str(&rest[..pos]);
         rest = &rest[pos + 2..];
-        if rest.len() >= 4 {
-            if let Ok(code) = u32::from_str_radix(&rest[..4], 16) {
-                if let Some(ch) = char::from_u32(code) {
-                    result.push(ch);
-                    rest = &rest[4..];
-                    continue;
-                }
-            }
+        if rest.len() >= 4
+            && let Ok(code) = u32::from_str_radix(&rest[..4], 16)
+            && let Some(ch) = char::from_u32(code)
+        {
+            result.push(ch);
+            rest = &rest[4..];
+            continue;
         }
         // Invalid escape — keep literal.
         result.push_str("\\u");

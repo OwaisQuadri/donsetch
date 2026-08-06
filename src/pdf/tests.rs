@@ -85,8 +85,12 @@ fn smoke_scanned_detection() {
     };
     let parsed = crate::pdf::parse(&bytes).expect("scanned pdf parses");
     assert!(
-        parsed.notes.iter().any(|n| n.contains("scanned") || n.contains("OCR")),
-        "expected scanned/ocr note, got {:?}", parsed.notes
+        parsed
+            .notes
+            .iter()
+            .any(|n| n.contains("scanned") || n.contains("OCR")),
+        "expected scanned/ocr note, got {:?}",
+        parsed.notes
     );
     // When the OCR model cache exists locally, content must be recovered.
     if crate::pdf::ocr::ocr_cache_dir()
@@ -103,7 +107,10 @@ fn smoke_scanned_detection() {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        assert!(all.contains("DonSheet") || all.contains("Scanned"), "ocr failed: {all:?}");
+        assert!(
+            all.contains("DonSheet") || all.contains("Scanned"),
+            "ocr failed: {all:?}"
+        );
     }
 }
 
@@ -115,7 +122,8 @@ fn smoke_vertical_flag() {
     let parsed = crate::pdf::parse(&bytes).expect("vertical pdf parses");
     assert!(
         parsed.notes.iter().any(|n| n.contains("vertical")),
-        "expected vertical note, got {:?}", parsed.notes
+        "expected vertical note, got {:?}",
+        parsed.notes
     );
 }
 
@@ -148,16 +156,29 @@ fn attention_structure() {
         })
         .collect();
     let h = |needle: &str| headings.iter().find(|(_, t)| t.contains(needle));
-    assert!(h("Introduction").is_some(), "missing Intro heading: {:?}", headings);
-    assert!(h("Model Architecture").is_some(), "missing Model Arch heading");
+    assert!(
+        h("Introduction").is_some(),
+        "missing Intro heading: {:?}",
+        headings
+    );
+    assert!(
+        h("Model Architecture").is_some(),
+        "missing Model Arch heading"
+    );
     let scaled = h("Scaled Dot-Product Attention").expect("missing 3.2.1 heading");
     let model = h("Model Architecture").unwrap();
-    assert!(scaled.0 > model.0, "3.2.1 must nest under 3: {:?} vs {:?}", scaled, model);
+    assert!(
+        scaled.0 > model.0,
+        "3.2.1 must nest under 3: {:?} vs {:?}",
+        scaled,
+        model
+    );
 
     // Abstract reads clean (regression for the phrase-shuffle bug).
     assert!(
         text.contains("We propose a new simple network architecture, the Transformer,"),
-        "abstract scramble regression:\n{}", &text[..600.min(text.len())]
+        "abstract scramble regression:\n{}",
+        &text[..600.min(text.len())]
     );
 
     // No line duplication (regression for the double-append bug):
@@ -172,7 +193,13 @@ fn attention_structure() {
     let i1 = text.find("Background").expect("Background heading");
     let i2 = text.find("Model Architecture").expect("Model Arch");
     let i3 = text.find("Why Self-Attention").expect("Why Self-Attention");
-    assert!(i1 < i2 && i2 < i3, "section order broken: {} {} {}", i1, i2, i3);
+    assert!(
+        i1 < i2 && i2 < i3,
+        "section order broken: {} {} {}",
+        i1,
+        i2,
+        i3
+    );
 
     // Table present (author or results tables).
     let n_tables = parsed
@@ -207,9 +234,18 @@ fn w9_form_content() {
     let parsed = crate::pdf::parse(&bytes).expect("parse");
     let text = all_block_text(&parsed.blocks);
 
-    assert!(text.contains("Employer identification number"), "w9 body missing");
-    assert!(text.contains("Social security number"), "w9 SSN field missing");
-    assert!(text.contains("backup withholding"), "w9 certification text missing");
+    assert!(
+        text.contains("Employer identification number"),
+        "w9 body missing"
+    );
+    assert!(
+        text.contains("Social security number"),
+        "w9 SSN field missing"
+    );
+    assert!(
+        text.contains("backup withholding"),
+        "w9 certification text missing"
+    );
     // Dingbat checkbox junk must not leak ("ppy()" style noise).
     assert!(
         !text.contains("ppy"),
@@ -241,12 +277,15 @@ fn progit_book() {
         .iter()
         .filter(|b| matches!(b, crate::extract::blocks::Block::Heading { .. }))
         .count();
-    assert!(n_headings >= 20, "expect many book headings, got {n_headings}");
+    assert!(
+        n_headings >= 20,
+        "expect many book headings, got {n_headings}"
+    );
 
     // Code listing present (fenced code detected from mono fonts).
-    let has_code = parsed.blocks.iter().any(|b| {
-        matches!(b, crate::extract::blocks::Block::Code { code, .. } if code.contains("git"))
-    });
+    let has_code = parsed.blocks.iter().any(
+        |b| matches!(b, crate::extract::blocks::Block::Code { code, .. } if code.contains("git")),
+    );
     assert!(has_code, "expected code blocks containing git commands");
 
     // Book must not be sliced into mid-word fragmentation.
@@ -302,8 +341,11 @@ fn cjk_extraction() {
         })
         .collect();
     assert!(
-        headings.iter().any(|h| h.contains("日本語") || h.contains("経済")),
-        "japanese headings missing: {:?}", headings
+        headings
+            .iter()
+            .any(|h| h.contains("日本語") || h.contains("経済")),
+        "japanese headings missing: {:?}",
+        headings
     );
 }
 
@@ -332,8 +374,13 @@ fn extract_integration_pdf() {
         max_chars: Some(60_000),
         ..Default::default()
     };
-    let out = crate::extract::extract(&bytes, "application/pdf", "https://arxiv.org/pdf/1706.03762", &opts)
-        .expect("extract");
+    let out = crate::extract::extract(
+        &bytes,
+        "application/pdf",
+        "https://arxiv.org/pdf/1706.03762",
+        &opts,
+    )
+    .expect("extract");
     assert!(
         out.markdown.contains("Transformer"),
         "integrated extract missing content"
@@ -353,8 +400,13 @@ fn extract_integration_magic_sniff() {
         max_chars: Some(2_000),
         ..Default::default()
     };
-    let out = crate::extract::extract(&bytes, "application/octet-stream", "https://irs.gov/fw9.pdf", &opts)
-        .expect("extract");
+    let out = crate::extract::extract(
+        &bytes,
+        "application/octet-stream",
+        "https://irs.gov/fw9.pdf",
+        &opts,
+    )
+    .expect("extract");
     assert!(out.markdown.contains("Form W-9"), "magic sniff failed");
 }
 

@@ -33,7 +33,9 @@ impl Robots {
             if line.is_empty() {
                 continue;
             }
-            let Some((k, v)) = line.split_once(':') else { continue };
+            let Some((k, v)) = line.split_once(':') else {
+                continue;
+            };
             let k = k.trim().to_lowercase();
             let v = v.trim();
             match k.as_str() {
@@ -73,7 +75,9 @@ impl Robots {
         if !seen_any_group {
             for raw in body.lines() {
                 let line = raw.split('#').next().unwrap_or("").trim();
-                let Some((k, v)) = line.split_once(':') else { continue };
+                let Some((k, v)) = line.split_once(':') else {
+                    continue;
+                };
                 if k.trim().eq_ignore_ascii_case("disallow") && !v.trim().is_empty() {
                     r.disallow.push(v.trim().to_string());
                 }
@@ -118,13 +122,21 @@ pub fn parse_sitemap(xml: &str, out: &mut Vec<SitemapEntry>, cap: usize) {
     let b = xml.as_bytes();
     let mut pos = 0usize;
     while out.len() < cap {
-        let Some((tag_off, close)) = next_block_open(b, pos) else { break };
-        let Some(end) = find_from(b, close.as_bytes(), tag_off) else { break };
+        let Some((tag_off, close)) = next_block_open(b, pos) else {
+            break;
+        };
+        let Some(end) = find_from(b, close.as_bytes(), tag_off) else {
+            break;
+        };
         let block = &xml[tag_off..end];
         if let Some(loc) = extract_tag(block, "loc") {
             let lastmod = extract_tag(block, "lastmod");
             let is_index = close == "</sitemap>";
-            out.push(SitemapEntry { loc, lastmod, is_index });
+            out.push(SitemapEntry {
+                loc,
+                lastmod,
+                is_index,
+            });
         }
         pos = end + close.len();
     }
@@ -198,19 +210,12 @@ pub fn maybe_gunzip(body: &[u8]) -> Vec<u8> {
 /// the conventional /sitemap.xml fallback. Returns parsed
 /// entries (map phase) and the robots rules. Runs through the
 /// injected PageFetcher (real or mock).
-pub async fn discover(
-    fetch: &PageFetcher,
-    host: &str,
-    cap: usize,
-) -> (Robots, Vec<SitemapEntry>) {
+pub async fn discover(fetch: &PageFetcher, host: &str, cap: usize) -> (Robots, Vec<SitemapEntry>) {
     let robots_url = format!("https://{host}/robots.txt");
     let mut robots = Robots::default();
     let page = fetch(robots_url, "direct".to_string()).await;
     if page.status == 200 {
-        robots = Robots::parse(
-            &String::from_utf8_lossy(&maybe_gunzip(&page.body)),
-            host,
-        );
+        robots = Robots::parse(&String::from_utf8_lossy(&maybe_gunzip(&page.body)), host);
     }
 
     // Sitemap candidates: robots directives first.
@@ -229,7 +234,9 @@ pub async fn discover(
             continue;
         }
         let body = maybe_gunzip(&page.body);
-        let Ok(text) = String::from_utf8(body) else { continue };
+        let Ok(text) = String::from_utf8(body) else {
+            continue;
+        };
         let mut here = Vec::new();
         if text.trim_start().starts_with("<") {
             // XML sitemap.

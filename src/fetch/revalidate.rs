@@ -34,21 +34,19 @@ const MAX_BODY: usize = 8 << 20; // 8 MiB
 
 impl RevalidationCache {
     pub fn new() -> Self {
-        Self { map: HashMap::new() }
+        Self {
+            map: HashMap::new(),
+        }
     }
 
     pub fn check(&self, url: &str) -> CacheCheck {
         let Some(entry) = self.map.get(url) else {
             return CacheCheck::None;
         };
-        if let Some(until) = entry.fresh_until {
-            if Instant::now() < until {
-                return CacheCheck::Fresh(
-                    entry.body.clone(),
-                    entry.status,
-                    entry.headers.clone(),
-                );
-            }
+        if let Some(until) = entry.fresh_until
+            && Instant::now() < until
+        {
+            return CacheCheck::Fresh(entry.body.clone(), entry.status, entry.headers.clone());
         }
         let mut cond = Vec::new();
         if let Some(e) = &entry.etag {
@@ -65,19 +63,14 @@ impl RevalidationCache {
     }
 
     /// Stored body for a 304 merge.
+    #[allow(clippy::type_complexity)]
     pub fn stored(&self, url: &str) -> Option<(Vec<u8>, u16, Vec<(String, String)>)> {
         self.map
             .get(url)
             .map(|e| (e.body.clone(), e.status, e.headers.clone()))
     }
 
-    pub fn store(
-        &mut self,
-        url: &str,
-        status: u16,
-        headers: &[(String, String)],
-        body: &[u8],
-    ) {
+    pub fn store(&mut self, url: &str, status: u16, headers: &[(String, String)], body: &[u8]) {
         if status != 200 || body.len() > MAX_BODY {
             return;
         }
@@ -99,10 +92,11 @@ impl RevalidationCache {
         if etag.is_none() && last_modified.is_none() && fresh_until.is_none() {
             return;
         }
-        if self.map.len() >= MAX_ENTRIES && !self.map.contains_key(url) {
-            if let Some(k) = self.map.keys().next().cloned() {
-                self.map.remove(&k);
-            }
+        if self.map.len() >= MAX_ENTRIES
+            && !self.map.contains_key(url)
+            && let Some(k) = self.map.keys().next().cloned()
+        {
+            self.map.remove(&k);
         }
         self.map.insert(
             url.to_string(),

@@ -4,25 +4,40 @@
 //! type, every edge case. This is what makes DonSift
 //! standalone-quality.
 
-use super::*;
 use super::blocks::Block;
 use super::language::{self, Script};
 use super::metadata;
+use super::*;
 use scraper::Html;
 
 // ── Helpers ───────────────────────────────────────────────
 
 fn extract_html(html: &str) -> Extracted {
-    extract(html.as_bytes(), "text/html", "https://example.com/page", &ExtractOptions::default())
-        .unwrap()
+    extract(
+        html.as_bytes(),
+        "text/html",
+        "https://example.com/page",
+        &ExtractOptions::default(),
+    )
+    .unwrap()
 }
 
 fn extract_html_opts(html: &str, opts: &ExtractOptions) -> Extracted {
-    extract(html.as_bytes(), "text/html", "https://example.com/page", opts).unwrap()
+    extract(
+        html.as_bytes(),
+        "text/html",
+        "https://example.com/page",
+        opts,
+    )
+    .unwrap()
 }
 
 fn para(text: &str) -> Block {
-    Block::Para { md: text.to_string(), link_density: 0.0, path: vec![] }
+    Block::Para {
+        md: text.to_string(),
+        link_density: 0.0,
+        path: vec![],
+    }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -52,7 +67,10 @@ use-after-free and data races at compile time.</p>
     let r = extract_html(html);
     assert_eq!(r.lang, "en");
     assert!(!r.thin);
-    assert!(r.markdown.contains("Rust is a systems programming language"));
+    assert!(
+        r.markdown
+            .contains("Rust is a systems programming language")
+    );
     assert!(r.markdown.contains("borrow checker"));
     assert!(!r.markdown.contains("Home | Blog")); // nav stripped
     assert!(!r.markdown.contains("Copyright")); // footer stripped
@@ -242,16 +260,20 @@ fn lang_detect_from_html_attr() {
 
 #[test]
 fn lang_detect_from_meta() {
-    let doc = Html::parse_document(r#"<html><head>
+    let doc = Html::parse_document(
+        r#"<html><head>
 <meta http-equiv="content-language" content="ja"></head>
-<body>内容</body></html>"#);
+<body>内容</body></html>"#,
+    );
     let info = language::detect(&doc);
     assert_eq!(info.code, "ja");
 }
 
 #[test]
 fn lang_detect_from_script_analysis() {
-    let doc = Html::parse_document("<html><body>한국어 텍스트입니다. 이것은 기계 학습에 대한 글입니다.</body></html>");
+    let doc = Html::parse_document(
+        "<html><body>한국어 텍스트입니다. 이것은 기계 학습에 대한 글입니다.</body></html>",
+    );
     let info = language::detect(&doc);
     assert_eq!(info.code, "ko");
     assert_eq!(info.script, Script::Hangul);
@@ -259,7 +281,9 @@ fn lang_detect_from_script_analysis() {
 
 #[test]
 fn lang_detect_mixed_japanese() {
-    let doc = Html::parse_document("<html><body>これは日本語の文章です。機械学習について説明します。</body></html>");
+    let doc = Html::parse_document(
+        "<html><body>これは日本語の文章です。機械学習について説明します。</body></html>",
+    );
     let info = language::detect(&doc);
     assert_eq!(info.code, "ja");
     assert!(info.scripts.contains(&Script::Kana));
@@ -284,10 +308,13 @@ fn focus_english_stemming() {
 <p>The runner was running quickly through the park. Running is excellent exercise.</p>
 <p>Cooking is also a great hobby. Many people enjoy cooking Italian food.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        focus: Some("run".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("run".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(!r.markdown.contains("*[focus"));
     assert!(r.markdown.contains("running") || r.markdown.contains("runner"));
 }
@@ -299,10 +326,13 @@ fn focus_chinese_bigram() {
 <p>机器学习是人工智能的一个重要分支。</p>
 <p>今天天气很好，适合出门散步。</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        focus: Some("机器学习".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("机器学习".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(!r.markdown.contains("*[focus"));
     assert!(r.markdown.contains("机器学习"));
 }
@@ -314,10 +344,13 @@ fn focus_japanese() {
 <p>機械学習は人工知能の一分野である。</p>
 <p>今日はいい天気ですね。</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        focus: Some("機械学習".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("機械学習".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(!r.markdown.contains("*[focus"));
     assert!(r.markdown.contains("機械学習"));
 }
@@ -328,10 +361,13 @@ fn focus_accent_folding() {
 <p>Le café est une boisson très populaire en France. Les cafés parisients sont célèbres.</p>
 <p>Le thé est aussi apprécié par beaucoup de gens.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        focus: Some("cafe".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("cafe".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(!r.markdown.contains("*[focus"));
 }
 
@@ -341,10 +377,13 @@ fn focus_german_umlaut() {
 <p>Die Universität bietet viele Kurse an. Die Universitäten in Deutschland sind bekannt.</p>
 <p>Das Wetter ist heute schön.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        focus: Some("Universität".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("Universität".to_string()),
+            ..Default::default()
+        },
+    );
     // Should find the content regardless of umlaut folding.
     assert!(!r.markdown.contains("*[focus"));
 }
@@ -354,10 +393,13 @@ fn focus_miss_returns_full_content() {
     let html = r#"<html><body><article>
 <p>The quick brown fox jumps over the lazy dog.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        focus: Some("quantum entanglement".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("quantum entanglement".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("*[focus"));
     assert!(r.markdown.contains("quick brown fox"));
 }
@@ -384,7 +426,10 @@ fn metadata_description() {
 </head><body><p>Content</p></body></html>"#;
     let doc = Html::parse_document(html);
     let meta = metadata::metadata(&doc);
-    assert_eq!(meta.description.as_deref(), Some("A comprehensive guide to Rust programming."));
+    assert_eq!(
+        meta.description.as_deref(),
+        Some("A comprehensive guide to Rust programming.")
+    );
 }
 
 #[test]
@@ -394,7 +439,10 @@ fn metadata_canonical() {
 </head><body><p>Content</p></body></html>"#;
     let doc = Html::parse_document(html);
     let meta = metadata::metadata(&doc);
-    assert_eq!(meta.canonical.as_deref(), Some("https://example.com/canonical-page"));
+    assert_eq!(
+        meta.canonical.as_deref(),
+        Some("https://example.com/canonical-page")
+    );
 }
 
 #[test]
@@ -571,10 +619,13 @@ fn block_media_opt_in() {
 <figcaption>System architecture overview</figcaption>
 </figure>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        include_media: true,
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            include_media: true,
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("Architecture diagram"));
     // Default (no media): should not include.
     let r2 = extract_html(html);
@@ -597,10 +648,13 @@ fn block_links_kept_with_option() {
     let html = r#"<html><body><article>
 <p>Read the <a href="https://rust-lang.org/docs">documentation</a> for more info.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        include_links: true,
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            include_links: true,
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("[documentation]"));
     assert!(r.markdown.contains("rust-lang.org"));
 }
@@ -610,10 +664,13 @@ fn block_link_trackers_stripped() {
     let html = r#"<html><body><article>
 <p>Check <a href="https://example.com/page?utm_source=newsletter&utm_medium=email&fbclid=abc123">this link</a> out.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        include_links: true,
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            include_links: true,
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("[this link]"));
     assert!(!r.markdown.contains("utm_source"));
     assert!(!r.markdown.contains("fbclid"));
@@ -658,7 +715,9 @@ fn edge_deeply_nested() {
 fn edge_huge_page() {
     let mut html = String::from("<html><body><article><h1>Big Page</h1>");
     for i in 0..500 {
-        html.push_str(&format!("<p>Paragraph number {i} with some text content here.</p>"));
+        html.push_str(&format!(
+            "<p>Paragraph number {i} with some text content here.</p>"
+        ));
     }
     html.push_str("</article></body></html>");
     let r = extract_html(&html);
@@ -676,14 +735,26 @@ fn edge_tiny_page() {
 #[test]
 fn edge_non_html_passthrough_json() {
     let json = br#"{"name": "test", "value": 42}"#;
-    let r = extract(json, "application/json", "https://example.com/api", &ExtractOptions::default()).unwrap();
+    let r = extract(
+        json,
+        "application/json",
+        "https://example.com/api",
+        &ExtractOptions::default(),
+    )
+    .unwrap();
     assert!(r.markdown.contains("test"));
     assert_eq!(r.content_kind, ContentKind::Page);
 }
 
 #[test]
 fn edge_non_html_passthrough_text() {
-    let r = extract(b"Hello, plain text world!", "text/plain", "https://example.com/txt", &ExtractOptions::default()).unwrap();
+    let r = extract(
+        b"Hello, plain text world!",
+        "text/plain",
+        "https://example.com/txt",
+        &ExtractOptions::default(),
+    )
+    .unwrap();
     assert!(r.markdown.contains("Hello, plain text"));
 }
 
@@ -723,7 +794,12 @@ fn edge_whitespace_only() {
     let html = "<html><body>   \n\n\n   </body></html>";
     let r = extract_html(html);
     // Should not crash; content should be minimal/empty.
-    assert!(r.thin || r.markdown.contains("no extractable") || r.markdown.trim().is_empty() || r.blocks_shown == 0);
+    assert!(
+        r.thin
+            || r.markdown.contains("no extractable")
+            || r.markdown.trim().is_empty()
+            || r.blocks_shown == 0
+    );
 }
 
 // ════════════════════════════════════════════════════════════
@@ -734,13 +810,18 @@ fn edge_whitespace_only() {
 fn pagination_basic() {
     let mut html = String::from("<html><body><article><h1>Page</h1>");
     for i in 0..100 {
-        html.push_str(&format!("<p>Paragraph {i}: Lorem ipsum dolor sit amet consectetur adipiscing elit.</p>"));
+        html.push_str(&format!(
+            "<p>Paragraph {i}: Lorem ipsum dolor sit amet consectetur adipiscing elit.</p>"
+        ));
     }
     html.push_str("</article></body></html>");
-    let r = extract_html_opts(&html, &ExtractOptions {
-        max_chars: Some(500),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        &html,
+        &ExtractOptions {
+            max_chars: Some(500),
+            ..Default::default()
+        },
+    );
     assert!(r.next_offset.is_some());
     assert!(r.markdown.contains("truncated"));
     assert!(r.markdown.len() < 700); // near 500 + truncation marker
@@ -750,19 +831,27 @@ fn pagination_basic() {
 fn pagination_resume() {
     let mut html = String::from("<html><body><article><h1>Page</h1>");
     for i in 0..100 {
-        html.push_str(&format!("<p>Paragraph {i}: Lorem ipsum dolor sit amet consectetur adipiscing elit.</p>"));
+        html.push_str(&format!(
+            "<p>Paragraph {i}: Lorem ipsum dolor sit amet consectetur adipiscing elit.</p>"
+        ));
     }
     html.push_str("</article></body></html>");
-    let r1 = extract_html_opts(&html, &ExtractOptions {
-        max_chars: Some(500),
-        ..Default::default()
-    });
+    let r1 = extract_html_opts(
+        &html,
+        &ExtractOptions {
+            max_chars: Some(500),
+            ..Default::default()
+        },
+    );
     let offset = r1.next_offset.unwrap();
-    let r2 = extract_html_opts(&html, &ExtractOptions {
-        max_chars: Some(500),
-        offset,
-        ..Default::default()
-    });
+    let r2 = extract_html_opts(
+        &html,
+        &ExtractOptions {
+            max_chars: Some(500),
+            offset,
+            ..Default::default()
+        },
+    );
     // Page 2 should have different content than page 1.
     assert_ne!(r1.markdown, r2.markdown);
 }
@@ -775,10 +864,13 @@ fn pagination_utf8_boundary_safe() {
 <p>さらにテキストを追加します。これは二番目の段落です。テキストの長さが文字境界を超えることを確認します。</p>
 <p>三番目の段落です。これは最後の段落になります。十分な長さがあることを確認してください。</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        max_chars: Some(100),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            max_chars: Some(100),
+            ..Default::default()
+        },
+    );
     // Should not panic on UTF-8 boundaries.
     assert!(!r.markdown.is_empty());
     // The slice should be valid UTF-8 (implicit — if it wasn't, the String would be invalid).
@@ -787,10 +879,13 @@ fn pagination_utf8_boundary_safe() {
 #[test]
 fn pagination_offset_past_end() {
     let html = r#"<html><body><article><p>Short content.</p></article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        offset: 10000,
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            offset: 10000,
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.is_empty());
     assert!(r.next_offset.is_none());
 }
@@ -811,10 +906,13 @@ fn toc_mode_heading_tree() {
 <h2>Section B</h2>
 <p>Section B content.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        toc: true,
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            toc: true,
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("- Main Title"));
     assert!(r.markdown.contains("  - Section A"));
     assert!(r.markdown.contains("    - Subsection A1"));
@@ -830,10 +928,13 @@ fn toc_mode_flat_page() {
 <p>No headings here, just paragraphs.</p>
 <p>Another paragraph.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        toc: true,
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            toc: true,
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("no headings"));
 }
 
@@ -853,10 +954,13 @@ fn section_mode_exact_match() {
 <h2>Modern Era</h2>
 <p>Modern developments in the field.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        section: Some("History".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            section: Some("History".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("history of the subject"));
     assert!(r.markdown.contains("Early details"));
     // Should NOT include content from "Modern Era" section.
@@ -871,10 +975,13 @@ fn section_mode_case_insensitive() {
 <h2>Usage</h2>
 <p>How to use the tool.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        section: Some("INSTALLATION".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            section: Some("INSTALLATION".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("install, run"));
     assert!(!r.markdown.contains("How to use"));
 }
@@ -885,10 +992,13 @@ fn section_mode_miss_returns_full() {
 <h2>Real Section</h2>
 <p>Real content.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        section: Some("Nonexistent".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            section: Some("Nonexistent".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("*[section"));
     assert!(r.markdown.contains("Real content"));
 }
@@ -1040,10 +1150,13 @@ fn signal_focus_miss() {
     let html = r#"<html><body><article>
 <p>The quick brown fox jumps over the lazy dog.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        focus: Some("nonexistent query term".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("nonexistent query term".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("*[focus"));
 }
 
@@ -1053,20 +1166,26 @@ fn signal_section_miss() {
 <h2>Real Section</h2>
 <p>Real content here.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        section: Some("Nonexistent Section".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            section: Some("Nonexistent Section".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("*[section"));
 }
 
 #[test]
 fn signal_thin_js_shell() {
     // Large page with almost no extractable content → thin.
-    let html = format!(r#"<html><body>
+    let html = format!(
+        r#"<html><body>
 <div id="root" style="min-height:100vh"></div>
 <script>{}</script>
-</body></html>"#, "x".repeat(60_000));
+</body></html>"#,
+        "x".repeat(60_000)
+    );
     let r = extract_html(&html);
     assert!(r.thin);
     assert!(r.markdown.contains("likely JS-rendered"));
@@ -1119,23 +1238,43 @@ fn quality_score_poor_content() {
 
 #[test]
 fn charset_utf8_explicit() {
-    let html = b"<html><head><meta charset='utf-8'></head><body><p>Caf\xc3\xa9 content</p></body></html>";
-    let r = extract(html, "text/html; charset=utf-8", "https://example.com", &ExtractOptions::default()).unwrap();
+    let html =
+        b"<html><head><meta charset='utf-8'></head><body><p>Caf\xc3\xa9 content</p></body></html>";
+    let r = extract(
+        html,
+        "text/html; charset=utf-8",
+        "https://example.com",
+        &ExtractOptions::default(),
+    )
+    .unwrap();
     assert!(r.markdown.contains("Café"));
 }
 
 #[test]
 fn charset_bom_detection() {
     let html = b"\xEF\xBB\xBF<html><body><p>BOM-marked content here.</p></body></html>";
-    let r = extract(html, "text/html", "https://example.com", &ExtractOptions::default()).unwrap();
+    let r = extract(
+        html,
+        "text/html",
+        "https://example.com",
+        &ExtractOptions::default(),
+    )
+    .unwrap();
     assert!(r.markdown.contains("BOM-marked"));
 }
 
 #[test]
 fn charset_meta_charset_tag() {
     // Latin-1 encoded "café" as 0xe9
-    let html = b"<html><head><meta charset='iso-8859-1'></head><body><p>Caf\xe9 content</p></body></html>";
-    let r = extract(html, "text/html", "https://example.com", &ExtractOptions::default()).unwrap();
+    let html =
+        b"<html><head><meta charset='iso-8859-1'></head><body><p>Caf\xe9 content</p></body></html>";
+    let r = extract(
+        html,
+        "text/html",
+        "https://example.com",
+        &ExtractOptions::default(),
+    )
+    .unwrap();
     assert!(r.markdown.contains("Café"));
 }
 
@@ -1151,20 +1290,28 @@ fn css_selector_scopes_extraction() {
 <p>This is the content we want to extract from the main div.</p>
 </div>
 </body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        selector: Some(".main-content".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            selector: Some(".main-content".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(r.markdown.contains("content we want"));
     assert!(!r.markdown.contains("Sidebar junk"));
 }
 
 #[test]
 fn css_selector_bad_returns_error() {
-    let r = extract("<html></html>".as_bytes(), "text/html", "https://example.com", &ExtractOptions {
-        selector: Some("invalid_selector[[[".to_string()),
-        ..Default::default()
-    });
+    let r = extract(
+        "<html></html>".as_bytes(),
+        "text/html",
+        "https://example.com",
+        &ExtractOptions {
+            selector: Some("invalid_selector[[[".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(r.is_err());
 }
 
@@ -1196,10 +1343,13 @@ fn mixed_language_focus_cjk() {
 <p>React是Facebook开发的JavaScript库，用于构建用户界面。</p>
 <p>Django是Python的Web框架，适合快速开发。</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        focus: Some("React".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("React".to_string()),
+            ..Default::default()
+        },
+    );
     // "React" is Latin mixed into CJK — should still match.
     assert!(!r.markdown.contains("*[focus"));
     assert!(r.markdown.contains("React") || r.markdown.contains("Facebook"));
@@ -1298,10 +1448,13 @@ fn focus_french_stemming() {
 <p>Les ordinateurs apprennent à partir des données.</p>
 <p>Le temps est beau aujourd'hui.</p>
 </article></body></html>"#;
-    let r = extract_html_opts(html, &ExtractOptions {
-        focus: Some("ordinateur".to_string()),
-        ..Default::default()
-    });
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("ordinateur".to_string()),
+            ..Default::default()
+        },
+    );
     // "ordinateurs" → stem "ordinateur" should match query.
     assert!(!r.markdown.contains("*[focus"));
 }

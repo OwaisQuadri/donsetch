@@ -17,32 +17,88 @@ pub enum Intent {
 /// count with a tech token present). "How to fix a
 /// leaking kitchen faucet" is plumbing, full stop.
 const CODE_STRONG: &[&str] = &[
-    "error", "exception", "traceback", "compile", "undefined",
-    "null pointer", "segmentation fault", "syntax", "debug", "stack trace",
-    "typeerror", "segfault", "stackoverflow",
+    "error",
+    "exception",
+    "traceback",
+    "compile",
+    "undefined",
+    "null pointer",
+    "segmentation fault",
+    "syntax",
+    "debug",
+    "stack trace",
+    "typeerror",
+    "segfault",
+    "stackoverflow",
 ];
 const CODE_TECH_GATED: &[&str] = &[
-    "how to", "install", "fix", "setup", "set up", "library",
-    "function", "api", "crate", "package", "regex",
+    "how to", "install", "fix", "setup", "set up", "library", "function", "api", "crate",
+    "package", "regex",
 ];
 /// Word-token matched, never substring: "vec" must not
 /// light up on "vector", "git" on "digit".
 const TECH: &[&str] = &[
-    "npm", "cargo", "pip", "github", "docker", "kubernetes",
-    "rust", "python", "javascript", "typescript", "golang", "c++", "java",
-    "ruby", "php", "swift", "kotlin", "linux", "git", "sql", "regex",
-    "sdk", "cli", "json", "yaml", "api", "code", "script",
-    "function", "library", "crate", "package", "compiler", "kernel",
-    "async", "node", "react", "vue", "django", "flask", "postgres",
-    "mysql", "redis", "nginx", "bash", "shell", "terminal", "vec",
+    "npm",
+    "cargo",
+    "pip",
+    "github",
+    "docker",
+    "kubernetes",
+    "rust",
+    "python",
+    "javascript",
+    "typescript",
+    "golang",
+    "c++",
+    "java",
+    "ruby",
+    "php",
+    "swift",
+    "kotlin",
+    "linux",
+    "git",
+    "sql",
+    "regex",
+    "sdk",
+    "cli",
+    "json",
+    "yaml",
+    "api",
+    "code",
+    "script",
+    "function",
+    "library",
+    "crate",
+    "package",
+    "compiler",
+    "kernel",
+    "async",
+    "node",
+    "react",
+    "vue",
+    "django",
+    "flask",
+    "postgres",
+    "mysql",
+    "redis",
+    "nginx",
+    "bash",
+    "shell",
+    "terminal",
+    "vec",
 ];
 const PAPER_SIGNALS: &[&str] = &[
-    "paper", "arxiv", "doi", "journal", "citation", "preprint",
-    "ablation",
+    "paper", "arxiv", "doi", "journal", "citation", "preprint", "ablation",
 ];
 const NEWS_SIGNALS: &[&str] = &[
-    "news", "breaking", "latest", "announced", "dies", "election",
-    "war", "stock",
+    "news",
+    "breaking",
+    "latest",
+    "announced",
+    "dies",
+    "election",
+    "war",
+    "stock",
 ];
 const ENTITY_SIGNALS: &[&str] = &["what is", "who is", "who was", "define", "meaning of"];
 
@@ -52,9 +108,20 @@ const ENTITY_SIGNALS: &[&str] = &["what is", "who is", "who was", "define", "mea
 pub fn is_conceptual(query: &str) -> bool {
     let q = query.to_lowercase();
     const CONCEPT: &[&str] = &[
-        "what is", "who is", "who was", "explained", "explain",
-        "how does", "how do ", "meaning", "concept", "theory",
-        "mechanism", "history of", "difference between", " vs ",
+        "what is",
+        "who is",
+        "who was",
+        "explained",
+        "explain",
+        "how does",
+        "how do ",
+        "meaning",
+        "concept",
+        "theory",
+        "mechanism",
+        "history of",
+        "difference between",
+        " vs ",
     ];
     CONCEPT.iter().any(|s| q.contains(s))
 }
@@ -138,34 +205,70 @@ pub fn domain_prior(intent: Intent, host: &str, query: &str) -> f64 {
     let h = host.strip_prefix("www.").unwrap_or(host);
     let table: &[&str] = match intent {
         Intent::Code => &[
-            "stackoverflow.com", "github.com", "docs.rs", "developer.mozilla.org",
-            "learn.microsoft.com", "doc.rust-lang.org", "pkg.go.dev",
-            "pypi.org", "crates.io", "npmjs.com", "readthedocs.io",
-            "superuser.com", "serverfault.com", "news.ycombinator.com",
+            "stackoverflow.com",
+            "github.com",
+            "docs.rs",
+            "developer.mozilla.org",
+            "learn.microsoft.com",
+            "doc.rust-lang.org",
+            "pkg.go.dev",
+            "pypi.org",
+            "crates.io",
+            "npmjs.com",
+            "readthedocs.io",
+            "superuser.com",
+            "serverfault.com",
+            "news.ycombinator.com",
             "git-scm.com",
         ],
         Intent::Paper => &[
-            "arxiv.org", "semanticscholar.org", "scholar.google.com",
-            "nature.com", "science.org", "acm.org", "ieee.org", "openreview.net",
-            "pubmed.ncbi.nlm.nih.gov", "doi.org",
+            "arxiv.org",
+            "semanticscholar.org",
+            "scholar.google.com",
+            "nature.com",
+            "science.org",
+            "acm.org",
+            "ieee.org",
+            "openreview.net",
+            "pubmed.ncbi.nlm.nih.gov",
+            "doi.org",
         ],
         Intent::News => &[
-            "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk", "nytimes.com",
-            "theguardian.com", "arstechnica.com", "techcrunch.com",
-            "news.ycombinator.com", "bloomberg.com", "wsj.com",
+            "reuters.com",
+            "apnews.com",
+            "bbc.com",
+            "bbc.co.uk",
+            "nytimes.com",
+            "theguardian.com",
+            "arstechnica.com",
+            "techcrunch.com",
+            "news.ycombinator.com",
+            "bloomberg.com",
+            "wsj.com",
         ],
         Intent::Entity => &[
-            "wikipedia.org", "britannica.com", "wikidata.org", "imdb.com",
+            "wikipedia.org",
+            "britannica.com",
+            "wikidata.org",
+            "imdb.com",
         ],
         Intent::Web => &[
             // Authoritative explainers — SEO-gamed titles
             // win BM25 otherwise.
-            "cloudflare.com", "developer.mozilla.org", "wikipedia.org",
-            "learn.microsoft.com", "aws.amazon.com", "kubernetes.io",
-            "ietf.org", "rfc-editor.org",
+            "cloudflare.com",
+            "developer.mozilla.org",
+            "wikipedia.org",
+            "learn.microsoft.com",
+            "aws.amazon.com",
+            "kubernetes.io",
+            "ietf.org",
+            "rfc-editor.org",
         ],
     };
-    let intent_prior: f64 = if table.iter().any(|d| h == *d || h.ends_with(&format!(".{d}"))) {
+    let intent_prior: f64 = if table
+        .iter()
+        .any(|d| h == *d || h.ends_with(&format!(".{d}")))
+    {
         1.0
     } else {
         0.0
@@ -183,12 +286,17 @@ pub fn domain_prior(intent: Intent, host: &str, query: &str) -> f64 {
 /// trust these domains. Advisory: it can only LIFT a
 /// canonical result, never hide anything.
 const UTILITY_WORDS: &[&str] = &[
-    "how to", "fix", "repair", "install", "replace", "clean",
-    "build", "make", "remove",
+    "how to", "fix", "repair", "install", "replace", "clean", "build", "make", "remove",
 ];
 const DIY: &[&str] = &[
-    "ifixit.com", "wikihow.com", "thisoldhouse.com", "familyhandyman.com",
-    "homedepot.com", "lowes.com", "thespruce.com", "hgtv.com",
+    "ifixit.com",
+    "wikihow.com",
+    "thisoldhouse.com",
+    "familyhandyman.com",
+    "homedepot.com",
+    "lowes.com",
+    "thespruce.com",
+    "hgtv.com",
     "instructables.com",
 ];
 
@@ -197,7 +305,10 @@ pub fn utility_prior(query: &str, host: &str) -> f64 {
     if !UTILITY_WORDS.iter().any(|w| q.contains(w)) {
         return 0.0;
     }
-    if DIY.iter().any(|d| host == *d || host.ends_with(&format!(".{d}"))) {
+    if DIY
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+    {
         1.0
     } else {
         0.0
@@ -208,7 +319,15 @@ pub fn utility_prior(query: &str, host: &str) -> f64 {
 /// question scaffolding). Goes only to top-trust engines.
 pub fn variant(query: &str) -> Option<String> {
     let mut q = query.to_string();
-    for pre in ["how to ", "how do i ", "how do you ", "what is ", "who is ", "why does ", "why is "] {
+    for pre in [
+        "how to ",
+        "how do i ",
+        "how do you ",
+        "what is ",
+        "who is ",
+        "why does ",
+        "why is ",
+    ] {
         if q.to_lowercase().starts_with(pre) {
             q = q[pre.len()..].to_string();
             break;
@@ -234,7 +353,10 @@ mod tests {
         // Non-code how-tos MUST stay Web (the faucet bug).
         assert_eq!(detect("how to fix a leaking kitchen faucet"), Intent::Web);
         assert_eq!(detect("how to install a ceiling fan"), Intent::Web);
-        assert_eq!(detect("how to fix wifi router keeps disconnecting"), Intent::Web);
+        assert_eq!(
+            detect("how to fix wifi router keeps disconnecting"),
+            Intent::Web
+        );
         assert_eq!(detect("how to repair drywall hole"), Intent::Web);
         assert_eq!(detect("best budget mechanical keyboard 2026"), Intent::Web);
         // Real code queries MUST stay Code.
@@ -248,7 +370,13 @@ mod tests {
         assert_eq!(detect("how does japanese pitch accent work"), Intent::Web);
         // News / paper stay theirs.
         assert_eq!(detect("ukraine war latest news"), Intent::News);
-        assert_eq!(detect("attention is all you need transformer paper"), Intent::Paper);
-        assert_eq!(detect("retrieval augmented generation paper"), Intent::Paper);
+        assert_eq!(
+            detect("attention is all you need transformer paper"),
+            Intent::Paper
+        );
+        assert_eq!(
+            detect("retrieval augmented generation paper"),
+            Intent::Paper
+        );
     }
 }

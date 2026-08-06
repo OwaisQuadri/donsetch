@@ -108,7 +108,7 @@ pub fn analyze_pixels(bmp: &PageBitmap, lines: &PageLines) -> FusionData {
         .regions(dx, dy, min_area.max(4))
         .into_iter()
         .map(|r| {
-            let (x0, y0, x1, y1) = (r.x0 as i32, r.y0 as i32, r.x1 as i32, r.y1 as i32);
+            let (x0, y0, x1, y1) = (r.x0, r.y0, r.x1, r.y1);
             // Channels: full-span zero-ink runs inside this region. The
             // min width ≈ 2px so single-glyph serifs can't fake a gutter.
             let min_ch = 3usize;
@@ -262,7 +262,11 @@ pub fn reading_order(page: &PageLines, fusion: &FusionData) -> Vec<Line> {
                 la.y0
                     .partial_cmp(&lb.y0)
                     .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(la.x0.partial_cmp(&lb.x0).unwrap_or(std::cmp::Ordering::Equal))
+                    .then(
+                        la.x0
+                            .partial_cmp(&lb.x0)
+                            .unwrap_or(std::cmp::Ordering::Equal),
+                    )
             });
             for i in ids {
                 out.push(page.lines[i].clone());
@@ -281,9 +285,7 @@ pub fn reading_order(page: &PageLines, fusion: &FusionData) -> Vec<Line> {
                 .position(|o| o.y0 > l.y1 + 0.5 && (o.x0 - l.x0).abs() < 30.0)
                 .unwrap_or_else(|| {
                     // Fallback: first line whose baseline region starts below.
-                    out.iter()
-                        .position(|o| o.y0 > l.y0)
-                        .unwrap_or(out.len())
+                    out.iter().position(|o| o.y0 > l.y0).unwrap_or(out.len())
                 });
             let pos = pos.min(out.len());
             out.insert(pos, l.clone());

@@ -42,7 +42,11 @@ impl std::fmt::Display for PdfFailure {
             PdfFailure::Encrypted => write!(f, "pdf: encrypted document (password required)"),
             PdfFailure::Corrupt(msg) => write!(f, "pdf: {msg}"),
             PdfFailure::TooLarge(n) => {
-                write!(f, "pdf: document exceeds size limit ({} MB)", n / 1024 / 1024)
+                write!(
+                    f,
+                    "pdf: document exceeds size limit ({} MB)",
+                    n / 1024 / 1024
+                )
             }
             PdfFailure::NotPdf => write!(f, "pdf: bytes do not look like a PDF"),
         }
@@ -102,7 +106,11 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
     let mut all_widgets: Vec<(usize, forms::FormWidget)> = Vec::new();
     let mut rotated_pages = 0usize;
     let (raw, ()) = match engine::load_document(bytes, &opts, |input| {
-        let engine::PageInput { chars, bitmap, widgets } = input;
+        let engine::PageInput {
+            chars,
+            bitmap,
+            widgets,
+        } = input;
         raw_chars_total += chars.chars.len();
         // Trust audit BEFORE canonicalization (rotation does not change it,
         // but freeze the conceptual order: audit the raw stream).
@@ -149,7 +157,9 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
         Err(LoadError::Encrypted) => return Err(PdfFailure::Encrypted),
         Err(LoadError::NotPdf) => return Err(PdfFailure::NotPdf),
         Err(LoadError::Corrupt(code)) => {
-            return Err(PdfFailure::Corrupt(format!("corrupt document (pdfium error {code})")))
+            return Err(PdfFailure::Corrupt(format!(
+                "corrupt document (pdfium error {code})"
+            )));
         }
     };
 
@@ -186,8 +196,15 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
         .collect::<Vec<_>>()
         .join(" ");
     let script_hint: &str = if [
-        "mangal", "nirmala", "devanagari", "kohinoor", "aparajita", "gargi", "kalimati",
-        "preeti", "kantipur",
+        "mangal",
+        "nirmala",
+        "devanagari",
+        "kohinoor",
+        "aparajita",
+        "gargi",
+        "kalimati",
+        "preeti",
+        "kantipur",
     ]
     .iter()
     .any(|k| font_names_l.contains(k))
@@ -195,8 +212,19 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
         "deva"
     } else if doc_cjk_hint
         || [
-            "simsun", "simhei", "kaiti", "ms gothic", "ms mincho", "meiryo", "malgun",
-            "nanum", "gulim", "noto sans cjk", "wenquanyi", "uming", "ukai",
+            "simsun",
+            "simhei",
+            "kaiti",
+            "ms gothic",
+            "ms mincho",
+            "meiryo",
+            "malgun",
+            "nanum",
+            "gulim",
+            "noto sans cjk",
+            "wenquanyi",
+            "uming",
+            "ukai",
         ]
         .iter()
         .any(|k| font_names_l.contains(k))
@@ -228,7 +256,11 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
     let mut ocr_failed = false;
     let mut decided_hint: Option<&'static str> = None;
     if std::env::var("DONSHEET_DEBUG").is_ok() {
-        eprintln!("[ocr] candidates: {:?} (enabled={})", needs_ocr, ocr::enabled());
+        eprintln!(
+            "[ocr] candidates: {:?} (enabled={})",
+            needs_ocr,
+            ocr::enabled()
+        );
     }
     if !needs_ocr.is_empty() && ocr::enabled() {
         needs_ocr.truncate(ocr::max_pages());
@@ -272,7 +304,10 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
                         }
                         Ok((_olines, _kind)) => {
                             if std::env::var("DONSHEET_DEBUG").is_ok() {
-                                eprintln!("[ocr] page {pi}: zero usable lines in {:?}", t0.elapsed());
+                                eprintln!(
+                                    "[ocr] page {pi}: zero usable lines in {:?}",
+                                    t0.elapsed()
+                                );
                             }
                         }
                         Err(e) => {
@@ -346,7 +381,12 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
     }
     let garbage_pages = pages
         .iter()
-        .filter(|p| p.fusion.as_ref().map(|f| f.garbage_ratio < 0.6).unwrap_or(false))
+        .filter(|p| {
+            p.fusion
+                .as_ref()
+                .map(|f| f.garbage_ratio < 0.6)
+                .unwrap_or(false)
+        })
         .count();
     if garbage_pages > 0 {
         notes.push(format!(
@@ -373,7 +413,11 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
             vertical_pages += 1;
         }
         if dbg {
-            eprintln!("[parse] page {} ordering ({} lines)", p.index, p.lines.len());
+            eprintln!(
+                "[parse] page {} ordering ({} lines)",
+                p.index,
+                p.lines.len()
+            );
         }
         let mut ordered = match p.fusion.as_ref() {
             Some(f) if !f.regions.is_empty() => fusion::reading_order(p, f),
@@ -425,8 +469,7 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
     }
 
     // Font context across the document.
-    let all_lines: Vec<&layout::Line> =
-        ordered_by_page.iter().flat_map(|v| v.iter()).collect();
+    let all_lines: Vec<&layout::Line> = ordered_by_page.iter().flat_map(|v| v.iter()).collect();
     let ctx = blocks::font_ctx(&all_lines);
 
     // Semantic blocks.

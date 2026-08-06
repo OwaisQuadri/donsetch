@@ -120,17 +120,22 @@ fn classify_wall(
     // articles about Akamai Technologies.
     if text.contains("reference #") && text.contains("errors.edgesuite.net")
         || text.contains("_abck")
-        || header(headers, "x-akamai-transformed").is_some()
-            && (status == 403 || status == 503)
+        || header(headers, "x-akamai-transformed").is_some() && (status == 403 || status == 503)
     {
         return Verdict::Challenge(Vendor::Akamai);
     }
     // PerimeterX / HUMAN
-    if text.contains("perimeterx") || text.contains("px-captcha") || text.contains("human-challenge") {
+    if text.contains("perimeterx")
+        || text.contains("px-captcha")
+        || text.contains("human-challenge")
+    {
         return Verdict::Challenge(Vendor::PerimeterX);
     }
     // Imperva / Incapsula
-    if text.contains("incapsula") || text.contains("_incapsula_resource") || text.contains("imperva") {
+    if text.contains("incapsula")
+        || text.contains("_incapsula_resource")
+        || text.contains("imperva")
+    {
         return Verdict::Challenge(Vendor::Imperva);
     }
     // Sucuri
@@ -162,9 +167,7 @@ fn classify_wall(
     // is never this tiny with a challenge form on it.
     if text.len() < 16_384
         && text.contains("captcha")
-        && (text.contains("verification")
-            || text.contains("challenge")
-            || text.contains("robot"))
+        && (text.contains("verification") || text.contains("challenge") || text.contains("robot"))
     {
         return Verdict::Challenge(Vendor::Generic);
     }

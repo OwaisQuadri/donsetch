@@ -48,8 +48,7 @@ pub fn suppress_furniture(pages: &mut [PageLines]) {
     if pages.len() < 4 {
         return;
     }
-    let mut hist: std::collections::HashMap<(String, u8), usize> =
-        std::collections::HashMap::new(); // (normtext, 0=top|1=bottom) -> page count
+    let mut hist: std::collections::HashMap<(String, u8), usize> = std::collections::HashMap::new(); // (normtext, 0=top|1=bottom) -> page count
     for p in pages.iter() {
         let mut seen_here: std::collections::HashSet<(String, u8)> =
             std::collections::HashSet::new();
@@ -97,13 +96,14 @@ pub fn suppress_furniture(pages: &mut [PageLines]) {
     // suppress any SHORT band line containing a high-frequency band
     // bigram. Lines >90 chars are live content and never family-killed.
     if pages.len() >= 4 {
-        let mut bfreq: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
+        let mut bfreq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let sample = pages.len().min(6);
         for p in pages.iter().take(sample) {
             let h = p.height;
-            let mut seen: [std::collections::HashSet<String>; 2] =
-                [std::collections::HashSet::new(), std::collections::HashSet::new()];
+            let mut seen: [std::collections::HashSet<String>; 2] = [
+                std::collections::HashSet::new(),
+                std::collections::HashSet::new(),
+            ];
             for l in &p.lines {
                 let band = if l.y1 <= h * 0.10 {
                     Some(0usize)
@@ -155,7 +155,9 @@ pub fn page_order(mut lines: Vec<Line>) -> Vec<Line> {
     // Fast path: tiny pages sort directly.
     if lines.len() < 6 {
         lines.sort_by(|a, b| {
-            a.y0.total_cmp(&b.y0).then(a.x0.total_cmp(&b.x0)).then(a.order.cmp(&b.order))
+            a.y0.total_cmp(&b.y0)
+                .then(a.x0.total_cmp(&b.x0))
+                .then(a.order.cmp(&b.order))
         });
         return lines;
     }
@@ -187,7 +189,9 @@ fn base_sort(lines: &mut [Line]) {
         // sloppy y-bucket first (quarter of size), then x, then order
         let ya = a.y0;
         let yb = b.y0;
-        ya.total_cmp(&yb).then(a.x0.total_cmp(&b.x0)).then(a.order.cmp(&b.order))
+        ya.total_cmp(&yb)
+            .then(a.x0.total_cmp(&b.x0))
+            .then(a.order.cmp(&b.order))
     });
 }
 
@@ -226,7 +230,13 @@ fn widest_gap(lines: &[Line], vertical_split: bool, min_width: f32) -> Option<(f
     // Interval sweep of bboxes projected onto the split axis.
     let mut iv: Vec<(f32, f32)> = lines
         .iter()
-        .map(|l| if vertical_split { (l.x0, l.x1) } else { (l.y0, l.y1) })
+        .map(|l| {
+            if vertical_split {
+                (l.x0, l.x1)
+            } else {
+                (l.y0, l.y1)
+            }
+        })
         .collect();
     iv.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut best: Option<(f32, f32)> = None; // (mid, width)

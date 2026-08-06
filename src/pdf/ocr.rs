@@ -88,6 +88,7 @@ mod imp {
     use sha2::Digest;
     use std::sync::{Mutex, OnceLock};
 
+    #[allow(clippy::upper_case_acronyms)]
     type OAROCR = oar_ocr::oarocr::OAROCR;
 
     static ENGINE_EN: OnceLock<Result<OAROCR, String>> = OnceLock::new();
@@ -116,10 +117,10 @@ mod imp {
     fn fetch_model(m: &Model, dir: &std::path::Path) -> Result<PathBuf, String> {
         let dst = dir.join(m.name);
         if dst.exists() {
-            if let Ok(h) = sha256_file(&dst) {
-                if h == m.sha256 {
-                    return Ok(dst);
-                }
+            if let Ok(h) = sha256_file(&dst)
+                && h == m.sha256
+            {
+                return Ok(dst);
             }
             let _ = std::fs::remove_file(&dst);
         }
@@ -164,7 +165,10 @@ mod imp {
         let (rec, dict) = match kind {
             RecKind::En => (fetch_model(&REC_EN, &dir)?, fetch_model(&DICT_EN, &dir)?),
             RecKind::Zh => (fetch_model(&REC_ZH, &dir)?, fetch_model(&DICT_ZH, &dir)?),
-            RecKind::Deva => (fetch_model(&REC_DEVA, &dir)?, fetch_model(&DICT_DEVA, &dir)?),
+            RecKind::Deva => (
+                fetch_model(&REC_DEVA, &dir)?,
+                fetch_model(&DICT_DEVA, &dir)?,
+            ),
         };
         Ok((det, rec, dict))
     }
@@ -268,18 +272,9 @@ pub fn ocr_page(
         return Err("ocr disabled".to_string());
     }
     match script_hint {
-        "en" => Ok((
-            imp::run_ocr(bitmap, &imp::RecKind::En)?,
-            "en",
-        )),
-        "zh" => Ok((
-            imp::run_ocr(bitmap, &imp::RecKind::Zh)?,
-            "zh",
-        )),
-        "deva" => Ok((
-            imp::run_ocr(bitmap, &imp::RecKind::Deva)?,
-            "deva",
-        )),
+        "en" => Ok((imp::run_ocr(bitmap, &imp::RecKind::En)?, "en")),
+        "zh" => Ok((imp::run_ocr(bitmap, &imp::RecKind::Zh)?, "zh")),
+        "deva" => Ok((imp::run_ocr(bitmap, &imp::RecKind::Deva)?, "deva")),
         _ => {
             // Cascade: each candidate must beat a confidence floor to hold.
             let en = imp::run_ocr(bitmap, &imp::RecKind::En)?;
@@ -305,7 +300,10 @@ pub fn ocr_page(
 }
 
 #[cfg(not(feature = "ocr"))]
-pub fn ocr_page(_bitmap: &PageBitmap, _script_hint: &str) -> Result<(Vec<OcrLine>, &'static str), String> {
+pub fn ocr_page(
+    _bitmap: &PageBitmap,
+    _script_hint: &str,
+) -> Result<(Vec<OcrLine>, &'static str), String> {
     Err("ocr feature not compiled".to_string())
 }
 

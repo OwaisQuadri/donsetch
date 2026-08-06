@@ -16,16 +16,46 @@ use std::os::raw::{c_char, c_double, c_float, c_int, c_uint, c_ulong, c_ushort, 
 
 // ---- opaque handle types -------------------------------------------------
 
-#[repr(C)] pub struct FpdfDocumentT { _private: [u8; 0] }
-#[repr(C)] pub struct FpdfPageT { _private: [u8; 0] }
-#[repr(C)] pub struct FpdfTextPageT { _private: [u8; 0] }
-#[repr(C)] pub struct FpdfBookmarkT { _private: [u8; 0] }
-#[repr(C)] pub struct FpdfDestT { _private: [u8; 0] }
-#[repr(C)] pub struct FpdfPageObjectT { _private: [u8; 0] }
-#[repr(C)] pub struct FpdfActionT { _private: [u8; 0] }
-#[repr(C)] pub struct FpdfBitmapT { _private: [u8; 0] }
-#[repr(C)] pub struct FpdfAnnotationT { _private: [u8; 0] }
-#[repr(C)] pub struct FpdfFormT { _private: [u8; 0] }
+#[repr(C)]
+pub struct FpdfDocumentT {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct FpdfPageT {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct FpdfTextPageT {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct FpdfBookmarkT {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct FpdfDestT {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct FpdfPageObjectT {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct FpdfActionT {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct FpdfBitmapT {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct FpdfAnnotationT {
+    _private: [u8; 0],
+}
+#[repr(C)]
+pub struct FpdfFormT {
+    _private: [u8; 0],
+}
 
 pub type FpdfDocument = *mut FpdfDocumentT;
 pub type FpdfPage = *mut FpdfPageT;
@@ -205,10 +235,14 @@ unsafe extern "C" {
         buffer: *mut c_void,
         buflen: c_ulong,
     ) -> c_ulong;
-    pub fn FPDFBookmark_GetFirstChild(document: FpdfDocument, bookmark: FpdfBookmark)
-        -> FpdfBookmark;
-    pub fn FPDFBookmark_GetNextSibling(document: FpdfDocument, bookmark: FpdfBookmark)
-        -> FpdfBookmark;
+    pub fn FPDFBookmark_GetFirstChild(
+        document: FpdfDocument,
+        bookmark: FpdfBookmark,
+    ) -> FpdfBookmark;
+    pub fn FPDFBookmark_GetNextSibling(
+        document: FpdfDocument,
+        bookmark: FpdfBookmark,
+    ) -> FpdfBookmark;
     pub fn FPDFBookmark_GetTitle(
         bookmark: FpdfBookmark,
         buffer: *mut c_void,
@@ -259,9 +293,7 @@ unsafe extern "C" {
         document: FpdfDocument,
         form_info: *mut FpdfFormfillInfo,
     ) -> FpdfFormhandle;
-    pub fn FPDFDOC_ExitFormFillEnvironment(
-        form_handle: FpdfFormhandle,
-    );
+    pub fn FPDFDOC_ExitFormFillEnvironment(form_handle: FpdfFormhandle);
     pub fn FPDFPage_GetAnnotCount(page: FpdfPage) -> c_int;
     pub fn FPDFPage_GetAnnot(page: FpdfPage, index: c_int) -> FpdfAnnotation;
     pub fn FPDFPage_CloseAnnot(annot: FpdfAnnotation);

@@ -43,15 +43,33 @@ impl H2Conn {
         // SETTINGS frame
         let slen = settings.len() as u32;
         buf.extend_from_slice(&[
-            (slen >> 16) as u8, (slen >> 8) as u8, slen as u8,
-            SETTINGS, 0, 0, 0, 0, 0,
+            (slen >> 16) as u8,
+            (slen >> 8) as u8,
+            slen as u8,
+            SETTINGS,
+            0,
+            0,
+            0,
+            0,
+            0,
         ]);
         buf.extend_from_slice(&settings);
         // WINDOW_UPDATE frame (stream 0)
         let inc = h2.conn_window_update;
         buf.extend_from_slice(&[
-            0, 0, 4, WINDOW_UPDATE, 0, 0, 0, 0, 0,
-            ((inc >> 24) & 0x7f) as u8, (inc >> 16) as u8, (inc >> 8) as u8, inc as u8,
+            0,
+            0,
+            4,
+            WINDOW_UPDATE,
+            0,
+            0,
+            0,
+            0,
+            0,
+            ((inc >> 24) & 0x7f) as u8,
+            (inc >> 16) as u8,
+            (inc >> 8) as u8,
+            inc as u8,
         ]);
         stream.write_all(&buf).await?;
         stream.flush().await?;
@@ -187,9 +205,15 @@ impl H2Conn {
                     return Err(FetchError::Http("h2 goaway".into()));
                 }
                 PUSH_PROMISE => {
-                    write_frame(&mut self.stream, RST_STREAM, 0, hdr.stream_id, &stream_id.to_be_bytes())
-                        .await
-                        .ok();
+                    write_frame(
+                        &mut self.stream,
+                        RST_STREAM,
+                        0,
+                        hdr.stream_id,
+                        &stream_id.to_be_bytes(),
+                    )
+                    .await
+                    .ok();
                 }
                 PRIORITY => {}
                 _ => {}
@@ -198,6 +222,10 @@ impl H2Conn {
         if !got_headers {
             return Err(FetchError::Http("h2: stream ended without headers".into()));
         }
-        Ok(H2Response { status, headers: resp_headers, body })
+        Ok(H2Response {
+            status,
+            headers: resp_headers,
+            body,
+        })
     }
 }

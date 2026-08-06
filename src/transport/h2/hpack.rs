@@ -120,7 +120,11 @@ fn decode_string(buf: &[u8], pos: &mut usize) -> Result<Vec<u8>, FetchError> {
     }
     let raw = &buf[*pos..*pos + len];
     *pos += len;
-    if huff { huffman_decode(raw) } else { Ok(raw.to_vec()) }
+    if huff {
+        huffman_decode(raw)
+    } else {
+        Ok(raw.to_vec())
+    }
 }
 
 // ---------- dynamic table ----------
@@ -133,7 +137,11 @@ struct DynTable {
 
 impl DynTable {
     fn new(max: usize) -> Self {
-        Self { entries: Vec::new(), size: 0, max }
+        Self {
+            entries: Vec::new(),
+            size: 0,
+            max,
+        }
     }
     fn insert(&mut self, name: Vec<u8>, value: Vec<u8>) {
         let esz = name.len() + value.len() + 32;
@@ -172,7 +180,9 @@ impl Default for Encoder {
 
 impl Encoder {
     pub fn new() -> Self {
-        Self { dyn_table: DynTable::new(DYNAMIC_MAX) }
+        Self {
+            dyn_table: DynTable::new(DYNAMIC_MAX),
+        }
     }
 
     /// Encode a header list in order. Indexed for exact static matches,
@@ -220,7 +230,9 @@ impl Default for Decoder {
 
 impl Decoder {
     pub fn new() -> Self {
-        Self { dyn_table: DynTable::new(4096) } // server-controlled via SETTINGS
+        Self {
+            dyn_table: DynTable::new(4096),
+        } // server-controlled via SETTINGS
     }
 
     pub fn decode(&mut self, block: &[u8]) -> Result<Vec<(String, String)>, FetchError> {
@@ -235,17 +247,22 @@ impl Decoder {
                     .dyn_table
                     .get(idx)
                     .ok_or_else(|| FetchError::Http(format!("hpack: bad index {idx}")))?;
-                headers.push((String::from_utf8_lossy(&n).into(), String::from_utf8_lossy(&v).into()));
+                headers.push((
+                    String::from_utf8_lossy(&n).into(),
+                    String::from_utf8_lossy(&v).into(),
+                ));
             } else if b & 0xc0 == 0x40 {
                 // Literal, incremental indexing.
                 let (name, value) = self.decode_literal(block, &mut pos, 6)?;
-                self.dyn_table.insert(name.clone().into_bytes(), value.clone().into_bytes());
+                self.dyn_table
+                    .insert(name.clone().into_bytes(), value.clone().into_bytes());
                 headers.push((name, value));
             } else if b & 0xe0 == 0x20 {
                 // Dynamic table size update.
                 let new_max = decode_int(block, &mut pos, 5)? as usize;
                 self.dyn_table.max = new_max;
-                while self.dyn_table.size > self.dyn_table.max && !self.dyn_table.entries.is_empty() {
+                while self.dyn_table.size > self.dyn_table.max && !self.dyn_table.entries.is_empty()
+                {
                     let (n, v) = self.dyn_table.entries.remove(0);
                     self.dyn_table.size -= n.len() + v.len() + 32;
                 }

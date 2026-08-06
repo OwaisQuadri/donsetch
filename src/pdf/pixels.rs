@@ -147,16 +147,15 @@ impl InkMask {
     // ---- separable morphology -------------------------------------------
 
     /// Sliding-window maximum along one row into `out`.
+    #[allow(clippy::needless_range_loop)]
     fn dilate_row_max(&self, y: usize, half: usize, out: &mut [u8]) {
         let row = &self.buf[y * self.w..(y + 1) * self.w];
         let w = self.w;
         let mut dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
         let k = 2 * half + 1;
         for x in 0..w + half {
-            if x < w {
-                if row[x] == 1 {
-                    dq.push_back(x);
-                }
+            if x < w && row[x] == 1 {
+                dq.push_back(x);
             }
             let lo = x as i64 - k as i64;
             while let Some(&f) = dq.front() {
@@ -182,7 +181,13 @@ impl InkMask {
         for y in 0..self.h {
             self.dilate_row_max(y, half, &mut out);
         }
-        InkMask { w: self.w, h: self.h, sx: self.sx, sy: self.sy, buf: out }
+        InkMask {
+            w: self.w,
+            h: self.h,
+            sx: self.sx,
+            sy: self.sy,
+            buf: out,
+        }
     }
 
     /// Vertical dilation by radius `half` pixels.
@@ -213,7 +218,13 @@ impl InkMask {
                 }
             }
         }
-        InkMask { w: self.w, h: self.h, sx: self.sx, sy: self.sy, buf: out }
+        InkMask {
+            w: self.w,
+            h: self.h,
+            sx: self.sx,
+            sy: self.sy,
+            buf: out,
+        }
     }
 
     /// Rect-kernel dilation (words → lines → blocks), separable.
@@ -355,12 +366,26 @@ impl InkMask {
     /// Vertical whitespace channels inside a rect: contiguous zero-ink
     /// column runs at least `min_width_px` wide. The borderless-table
     /// columnizer's ground truth.
-    pub fn v_channels(&self, x0: i32, y0: i32, x1: i32, y1: i32, min_width: usize) -> Vec<(i32, i32)> {
+    pub fn v_channels(
+        &self,
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+        min_width: usize,
+    ) -> Vec<(i32, i32)> {
         self.channels_generic(x0, y0, x1, y1, min_width, true)
     }
 
     /// Horizontal whitespace channels inside a rect (row splitting).
-    pub fn h_channels(&self, x0: i32, y0: i32, x1: i32, y1: i32, min_width: usize) -> Vec<(i32, i32)> {
+    pub fn h_channels(
+        &self,
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+        min_width: usize,
+    ) -> Vec<(i32, i32)> {
         self.channels_generic(x0, y0, x1, y1, min_width, false)
     }
 
@@ -436,6 +461,7 @@ impl InkMask {
         let mut runs: Vec<Run> = Vec::new();
         let mut prev_run_ids: Vec<(i32, i32, u32)> = Vec::new();
 
+        #[allow(clippy::ptr_arg)]
         fn find(runs: &mut Vec<Run>, mut i: u32) -> u32 {
             while runs[i as usize].parent != i {
                 let p = runs[i as usize].parent;
@@ -510,10 +536,7 @@ impl InkMask {
                 })
                 .area += runs[i].area;
         }
-        roots
-            .into_values()
-            .filter(|r| r.area >= min_area)
-            .collect()
+        roots.into_values().filter(|r| r.area >= min_area).collect()
     }
 }
 

@@ -13,16 +13,60 @@ use url::Url;
 /// Query keys that never change page content. Stripped so the
 /// same page reachable with 50 tracking variants dedups to 1.
 const TRACKING_PARAMS: &[&str] = &[
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "utm_id", "utm_reader", "utm_viz_id", "utm_pubreferrer", "utm_swu",
-    "fbclid", "gclid", "gclsrc", "dclid", "gbraid", "wbraid",
-    "msclkid", "twclid", "li_fat_id", "mc_cid", "mc_eid",
-    "iref", "ref_src", "ref_url", "_ga", "_gl", "_hsenc", "_hsmi",
-    "hsa_cam", "hsa_grp", "hsa_mt", "hsa_src", "hsa_ad", "hsa_acc",
-    "hsa_net", "hsa_ver", "hsa_la", "hsa_ol", "hsa_kw",
-    "igshid", "si", "spm", "scm", "bbid", "ocid", "oly_enc_id",
-    "oly_anon_id", "vero_id", "wickedid", "wickedsource", "wt_mc",
-    "yclid", "zanpid", "guccounter",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "utm_id",
+    "utm_reader",
+    "utm_viz_id",
+    "utm_pubreferrer",
+    "utm_swu",
+    "fbclid",
+    "gclid",
+    "gclsrc",
+    "dclid",
+    "gbraid",
+    "wbraid",
+    "msclkid",
+    "twclid",
+    "li_fat_id",
+    "mc_cid",
+    "mc_eid",
+    "iref",
+    "ref_src",
+    "ref_url",
+    "_ga",
+    "_gl",
+    "_hsenc",
+    "_hsmi",
+    "hsa_cam",
+    "hsa_grp",
+    "hsa_mt",
+    "hsa_src",
+    "hsa_ad",
+    "hsa_acc",
+    "hsa_net",
+    "hsa_ver",
+    "hsa_la",
+    "hsa_ol",
+    "hsa_kw",
+    "igshid",
+    "si",
+    "spm",
+    "scm",
+    "bbid",
+    "ocid",
+    "oly_enc_id",
+    "oly_anon_id",
+    "vero_id",
+    "wickedid",
+    "wickedsource",
+    "wt_mc",
+    "yclid",
+    "zanpid",
+    "guccounter",
 ];
 
 /// Lowercase schemes allowed in the crawl corpus.
@@ -167,7 +211,10 @@ impl Default for FrontierQueue {
 
 impl FrontierQueue {
     pub fn new() -> Self {
-        Self { heap: BinaryHeap::new(), seen: HashSet::new() }
+        Self {
+            heap: BinaryHeap::new(),
+            seen: HashSet::new(),
+        }
     }
 
     /// Push a URL if its normalized form is new.
@@ -176,7 +223,11 @@ impl FrontierQueue {
         if !self.seen.insert(key.clone()) {
             return false;
         }
-        self.heap.push(Frontier { url: key, score, depth });
+        self.heap.push(Frontier {
+            url: key,
+            score,
+            depth,
+        });
         true
     }
 
@@ -211,7 +262,10 @@ impl FrontierQueue {
     /// Snapshot all queued entries (url, score, depth) for a
     /// resume token. Does not drain — the seen-set survives.
     pub fn snapshot_entries(&self) -> Vec<(String, f64, u32)> {
-        self.heap.iter().map(|f| (f.url.clone(), f.score, f.depth)).collect()
+        self.heap
+            .iter()
+            .map(|f| (f.url.clone(), f.score, f.depth))
+            .collect()
     }
 
     #[cfg(test)]

@@ -33,7 +33,9 @@ impl CookieJar {
             }
             let mut parts = v.split(';');
             let Some(pair) = parts.next() else { continue };
-            let Some((name, value)) = pair.split_once('=') else { continue };
+            let Some((name, value)) = pair.split_once('=') else {
+                continue;
+            };
             let name = name.trim().to_string();
             let value = value.trim().to_string();
             if name.is_empty() {
@@ -54,8 +56,7 @@ impl CookieJar {
                         }
                         "path" => path = val.trim().to_string(),
                         "max-age" => {
-                            let secs: i64 =
-                                val.trim().parse().unwrap_or(1);
+                            let secs: i64 = val.trim().parse().unwrap_or(1);
                             if secs <= 0 {
                                 expired = true;
                             } else {
@@ -76,7 +77,14 @@ impl CookieJar {
             self.cookies
                 .retain(|c| !(c.name == name && c.domain == domain && c.path == path));
             if !expired {
-                self.cookies.push(Cookie { name, value, domain, path, host_only, expires_at });
+                self.cookies.push(Cookie {
+                    name,
+                    value,
+                    domain,
+                    path,
+                    host_only,
+                    expires_at,
+                });
             }
         }
     }
@@ -85,13 +93,7 @@ impl CookieJar {
     /// clearance handoff). Leading-dot domains are
     /// subdomain cookies; bare domains are host-only.
     /// `expires_at` carries the real CDP expiry.
-    pub fn store_raw(
-        &mut self,
-        name: &str,
-        value: &str,
-        domain: &str,
-        expires_at: Option<u64>,
-    ) {
+    pub fn store_raw(&mut self, name: &str, value: &str, domain: &str, expires_at: Option<u64>) {
         let (dom, host_only) = if let Some(d) = domain.strip_prefix('.') {
             (d.to_string(), false)
         } else {
@@ -115,12 +117,11 @@ impl CookieJar {
         self.cookies
             .iter()
             .filter(|c| {
-                let domain_ok = if c.host_only {
+                if c.host_only {
                     host == c.domain
                 } else {
                     host == c.domain || host.ends_with(&format!(".{}", c.domain))
-                };
-                domain_ok
+                }
             })
             .map(|c| CookieRecord {
                 name: c.name.clone(),

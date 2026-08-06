@@ -16,15 +16,12 @@ struct Stats {
 }
 
 pub fn find_main<'a>(doc: &'a Html) -> Option<ElementRef<'a>> {
-    let body = doc
-        .select(&scraper::Selector::parse("body").ok()?)
-        .next()?;
+    let body = doc.select(&scraper::Selector::parse("body").ok()?).next()?;
     let (body_stats, best) = walk(body, 0);
     if std::env::var_os("DONSIFT_DEBUG").is_some() {
         eprintln!(
             "[donsift] body stats: text={} link={} punct={} paras={}",
-            body_stats.text_len, body_stats.link_text_len,
-            body_stats.punct, body_stats.paras
+            body_stats.text_len, body_stats.link_text_len, body_stats.punct, body_stats.paras
         );
         if let Some((score, el)) = best {
             eprintln!(
@@ -101,10 +98,10 @@ fn walk<'a>(el: ElementRef<'a>, depth: usize) -> (Stats, Option<(f64, ElementRef
                 stats.link_text_len += cs.link_text_len;
                 stats.punct += cs.punct;
                 stats.paras += cs.paras;
-                if let Some((score, cand)) = cb {
-                    if best.is_none_or(|(b, _)| score > b) {
-                        best = Some((score, cand));
-                    }
+                if let Some((score, cand)) = cb
+                    && best.is_none_or(|(b, _)| score > b)
+                {
+                    best = Some((score, cand));
                 }
             }
             _ => {}
@@ -122,8 +119,7 @@ fn walk<'a>(el: ElementRef<'a>, depth: usize) -> (Stats, Option<(f64, ElementRef
     // Candidate scoring. A positive-marked node must beat
     // ancestor wrappers that merely contain it.
     if stats.text_len >= 140 {
-        let link_density =
-            stats.link_text_len as f64 / (stats.text_len.max(1) as f64);
+        let link_density = stats.link_text_len as f64 / (stats.text_len.max(1) as f64);
         let score = stats.text_len as f64 * (1.0 - link_density).max(0.0).powi(2)
             + stats.punct as f64 * 15.0
             + stats.paras as f64 * 40.0

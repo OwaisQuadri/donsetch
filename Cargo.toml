@@ -2,7 +2,7 @@
 name = "donsetch"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "AGPL-3.0"
 description = "Web fetch, search and crawl for AI agents. Custom stealthy HTTP fetch tier on BoringSSL."
 
 [dependencies]
@@ -40,6 +40,9 @@ windows-sys = { version = "0.61", features = ["Win32_System_JobObjects", "Win32_
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli"] }
+
+[build-dependencies]
+sha2 = "0.10"
 
 [profile.release]
 lto = "fat"

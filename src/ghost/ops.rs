@@ -94,9 +94,7 @@ pub async fn solve(
         // Require a real URL and real bytes before any
         // clear vote counts.
         let cur = ghost.current_url().await.unwrap_or_default();
-        let navigated = !cur.is_empty()
-            && !cur.starts_with("about:")
-            && html.len() > 500;
+        let navigated = !cur.is_empty() && !cur.starts_with("about:") && html.len() > 500;
         if !navigated {
             continue;
         }
@@ -106,17 +104,14 @@ pub async fn solve(
         // ~1.5KB, PX ~10KB). ≥30KB + markers = real page
         // that mentions the vendor (nowsecure case).
         let small = html.len() < 30_000;
-        let marker_hit = matches!(
-            verdict,
-            Verdict::Challenge(_) | Verdict::Blocked
-        );
+        let marker_hit = matches!(verdict, Verdict::Challenge(_) | Verdict::Blocked);
         let challenged = small && marker_hit;
 
         if challenged {
-            if vendor.is_none() {
-                if let Verdict::Challenge(v) = &verdict {
-                    vendor = Some(format!("{v:?}").to_lowercase());
-                }
+            if vendor.is_none()
+                && let Verdict::Challenge(v) = &verdict
+            {
+                vendor = Some(format!("{v:?}").to_lowercase());
             }
             clear_streak = 0;
         } else {
@@ -126,8 +121,7 @@ pub async fn solve(
             // for extra certainty; hold for 2 polls.
             clear_streak += 1;
             if clear_streak >= 2 {
-                let cookies =
-                    ghost.cookies().await.unwrap_or_default();
+                let cookies = ghost.cookies().await.unwrap_or_default();
                 ghost.touch();
                 return Ok(SolveOutcome::Solved(SolveResult {
                     cookies,
@@ -148,10 +142,7 @@ pub async fn solve(
                 clear_streak,
             );
             if start.elapsed() < Duration::from_millis(1600) {
-                eprintln!(
-                    "[ghost] html: {}",
-                    &html[..html.len().min(1200)]
-                );
+                eprintln!("[ghost] html: {}", &html[..html.len().min(1200)]);
             }
         }
 
@@ -190,11 +181,7 @@ pub async fn solve(
 /// RENDER mode: execute a JS shell, return the live DOM.
 /// Success = outerHTML length stable across two polls —
 /// robust for SPAs, no Network domain needed.
-pub async fn render(
-    ghost: &mut Ghost,
-    url: &str,
-    timeout: Duration,
-) -> Result<String, FetchError> {
+pub async fn render(ghost: &mut Ghost, url: &str, timeout: Duration) -> Result<String, FetchError> {
     let start = Instant::now();
     ghost.navigate(url).await?;
     let mut prev_len = 0usize;
@@ -231,8 +218,7 @@ pub async fn render(
 /// Fingerprint self-test: navigate our local page,
 /// read results back from the DOM (no Runtime ever).
 pub async fn selftest(ghost: &mut Ghost) -> Result<String, FetchError> {
-    let page =
-        super::profile_dir().join(format!("selftest-{}.html", std::process::id()));
+    let page = super::profile_dir().join(format!("selftest-{}.html", std::process::id()));
     std::fs::write(&page, include_str!("selftest.html"))
         .map_err(|e| FetchError::ghost(format!("selftest: {e}")))?;
     let url = format!("file://{}", page.display());
@@ -243,12 +229,12 @@ pub async fn selftest(ghost: &mut Ghost) -> Result<String, FetchError> {
         if let Ok(html) = ghost.outer_html().await {
             // Body holds the JSON; title mirrors it. Take
             // the LAST occurrence (body) to skip <title>.
-            if let Some(a) = html.rfind("{\"webdriver\"") {
-                if let Some(b) = html[a..].find("</body>") {
-                    let json = html[a..a + b].replace("&quot;", "\"");
-                    let _ = std::fs::remove_file(&page);
-                    return Ok(json);
-                }
+            if let Some(a) = html.rfind("{\"webdriver\"")
+                && let Some(b) = html[a..].find("</body>")
+            {
+                let json = html[a..a + b].replace("&quot;", "\"");
+                let _ = std::fs::remove_file(&page);
+                return Ok(json);
             }
         }
     }

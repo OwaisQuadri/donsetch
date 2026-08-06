@@ -143,23 +143,18 @@ pub fn cookies_fresh_at(profile: &DomainProfile, now: u64) -> bool {
 
     // Server-set expiry: the earliest-expiring cookie is the
     // weakest link — if it's past, the batch is stale.
-    if let Some(exp) = profile
-        .cookies
-        .iter()
-        .filter_map(|c| c.expires_at)
-        .min()
+    if let Some(exp) = profile.cookies.iter().filter_map(|c| c.expires_at).min()
+        && now >= exp
     {
-        if now >= exp {
-            return false;
-        }
+        return false;
     }
 
     // Observed lifetime: if cookies died before their stated
     // expiry in the past, trust the observation over the server.
-    if let Some(observed) = profile.observed_lifetime {
-        if now - profile.last_solved >= observed {
-            return false;
-        }
+    if let Some(observed) = profile.observed_lifetime
+        && now - profile.last_solved >= observed
+    {
+        return false;
     }
 
     // Safety cap.
@@ -334,12 +329,7 @@ impl GhostState {
 
     /// Tier 2 solved the wall — store fresh cookies with real
     /// expiry captured from CDP.
-    pub fn record_solved(
-        &mut self,
-        host: &str,
-        cookies: &[CookieRecord],
-        vendor: Option<&str>,
-    ) {
+    pub fn record_solved(&mut self, host: &str, cookies: &[CookieRecord], vendor: Option<&str>) {
         let n = now();
         let p = self.profiles.entry(host.to_string()).or_default();
         p.cookies = cookies.to_vec();
@@ -367,9 +357,7 @@ impl GhostState {
     }
 
     pub fn render_for(&self, url: &str) -> Option<&RenderCache> {
-        self.renders
-            .get(url)
-            .filter(|r| now() - r.at < RENDER_TTL)
+        self.renders.get(url).filter(|r| now() - r.at < RENDER_TTL)
     }
 }
 
@@ -531,7 +519,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(matches!(s.route_for("hard.com"), RouteDecision::SkipToSolve));
+        assert!(matches!(
+            s.route_for("hard.com"),
+            RouteDecision::SkipToSolve
+        ));
     }
 
     #[test]
@@ -547,7 +538,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(matches!(s.route_for("hard.com"), RouteDecision::RecheckCold));
+        assert!(matches!(
+            s.route_for("hard.com"),
+            RouteDecision::RecheckCold
+        ));
     }
 
     // ── observation: convergence ──
@@ -626,9 +620,7 @@ mod tests {
     #[test]
     fn solved_stores_cookies_and_vendor() {
         let mut s = GhostState::default();
-        let cookies = vec![
-            cr("cf_clearance", "tok", ".hard.com", Some(now() + 3600)),
-        ];
+        let cookies = vec![cr("cf_clearance", "tok", ".hard.com", Some(now() + 3600))];
         s.record_solved("hard.com", &cookies, Some("cloudflare"));
         let p = &s.profiles["hard.com"];
         assert!(p.needs_tier2);
@@ -650,7 +642,12 @@ mod tests {
         // Visit 1: unknown → cold → walled → solve
         assert!(matches!(s.route_for(host), RouteDecision::Cold));
         s.record_cold_walled(host, Some("cloudflare"));
-        let cookies = vec![cr("cf_clearance", "tok1", ".cf-protected.com", Some(now + 3600))];
+        let cookies = vec![cr(
+            "cf_clearance",
+            "tok1",
+            ".cf-protected.com",
+            Some(now + 3600),
+        )];
         s.record_solved(host, &cookies, Some("cloudflare"));
 
         // Visit 2: hard + fresh → warm
@@ -660,7 +657,12 @@ mod tests {
         }
 
         // Visit 2 outcome: warm ok → cookies refreshed
-        let refreshed = vec![cr("cf_clearance", "tok2", ".cf-protected.com", Some(now + 7200))];
+        let refreshed = vec![cr(
+            "cf_clearance",
+            "tok2",
+            ".cf-protected.com",
+            Some(now + 7200),
+        )];
         s.record_warm_ok(host, &refreshed);
 
         // Visit 3: still warm (cookies refreshed, still fresh)
@@ -694,8 +696,7 @@ mod tests {
             },
             "renders": {}
         });
-        let old: LegacyState =
-            serde_json::from_str(&legacy_json.to_string()).unwrap();
+        let old: LegacyState = serde_json::from_str(&legacy_json.to_string()).unwrap();
         assert_eq!(old.solved.len(), 1);
         assert_eq!(old.solved["old.com"].cookies[0].0, "cf");
     }

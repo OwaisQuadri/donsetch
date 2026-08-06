@@ -12,10 +12,10 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
         matches!(b, Block::Heading { level: 1, text, .. }
             if Some(text) == meta.title.as_ref())
     });
-    if let Some(t) = &meta.title {
-        if !first_is_title {
-            out.push_str(&format!("# {t}\n"));
-        }
+    if let Some(t) = &meta.title
+        && !first_is_title
+    {
+        out.push_str(&format!("# {t}\n"));
     }
     let mut byline_parts: Vec<&str> = Vec::new();
     if let Some(s) = &meta.site {
@@ -32,23 +32,22 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
         out.push('\n');
     }
     out.push_str(url);
-    out.push_str("\n");
+    out.push('\n');
     // Description as a one-line summary — agents use it to
     // decide relevance before reading the body.
-    if let Some(d) = &meta.description {
-        if d.len() < 300 {
-            out.push_str(&format!("> {d}\n"));
-        }
+    if let Some(d) = &meta.description
+        && d.len() < 300
+    {
+        out.push_str(&format!("> {d}\n"));
     }
-    out.push_str("\n");
+    out.push('\n');
 
     let mut last_path: Vec<String> = Vec::new();
     let mut last_was_heading = true; // frontmatter counts
     let mut title_heading_dropped = false;
     // Cross-block exact-duplicate suppression: badge
     // dupes, repeated teasers. Keyed on normalized text.
-    let mut seen: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for block in kept {
         match block {
             Block::Heading { level, text, .. } => {
@@ -67,7 +66,9 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
                 out.push_str(&format!("{} {text}\n\n", "#".repeat(*level as usize)));
                 last_path = block.path().to_vec();
             }
-            Block::Para { md, link_density, .. } => {
+            Block::Para {
+                md, link_density, ..
+            } => {
                 // Bare-link / one-word lines: pure noise.
                 if md.len() < 25 && *link_density > 0.9 {
                     continue;
@@ -90,21 +91,33 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
                         continue;
                     }
                 }
-                emit_path(&mut out, block.path(), &mut last_path, &mut last_was_heading);
+                emit_path(
+                    &mut out,
+                    block.path(),
+                    &mut last_path,
+                    &mut last_was_heading,
+                );
                 out.push_str(md);
                 out.push_str("\n\n");
             }
-            Block::List { ordered, items, link_density, .. } => {
+            Block::List {
+                ordered,
+                items,
+                link_density,
+                ..
+            } => {
                 // Link-farm drop: many items, all bare links.
                 if items.len() > 6 && *link_density > 0.8 && !opts.include_links {
                     continue;
                 }
-                emit_path(&mut out, block.path(), &mut last_path, &mut last_was_heading);
+                emit_path(
+                    &mut out,
+                    block.path(),
+                    &mut last_path,
+                    &mut last_was_heading,
+                );
                 for (i, item) in items.iter().enumerate() {
-                    let indent: String = item
-                        .chars()
-                        .take_while(|c| *c == ' ')
-                        .collect();
+                    let indent: String = item.chars().take_while(|c| *c == ' ').collect();
                     let body = item.trim_start();
                     let depth = indent.len() / 2;
                     let bullet = if *ordered && depth == 0 {
@@ -116,9 +129,21 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
                 }
                 out.push('\n');
             }
-            Block::Table { headers, rows, truncated, .. } => {
-                emit_path(&mut out, block.path(), &mut last_path, &mut last_was_heading);
-                let cols = headers.len().max(rows.first().map(|r| r.len()).unwrap_or(0));
+            Block::Table {
+                headers,
+                rows,
+                truncated,
+                ..
+            } => {
+                emit_path(
+                    &mut out,
+                    block.path(),
+                    &mut last_path,
+                    &mut last_was_heading,
+                );
+                let cols = headers
+                    .len()
+                    .max(rows.first().map(|r| r.len()).unwrap_or(0));
                 if cols == 0 {
                     continue;
                 }
@@ -137,18 +162,37 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
                 out.push('\n');
             }
             Block::Code { lang, code, .. } => {
-                emit_path(&mut out, block.path(), &mut last_path, &mut last_was_heading);
-                out.push_str(&format!("```{}\n{}\n```\n\n", lang.as_deref().unwrap_or(""), code));
+                emit_path(
+                    &mut out,
+                    block.path(),
+                    &mut last_path,
+                    &mut last_was_heading,
+                );
+                out.push_str(&format!(
+                    "```{}\n{}\n```\n\n",
+                    lang.as_deref().unwrap_or(""),
+                    code
+                ));
             }
             Block::Quote { md, .. } => {
-                emit_path(&mut out, block.path(), &mut last_path, &mut last_was_heading);
+                emit_path(
+                    &mut out,
+                    block.path(),
+                    &mut last_path,
+                    &mut last_was_heading,
+                );
                 for line in md.lines() {
                     out.push_str(&format!("> {line}\n"));
                 }
                 out.push('\n');
             }
             Block::Media { alt, src, .. } => {
-                emit_path(&mut out, block.path(), &mut last_path, &mut last_was_heading);
+                emit_path(
+                    &mut out,
+                    block.path(),
+                    &mut last_path,
+                    &mut last_was_heading,
+                );
                 out.push_str(&format!("![{alt}]({src})\n\n"));
             }
         }
@@ -163,7 +207,10 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
 }
 
 fn normalize(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Emit the heading breadcrumb when the path changes mid-focus

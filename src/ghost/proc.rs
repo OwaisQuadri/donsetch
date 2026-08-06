@@ -87,7 +87,8 @@ impl Proc {
         //   PROCESS_SET_QUOTA       — AssignProcessToJobObject
         //   PROCESS_QUERY_LIMITED_INFORMATION — status checks
         let proc_handle = thr::OpenProcess(
-            thr::PROCESS_SUSPEND_RESUME | thr::PROCESS_SET_QUOTA
+            thr::PROCESS_SUSPEND_RESUME
+                | thr::PROCESS_SET_QUOTA
                 | thr::PROCESS_QUERY_LIMITED_INFORMATION,
             0,
             pid,

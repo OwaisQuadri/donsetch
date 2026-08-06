@@ -29,6 +29,8 @@ pub fn decompress(encoding: &str, body: &[u8]) -> Result<Vec<u8>, FetchError> {
             Ok(out)
         }
         "zstd" => zstd::decode_all(body).map_err(|e| FetchError::Http(format!("zstd: {e}"))),
-        other => Err(FetchError::Http(format!("unknown content-encoding: {other}"))),
+        other => Err(FetchError::Http(format!(
+            "unknown content-encoding: {other}"
+        ))),
     }
 }

@@ -180,22 +180,14 @@ pub fn merge(
             });
             // Keep the longest snippet (most informative),
             // skipping redirect stubs.
-            if hit.snippet.len() > entry.snippet.len()
-                && !hit.snippet.starts_with("Redirecting")
-            {
+            if hit.snippet.len() > entry.snippet.len() && !hit.snippet.starts_with("Redirecting") {
                 entry.snippet = hit.snippet.clone();
             }
             // Best title: breadcrumbs ("a › b › c") and
             // URL-echoes are longer than real titles — keep
             // the shortest CLEAN candidate.
-            let bad = |t: &str| {
-                t.contains(" › ")
-                    || t.starts_with("http")
-                    || t.len() < 3
-            };
-            if !bad(&hit.title)
-                && (bad(&entry.title) || hit.title.len() < entry.title.len())
-            {
+            let bad = |t: &str| t.contains(" › ") || t.starts_with("http") || t.len() < 3;
+            if !bad(&hit.title) && (bad(&entry.title) || hit.title.len() < entry.title.len()) {
                 entry.title = hit.title.clone();
             }
             if entry.published.is_none() && hit.published.is_some() {
@@ -354,7 +346,10 @@ mod tests {
         let trust = std::collections::HashMap::new();
         let out = merge(&per, "rust async runtime", Intent::Web, &trust, 10);
         // third.com must appear before the 3rd same.com hit.
-        let pos_third = out.iter().position(|r| r.url.contains("third.com")).unwrap();
+        let pos_third = out
+            .iter()
+            .position(|r| r.url.contains("third.com"))
+            .unwrap();
         let third_same = out
             .iter()
             .enumerate()
@@ -362,7 +357,10 @@ mod tests {
             .nth(2)
             .map(|(i, _)| i);
         if let Some(p3) = third_same {
-            assert!(pos_third < p3, "diversity violated: third@{pos_third} same#3@{p3}");
+            assert!(
+                pos_third < p3,
+                "diversity violated: third@{pos_third} same#3@{p3}"
+            );
         }
     }
 

@@ -13,7 +13,11 @@ pub fn markdown(el: ElementRef<'_>, base: &str, opts: &super::ExtractOptions) ->
     let mut link = 0usize;
     render(el, base, opts, &mut buf, &mut total, &mut link, 0);
     let collapsed = collapse(&buf);
-    let ld = if total > 0 { link as f32 / total as f32 } else { 0.0 };
+    let ld = if total > 0 {
+        link as f32 / total as f32
+    } else {
+        0.0
+    };
     (collapsed, ld)
 }
 
@@ -51,7 +55,9 @@ fn render(
                 }
             }
             Node::Element(_) => {
-                let Some(c) = ElementRef::wrap(child) else { continue };
+                let Some(c) = ElementRef::wrap(child) else {
+                    continue;
+                };
                 let name = c.value().name();
                 match name {
                     "a" => {
@@ -61,15 +67,14 @@ fn render(
                         }
                         *link += text.len();
                         *total += text.len();
-                        if opts.include_links {
-                            if let Some(href) = c.value().attr("href") {
-                                if let Some(abs) = absolutize(base, href) {
-                                    let clean = strip_trackers(&abs);
-                                    if text != clean {
-                                        buf.push_str(&format!("[{text}]({clean})"));
-                                        continue;
-                                    }
-                                }
+                        if opts.include_links
+                            && let Some(href) = c.value().attr("href")
+                            && let Some(abs) = absolutize(base, href)
+                        {
+                            let clean = strip_trackers(&abs);
+                            if text != clean {
+                                buf.push_str(&format!("[{text}]({clean})"));
+                                continue;
                             }
                         }
                         buf.push_str(&text);
@@ -134,10 +139,10 @@ pub fn absolutize(base: &str, href: &str) -> Option<String> {
     if href.is_empty() || href.starts_with('#') || href.starts_with("javascript:") {
         return None;
     }
-    if let Ok(b) = url::Url::parse(base) {
-        if let Ok(u) = b.join(href) {
-            return Some(u.to_string());
-        }
+    if let Ok(b) = url::Url::parse(base)
+        && let Ok(u) = b.join(href)
+    {
+        return Some(u.to_string());
     }
     if href.starts_with("http://") || href.starts_with("https://") {
         return Some(href.to_string());
@@ -146,8 +151,8 @@ pub fn absolutize(base: &str, href: &str) -> Option<String> {
 }
 
 const TRACKER_PARAMS: &[&str] = &[
-    "fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "igshid", "ref_src",
-    "_ga", "spm", "scm",
+    "fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid", "igshid", "ref_src", "_ga", "spm",
+    "scm",
 ];
 
 /// Drop tracking query params (utm_*, fbclid, …). Big token
@@ -158,9 +163,7 @@ pub fn strip_trackers(u: &str) -> String {
     };
     let kept: Vec<(String, String)> = parsed
         .query_pairs()
-        .filter(|(k, _)| {
-            !k.starts_with("utm_") && !TRACKER_PARAMS.contains(&k.as_ref())
-        })
+        .filter(|(k, _)| !k.starts_with("utm_") && !TRACKER_PARAMS.contains(&k.as_ref()))
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
     if kept.len() == parsed.query_pairs().count() {

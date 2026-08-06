@@ -192,19 +192,20 @@ impl Governor {
         }
         // Proactive slow-down: if EWMA drifted 3x above baseline,
         // the host is queuing us; add pressure-off rung.
-        if let (Some(base), true) = (hl.baseline_ms, hl.ewma_ms > 0.0) {
-            if hl.ewma_ms > base * STRESS_LATENCY_MULT && hl.rung < 3 {
-                hl.rung += 1;
-            }
+        if let (Some(base), true) = (hl.baseline_ms, hl.ewma_ms > 0.0)
+            && hl.ewma_ms > base * STRESS_LATENCY_MULT
+            && hl.rung < 3
+        {
+            hl.rung += 1;
         }
         // Rung decayed: compress any pending wait to the new,
         // smaller rung's window.
         if hl.rung < old_rung && hl.next_allowed > Instant::now() {
             let new_mult = (1u64 << hl.rung.min(MAX_BACKOFF_RUNG)) as f64;
             hl.next_allowed = Instant::now()
-                + self.base().min(hl
-                    .next_allowed
-                    .saturating_duration_since(Instant::now()))
+                + self
+                    .base()
+                    .min(hl.next_allowed.saturating_duration_since(Instant::now()))
                     .mul_f64(new_mult);
         }
         drop(lanes);
@@ -228,17 +229,15 @@ impl Governor {
             let hl = lanes.entry(key).or_default();
             hl.rung = (hl.rung + 2).min(MAX_BACKOFF_RUNG);
             let rung_mult = (1u64 << hl.rung) as f64;
-            hl.next_allowed =
-                Instant::now() + self.base().mul_f64(rung_mult * self.jitter(0xbeef));
+            hl.next_allowed = Instant::now() + self.base().mul_f64(rung_mult * self.jitter(0xbeef));
         }
         // Shared host penalty box: everyone backs off together.
         let mut hosts = self.hosts.lock().unwrap();
         let h = hosts.entry(host.to_string()).or_default();
         h.rung = (h.rung + 1).min(MAX_BACKOFF_RUNG);
         let host_rung_mult = (1u64 << h.rung) as f64;
-        h.boxed_until = Some(
-            Instant::now() + self.base().mul_f64(host_rung_mult * self.jitter(0xdead)),
-        );
+        h.boxed_until =
+            Some(Instant::now() + self.base().mul_f64(host_rung_mult * self.jitter(0xdead)));
     }
 
     /// Record a network error (timeout, reset): gentler than
@@ -249,7 +248,9 @@ impl Governor {
         let hl = lanes.entry(key).or_default();
         hl.rung = (hl.rung + 1).min(MAX_BACKOFF_RUNG);
         hl.next_allowed = Instant::now()
-            + self.base().mul_f64((1u64 << hl.rung) as f64 * self.jitter(7));
+            + self
+                .base()
+                .mul_f64((1u64 << hl.rung) as f64 * self.jitter(7));
     }
 
     /// Pick the least-blocked lane for the host, respecting the
@@ -269,15 +270,13 @@ impl Governor {
         }
         let lanes = self.lanes.lock().unwrap();
         let now = Instant::now();
-        self.lanes_all
-            .iter()
-            .min_by_key(|l| {
-                let key = (host.to_string(), l.id.clone());
-                lanes
-                    .get(&key)
-                    .map(|hl| hl.next_allowed.saturating_duration_since(now))
-                    .unwrap_or(Duration::ZERO)
-            })
+        self.lanes_all.iter().min_by_key(|l| {
+            let key = (host.to_string(), l.id.clone());
+            lanes
+                .get(&key)
+                .map(|hl| hl.next_allowed.saturating_duration_since(now))
+                .unwrap_or(Duration::ZERO)
+        })
     }
 }
 

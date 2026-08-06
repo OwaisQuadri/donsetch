@@ -155,18 +155,16 @@ impl Fetcher {
             }
 
             // 304: merge body from cache.
-            if out.status == 304 {
-                if let Some((body, status, headers)) =
-                    self.cache.lock().unwrap().stored(&current)
-                {
-                    out.status = status;
-                    out.headers = headers;
-                    out.body = body;
-                    out.cache = CacheState::Revalidated;
-                    out.elapsed = started.elapsed();
-                    out.redirects = redirects;
-                    return Ok(out);
-                }
+            if out.status == 304
+                && let Some((body, status, headers)) = self.cache.lock().unwrap().stored(&current)
+            {
+                out.status = status;
+                out.headers = headers;
+                out.body = body;
+                out.cache = CacheState::Revalidated;
+                out.elapsed = started.elapsed();
+                out.redirects = redirects;
+                return Ok(out);
             }
 
             match out.status {
@@ -204,28 +202,21 @@ impl Fetcher {
                     // Wall pushed back. If it left a cookie, do ONE
                     // cookie-warm retry (JS-less cookie walls pass on the
                     // second, cookie-carrying request).
-                    if let Verdict::Challenge(_) = out.verdict {
-                        if header_value(&out.headers, "set-cookie").is_some() {
-                            if let Ok(mut retry) =
-                                self.fetch_once_via(&current, &[], proxy, use_jar).await
-                            {
-                                {
-                                    let mut jar = self.jar.lock().unwrap();
-                                    jar.store_from_headers(&host, &retry.headers);
-                                }
-                                retry.verdict =
-                                    walls::detect(retry.status, &retry.headers, &retry.body);
-                                {
-                                    let mut cache = self.cache.lock().unwrap();
-                                    cache.store(&current, retry.status, &retry.headers, &retry.body);
-                                }
-                                if retry.verdict == Verdict::ContentOk {
-                                    out = retry;
-                                } else {
-                                    out = retry;
-                                }
-                            }
+                    if let Verdict::Challenge(_) = out.verdict
+                        && header_value(&out.headers, "set-cookie").is_some()
+                        && let Ok(mut retry) =
+                            self.fetch_once_via(&current, &[], proxy, use_jar).await
+                    {
+                        {
+                            let mut jar = self.jar.lock().unwrap();
+                            jar.store_from_headers(&host, &retry.headers);
                         }
+                        retry.verdict = walls::detect(retry.status, &retry.headers, &retry.body);
+                        {
+                            let mut cache = self.cache.lock().unwrap();
+                            cache.store(&current, retry.status, &retry.headers, &retry.body);
+                        }
+                        out = retry;
                     }
 
                     out.elapsed = started.elapsed();
@@ -254,7 +245,9 @@ impl Fetcher {
             return Err(FetchError::InvalidUrl(url_str.into()));
         }
         let is_https = scheme == "https";
-        let host = url.host_str().ok_or_else(|| FetchError::InvalidUrl(url_str.into()))?;
+        let host = url
+            .host_str()
+            .ok_or_else(|| FetchError::InvalidUrl(url_str.into()))?;
         let default_port = if is_https { 443 } else { 80 };
         let port = url.port().unwrap_or(default_port);
         let mut path = match url.query() {
@@ -264,7 +257,11 @@ impl Fetcher {
         if path.is_empty() {
             path = "/".into();
         }
-        let authority = if port == default_port { host.to_string() } else { format!("{host}:{port}") };
+        let authority = if port == default_port {
+            host.to_string()
+        } else {
+            format!("{host}:{port}")
+        };
         let origin = match proxy {
             Some(p) => format!("{}|{}", p.id(), authority),
             None => authority.clone(),
@@ -287,7 +284,10 @@ impl Fetcher {
         // 1) Try a pooled h2 connection for this origin.
         let pooled = self.pool.lock().unwrap().take_h2(&origin);
         if let Some(mut conn) = pooled {
-            match self.h2_request(&mut conn, &authority, &path, &req_headers, true).await {
+            match self
+                .h2_request(&mut conn, &authority, &path, &req_headers, true)
+                .await
+            {
                 Ok(mut out) => {
                     out.verdict = walls::detect(out.status, &out.headers, &out.body);
                     self.pool.lock().unwrap().put_h2(&origin, conn);
@@ -301,7 +301,16 @@ impl Fetcher {
         let mut last_err = FetchError::Http("unreachable".into());
         for attempt in 0..2 {
             match self
-                .fresh_request(is_https, &origin, host, port, &authority, &path, &req_headers, proxy)
+                .fresh_request(
+                    is_https,
+                    &origin,
+                    host,
+                    port,
+                    &authority,
+                    &path,
+                    &req_headers,
+                    proxy,
+                )
                 .await
             {
                 Ok(mut out) => {
@@ -319,6 +328,7 @@ impl Fetcher {
         Err(last_err)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn fresh_request(
         &self,
         is_https: bool,
@@ -340,12 +350,10 @@ impl Fetcher {
         // no session resumption, no ALPN.
         if !is_https {
             let mut stream = tcp;
-            let resp = tokio::time::timeout(
-                RESPONSE_TIMEOUT,
-                h1::get(&mut stream, path, req_headers),
-            )
-            .await
-            .map_err(|_| FetchError::Timeout)??;
+            let resp =
+                tokio::time::timeout(RESPONSE_TIMEOUT, h1::get(&mut stream, path, req_headers))
+                    .await
+                    .map_err(|_| FetchError::Timeout)??;
             return finish(
                 url_of("http", authority, path),
                 "h1",
@@ -362,7 +370,14 @@ impl Fetcher {
         };
         let mut tls_stream = tokio::time::timeout(
             Duration::from_secs(15),
-            tls::connect(&self.profile, &self.connector, host, tcp, &self.sessions, &session_key),
+            tls::connect(
+                &self.profile,
+                &self.connector,
+                host,
+                tcp,
+                &self.sessions,
+                &session_key,
+            ),
         )
         .await
         .map_err(|_| FetchError::Timeout)??;
@@ -374,7 +389,9 @@ impl Fetcher {
 
         if alpn == "h2" {
             let mut conn = H2Conn::start(tls_stream, &self.profile).await?;
-            let out = self.h2_request(&mut conn, authority, path, req_headers, false).await?;
+            let out = self
+                .h2_request(&mut conn, authority, path, req_headers, false)
+                .await?;
             self.pool.lock().unwrap().put_h2(origin, conn);
             Ok(out)
         } else {
@@ -384,7 +401,14 @@ impl Fetcher {
             )
             .await
             .map_err(|_| FetchError::Timeout)??;
-            finish(url_of("https", authority, path), "h1", resp.status, resp.headers, resp.body, false)
+            finish(
+                url_of("https", authority, path),
+                "h1",
+                resp.status,
+                resp.headers,
+                resp.body,
+                false,
+            )
         }
     }
 
@@ -404,7 +428,14 @@ impl Fetcher {
         let resp = tokio::time::timeout(RESPONSE_TIMEOUT, conn.get(authority, path, &h2_headers))
             .await
             .map_err(|_| FetchError::Timeout)??;
-        finish(url_of("https", authority, path), "h2", resp.status, resp.headers, resp.body, used_pool)
+        finish(
+            url_of("https", authority, path),
+            "h2",
+            resp.status,
+            resp.headers,
+            resp.body,
+            used_pool,
+        )
     }
 }
 

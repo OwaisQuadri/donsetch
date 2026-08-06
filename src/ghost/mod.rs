@@ -24,21 +24,19 @@ use std::process::Stdio;
 use std::time::Instant;
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt as _;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
 
 use crate::error::FetchError;
 use crate::profile::BrowserProfile;
 
 /// Idle this long → SIGSTOP the process group.
 /// (Daemon lifecycle — used by the MCP idle reaper.)
-pub const FREEZE_AFTER: std::time::Duration =
-    std::time::Duration::from_secs(20);
+pub const FREEZE_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
 /// Frozen this long → reap entirely.
-pub const REAP_AFTER: std::time::Duration =
-    std::time::Duration::from_secs(600);
+pub const REAP_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
 
 pub struct Ghost {
     child: Child,
@@ -137,7 +135,13 @@ fn chrome_names() -> &'static [&'static str] {
 
 #[cfg(not(windows))]
 fn chrome_names() -> &'static [&'static str] {
-    &["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome"]
+    &[
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+        "chrome",
+    ]
 }
 
 #[cfg(unix)]
@@ -158,9 +162,7 @@ impl Ghost {
     /// flags, no anti-automation flags, UA pinned to the
     /// DonShadow profile so harvested cookies stay valid
     /// when tier 1 reuses them (cf_clearance binds IP+UA).
-    pub async fn launch(
-        profile: &BrowserProfile,
-    ) -> Result<Self, FetchError> {
+    pub async fn launch(profile: &BrowserProfile) -> Result<Self, FetchError> {
         let bin = chrome_binary()?;
         let dir = profile_dir();
         std::fs::create_dir_all(&dir)
@@ -201,8 +203,7 @@ impl Ghost {
         // Own process group (Unix) / Job Object (Windows):
         // freeze/thaw/kill the whole browser tree.
         proc::Proc::prepare_cmd(&mut cmd);
-        cmd.stdout(Stdio::null())
-            .stderr(Stdio::piped());
+        cmd.stdout(Stdio::null()).stderr(Stdio::piped());
         // No orphans even if donsetch dies hard. Linux-only:
         // macOS has no prctl; Windows uses the Job Object's
         // KILL_ON_JOB_CLOSE.
@@ -217,21 +218,19 @@ impl Ghost {
 
         // The ws endpoint arrives on stderr:
         // "DevTools listening on ws://127.0.0.1:PORT/..."
-        let stderr = child.stderr.take().ok_or_else(|| {
-            FetchError::ghost("no stderr pipe")
-        })?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| FetchError::ghost("no stderr pipe"))?;
         let mut lines = BufReader::new(stderr).lines();
-        let ws_url = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            async {
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(i) = line.find("ws://") {
-                        return Some(line[i..].trim().to_string());
-                    }
+        let ws_url = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                if let Some(i) = line.find("ws://") {
+                    return Some(line[i..].trim().to_string());
                 }
-                None
-            },
-        )
+            }
+            None
+        })
         .await
         .map_err(|_| FetchError::ghost("devtools ws timeout"))?
         .ok_or_else(|| FetchError::ghost("no devtools ws line"))?;
@@ -240,11 +239,7 @@ impl Ghost {
 
         // One page target, attached flat.
         let target = cdp
-            .call(
-                None,
-                "Target.createTarget",
-                json!({ "url": "about:blank" }),
-            )
+            .call(None, "Target.createTarget", json!({ "url": "about:blank" }))
             .await?
             .get("targetId")
             .and_then(Value::as_str)
@@ -284,29 +279,23 @@ impl Ghost {
         // tell. Give the window real bounds so outer size
         // is window size + chrome frame.
         if let Ok(win) = cdp
-            .call(
-                Some(&session),
-                "Browser.getWindowForTarget",
-                json!({}),
-            )
+            .call(Some(&session), "Browser.getWindowForTarget", json!({}))
             .await
+            && let Some(id) = win.get("windowId").and_then(Value::as_i64)
         {
-            if let Some(id) = win.get("windowId").and_then(Value::as_i64)
-            {
-                let _ = cdp
-                    .call(
-                        None,
-                        "Browser.setWindowBounds",
-                        json!({
-                            "windowId": id,
-                            "bounds": {
-                                "left": 0, "top": 0,
-                                "width": 1920, "height": 1167
-                            }
-                        }),
-                    )
-                    .await;
-            }
+            let _ = cdp
+                .call(
+                    None,
+                    "Browser.setWindowBounds",
+                    json!({
+                        "windowId": id,
+                        "bounds": {
+                            "left": 0, "top": 0,
+                            "width": 1920, "height": 1167
+                        }
+                    }),
+                )
+                .await;
         }
 
         Ok(Self {
@@ -373,11 +362,7 @@ impl Ghost {
     /// Navigate the attached page.
     pub async fn navigate(&self, url: &str) -> Result<(), FetchError> {
         self.cdp
-            .call(
-                Some(&self.session),
-                "Page.navigate",
-                json!({ "url": url }),
-            )
+            .call(Some(&self.session), "Page.navigate", json!({ "url": url }))
             .await?;
         Ok(())
     }
@@ -428,10 +413,7 @@ impl Ghost {
     /// domain). CDP's `expires` is a Unix timestamp in seconds
     /// (float); -1 or 0 means session cookie → None.
     pub async fn cookies(&self) -> Result<Vec<cache::CookieRecord>, FetchError> {
-        let res = self
-            .cdp
-            .call(None, "Storage.getCookies", json!({}))
-            .await?;
+        let res = self.cdp.call(None, "Storage.getCookies", json!({})).await?;
         let mut out = Vec::new();
         if let Some(arr) = res.get("cookies").and_then(Value::as_array) {
             for c in arr {
@@ -472,8 +454,7 @@ impl Ghost {
             .to_string();
         // base64 decode (no new dep: manual).
         let bytes = b64decode(data.as_bytes());
-        std::fs::write(path, bytes)
-            .map_err(|e| FetchError::ghost(format!("screenshot: {e}")))
+        std::fs::write(path, bytes).map_err(|e| FetchError::ghost(format!("screenshot: {e}")))
     }
 
     /// One trusted click with a human-ish pre-move path.
@@ -507,10 +488,7 @@ impl Ghost {
                     json!({ "type": "mouseMoved", "x": px, "y": py }),
                 )
                 .await?;
-            tokio::time::sleep(std::time::Duration::from_millis(
-                8 + (rand() * 14.0) as u64,
-            ))
-            .await;
+            tokio::time::sleep(std::time::Duration::from_millis(8 + (rand() * 14.0) as u64)).await;
         }
         for ty in ["mousePressed", "mouseReleased"] {
             self.cdp
@@ -545,13 +523,10 @@ fn sweep_crashpad() {
     };
     for e in entries.flatten() {
         let name = e.file_name();
-        let Some(pid) = name.to_str().and_then(|s| s.parse::<i32>().ok())
-        else {
+        let Some(pid) = name.to_str().and_then(|s| s.parse::<i32>().ok()) else {
             continue;
         };
-        let Ok(cmdline) =
-            std::fs::read_to_string(e.path().join("cmdline"))
-        else {
+        let Ok(cmdline) = std::fs::read_to_string(e.path().join("cmdline")) else {
             continue;
         };
         if cmdline.contains("crashpad") && cmdline.contains(&marker) {
@@ -578,8 +553,11 @@ fn b64decode(s: &[u8]) -> Vec<u8> {
         }
     }
     let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let clean: Vec<u8> =
-        s.iter().copied().filter(|b| !b"=\n\r ".contains(b)).collect();
+    let clean: Vec<u8> = s
+        .iter()
+        .copied()
+        .filter(|b| !b"=\n\r ".contains(b))
+        .collect();
     for chunk in clean.chunks(4) {
         if chunk.len() < 4 {
             break;

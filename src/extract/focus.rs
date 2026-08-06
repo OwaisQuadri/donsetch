@@ -15,87 +15,276 @@ const B: f64 = 0.75;
 // ── Stopwords ────────────────────────────────────────────────
 
 const STOP_EN: &[&str] = &[
-    "the", "a", "an", "and", "or", "of", "to", "in", "is", "are", "was",
-    "were", "for", "on", "with", "as", "at", "by", "from", "it", "its",
-    "this", "that", "be", "been", "has", "have", "had", "not", "but",
-    "they", "their", "we", "you", "he", "she", "his", "her", "what",
-    "which", "who", "how", "when", "do", "does", "did", "can", "could",
-    "will", "would", "about", "than", "then", "so", "if", "no", "yes",
-    "more", "most", "some", "any", "all", "each", "other", "such",
+    "the", "a", "an", "and", "or", "of", "to", "in", "is", "are", "was", "were", "for", "on",
+    "with", "as", "at", "by", "from", "it", "its", "this", "that", "be", "been", "has", "have",
+    "had", "not", "but", "they", "their", "we", "you", "he", "she", "his", "her", "what", "which",
+    "who", "how", "when", "do", "does", "did", "can", "could", "will", "would", "about", "than",
+    "then", "so", "if", "no", "yes", "more", "most", "some", "any", "all", "each", "other", "such",
 ];
 
 const STOP_ZH: &[&str] = &[
-    "的", "了", "在", "是", "有", "和", "就", "不", "人", "都", "一", "也",
-    "很", "到", "说", "要", "去", "会", "着", "没", "看", "好", "自己", "这",
-    "那", "与", "及", "或", "但", "而", "因", "为", "把", "被", "让", "从",
-    "向", "对", "跟", "给", "以", "之", "于", "所", "可", "能", "这个",
-    "那个", "什么", "怎么", "为什么", "怎么", "些", "里", "上", "下", "中",
+    "的",
+    "了",
+    "在",
+    "是",
+    "有",
+    "和",
+    "就",
+    "不",
+    "人",
+    "都",
+    "一",
+    "也",
+    "很",
+    "到",
+    "说",
+    "要",
+    "去",
+    "会",
+    "着",
+    "没",
+    "看",
+    "好",
+    "自己",
+    "这",
+    "那",
+    "与",
+    "及",
+    "或",
+    "但",
+    "而",
+    "因",
+    "为",
+    "把",
+    "被",
+    "让",
+    "从",
+    "向",
+    "对",
+    "跟",
+    "给",
+    "以",
+    "之",
+    "于",
+    "所",
+    "可",
+    "能",
+    "这个",
+    "那个",
+    "什么",
+    "怎么",
+    "为什么",
+    "怎么",
+    "些",
+    "里",
+    "上",
+    "下",
+    "中",
 ];
 
 const STOP_JA: &[&str] = &[
-    "は", "が", "を", "に", "で", "と", "から", "まで", "より", "へ", "の",
-    "て", "た", "だ", "し", "も", "か", "な", "ん", "する", "いる", "ある",
-    "これ", "それ", "あれ", "この", "その", "あの", "です", "ます", "こと",
-    "もの", "たち", "たち", "さん", "よう", "たち",
+    "は", "が", "を", "に", "で", "と", "から", "まで", "より", "へ", "の", "て", "た", "だ", "し",
+    "も", "か", "な", "ん", "する", "いる", "ある", "これ", "それ", "あれ", "この", "その", "あの",
+    "です", "ます", "こと", "もの", "たち", "たち", "さん", "よう", "たち",
 ];
 
 const STOP_KO: &[&str] = &[
-    "은", "는", "이", "가", "을", "를", "에", "에서", "의", "와", "과",
-    "도", "로", "으로", "하다", "있다", "없다", "이", "그", "저", "우리",
-    "너", "저희", "들", "등", "및", "또는", "그리고", "하지만", "때문",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "에",
+    "에서",
+    "의",
+    "와",
+    "과",
+    "도",
+    "로",
+    "으로",
+    "하다",
+    "있다",
+    "없다",
+    "이",
+    "그",
+    "저",
+    "우리",
+    "너",
+    "저희",
+    "들",
+    "등",
+    "및",
+    "또는",
+    "그리고",
+    "하지만",
+    "때문",
 ];
 
 const STOP_ES: &[&str] = &[
-    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del",
-    "y", "o", "a", "en", "que", "es", "son", "por", "para", "con", "se",
-    "su", "sus", "al", "lo", "no", "si", "mas", "pero", "como", "me",
-    "te", "le", "les", "su", "mi", "tu", "eso", "esta", "este", "eso",
+    "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "y", "o", "a", "en", "que",
+    "es", "son", "por", "para", "con", "se", "su", "sus", "al", "lo", "no", "si", "mas", "pero",
+    "como", "me", "te", "le", "les", "su", "mi", "tu", "eso", "esta", "este", "eso",
 ];
 
 const STOP_FR: &[&str] = &[
-    "le", "la", "les", "un", "une", "des", "du", "de", "et", "ou", "a",
-    "en", "que", "qui", "est", "sont", "pour", "par", "avec", "se", "sa",
-    "ses", "au", "ce", "ces", "ne", "pas", "mais", "comme", "mon", "ton",
-    "son", "nous", "vous", "ils", "elles", "dans", "sur", "sous",
+    "le", "la", "les", "un", "une", "des", "du", "de", "et", "ou", "a", "en", "que", "qui", "est",
+    "sont", "pour", "par", "avec", "se", "sa", "ses", "au", "ce", "ces", "ne", "pas", "mais",
+    "comme", "mon", "ton", "son", "nous", "vous", "ils", "elles", "dans", "sur", "sous",
 ];
 
 const STOP_DE: &[&str] = &[
-    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer",
-    "einen", "einem", "eines", "und", "oder", "in", "zu", "von", "mit",
-    "ist", "sind", "auf", "nicht", "aber", "als", "auch", "wenn", "so",
-    "den", "dem", "im", "am", "zum", "zur", "beim", "das", "daß",
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "einen", "einem", "eines",
+    "und", "oder", "in", "zu", "von", "mit", "ist", "sind", "auf", "nicht", "aber", "als", "auch",
+    "wenn", "so", "den", "dem", "im", "am", "zum", "zur", "beim", "das", "daß",
 ];
 
 const STOP_AR: &[&str] = &[
-    "في", "من", "على", "إلى", "عن", "مع", "هذا", "هذه", "ذلك", "التي",
-    "الذي", "الذين", "ما", "لا", "لم", "لن", "قد", "كان", "كانت", "هو",
-    "هي", "هم", "هن", "إن", "أن", "أو", "ثم", "حتى", "كل", "بعض", "غير",
+    "في",
+    "من",
+    "على",
+    "إلى",
+    "عن",
+    "مع",
+    "هذا",
+    "هذه",
+    "ذلك",
+    "التي",
+    "الذي",
+    "الذين",
+    "ما",
+    "لا",
+    "لم",
+    "لن",
+    "قد",
+    "كان",
+    "كانت",
+    "هو",
+    "هي",
+    "هم",
+    "هن",
+    "إن",
+    "أن",
+    "أو",
+    "ثم",
+    "حتى",
+    "كل",
+    "بعض",
+    "غير",
 ];
 
 const STOP_HI: &[&str] = &[
-    "और", "यह", "वह", "इस", "का", "की", "के", "में", "से", "को", "ने",
-    "है", "हैं", "था", "थी", "थे", "कि", "जो", "भी", "नहीं", "पर", "या",
-    "तो", "ही", "व", "एक", "लिए", "द्वारा", "साथ", "पर",
+    "और",
+    "यह",
+    "वह",
+    "इस",
+    "का",
+    "की",
+    "के",
+    "में",
+    "से",
+    "को",
+    "ने",
+    "है",
+    "हैं",
+    "था",
+    "थी",
+    "थे",
+    "कि",
+    "जो",
+    "भी",
+    "नहीं",
+    "पर",
+    "या",
+    "तो",
+    "ही",
+    "व",
+    "एक",
+    "लिए",
+    "द्वारा",
+    "साथ",
+    "पर",
 ];
 
 const STOP_NE: &[&str] = &[
-    "र", "यो", "त्यो", "यस", "को", "का", "की", "मा", "बाट", "लाई",
-    "छ", "छन्", "थियो", "थिइन्", "थिए", "वा", "तर", "पनि", "होइन",
-    "गर्न", "भएको", "गर्दा", "यहाँ", "त्यहाँ", "कुनै", "सबै", "एक",
+    "र",
+    "यो",
+    "त्यो",
+    "यस",
+    "को",
+    "का",
+    "की",
+    "मा",
+    "बाट",
+    "लाई",
+    "छ",
+    "छन्",
+    "थियो",
+    "थिइन्",
+    "थिए",
+    "वा",
+    "तर",
+    "पनि",
+    "होइन",
+    "गर्न",
+    "भएको",
+    "गर्दा",
+    "यहाँ",
+    "त्यहाँ",
+    "कुनै",
+    "सबै",
+    "एक",
 ];
 
 const STOP_PT: &[&str] = &[
-    "o", "a", "os", "as", "um", "uma", "de", "do", "da", "dos", "das",
-    "e", "ou", "em", "que", "é", "são", "para", "por", "com", "se",
-    "seu", "sua", "no", "na", "nos", "nas", "não", "mas", "como",
-    "mais", "este", "essa", "isso", "aquele", "aquela",
+    "o", "a", "os", "as", "um", "uma", "de", "do", "da", "dos", "das", "e", "ou", "em", "que", "é",
+    "são", "para", "por", "com", "se", "seu", "sua", "no", "na", "nos", "nas", "não", "mas",
+    "como", "mais", "este", "essa", "isso", "aquele", "aquela",
 ];
 
 const STOP_RU: &[&str] = &[
-    "и", "в", "во", "что", "на", "с", "со", "для", "из", "от", "до", "по",
-    "о", "об", "при", "как", "не", "но", "или", "чтобы", "же", "ли", "бы",
-    "был", "была", "было", "были", "это", "этот", "эта", "эти", "тот",
-    "та", "он", "она", "они", "мы", "вы", "вы", "них", "ней", "него",
+    "и",
+    "в",
+    "во",
+    "что",
+    "на",
+    "с",
+    "со",
+    "для",
+    "из",
+    "от",
+    "до",
+    "по",
+    "о",
+    "об",
+    "при",
+    "как",
+    "не",
+    "но",
+    "или",
+    "чтобы",
+    "же",
+    "ли",
+    "бы",
+    "был",
+    "была",
+    "было",
+    "были",
+    "это",
+    "этот",
+    "эта",
+    "эти",
+    "тот",
+    "та",
+    "он",
+    "она",
+    "они",
+    "мы",
+    "вы",
+    "вы",
+    "них",
+    "ней",
+    "него",
 ];
 
 fn stopword_set(lang: &str) -> &'static [&'static str] {
@@ -136,34 +325,82 @@ fn fold_ascii(c: char) -> char {
     let u = c as u32;
     // Latin-1 Supplement: common Western European.
     match u {
-        0x00C0..=0x00C5 => 'A',  // À-Å
-        0x00C8..=0x00CB => 'E',  // È-Ë
-        0x00CC..=0x00CF => 'I',  // Ì-Ï
+        0x00C0..=0x00C5 => 'A',          // À-Å
+        0x00C8..=0x00CB => 'E',          // È-Ë
+        0x00CC..=0x00CF => 'I',          // Ì-Ï
         0x00D2..=0x00D6 | 0x00D8 => 'O', // Ò-Ö, Ø
-        0x00D9..=0x00DC => 'U',  // Ù-Ü
-        0x00C7 => 'C',           // Ç
-        0x00D1 => 'N',           // Ñ
-        0x00E0..=0x00E5 => 'a',  // à-å
-        0x00E8..=0x00EB => 'e',  // è-ë
-        0x00EC..=0x00EF => 'i',  // ì-ï
+        0x00D9..=0x00DC => 'U',          // Ù-Ü
+        0x00C7 => 'C',                   // Ç
+        0x00D1 => 'N',                   // Ñ
+        0x00E0..=0x00E5 => 'a',          // à-å
+        0x00E8..=0x00EB => 'e',          // è-ë
+        0x00EC..=0x00EF => 'i',          // ì-ï
         0x00F2..=0x00F6 | 0x00F8 => 'o', // ò-ö, ø
-        0x00F9..=0x00FC => 'u',  // ù-ü
-        0x00E7 => 'c',           // ç
-        0x00F1 => 'n',           // ñ
+        0x00F9..=0x00FC => 'u',          // ù-ü
+        0x00E7 => 'c',                   // ç
+        0x00F1 => 'n',                   // ñ
         0x00DD | 0x00FD | 0x00FF => 'y', // Ý ý ÿ
-        0x0178 => 'Y',           // Ÿ
+        0x0178 => 'Y',                   // Ÿ
         // German ß → ss handled in fold_str (1→2 expansion).
         _ => {
             // Latin Extended-A: try common mappings.
             match u {
-                0x0100..=0x0105 => if u % 2 == 0 { 'a' } else { 'A' }, // Ā-ą (alternating)
-                0x0106..=0x010D => if u % 2 == 0 { 'c' } else { 'C' }, // Ć-č
-                0x010E..=0x0113 => if u % 2 == 0 { 'd' } else { 'D' }, // Ď-ď Ď-ď
-                0x0114..=0x011B => if u % 2 == 0 { 'e' } else { 'E' }, // Ĕ-ě
-                0x011C..=0x0123 => if u % 2 == 0 { 'g' } else { 'G' }, // Ĝ-ģ
-                0x0124..=0x0127 => if u % 2 == 0 { 'h' } else { 'H' }, // Ĥ-ħ
-                0x0128..=0x0131 => if u % 2 == 0 { 'i' } else { 'I' }, // Ĩ-ı
-                0x0134..=0x0135 => if u == 0x0134 { 'J' } else { 'j' }, // Ĵ ĵ
+                0x0100..=0x0105 => {
+                    if u.is_multiple_of(2) {
+                        'a'
+                    } else {
+                        'A'
+                    }
+                } // Ā-ą (alternating)
+                0x0106..=0x010D => {
+                    if u.is_multiple_of(2) {
+                        'c'
+                    } else {
+                        'C'
+                    }
+                } // Ć-č
+                0x010E..=0x0113 => {
+                    if u.is_multiple_of(2) {
+                        'd'
+                    } else {
+                        'D'
+                    }
+                } // Ď-ď Ď-ď
+                0x0114..=0x011B => {
+                    if u.is_multiple_of(2) {
+                        'e'
+                    } else {
+                        'E'
+                    }
+                } // Ĕ-ě
+                0x011C..=0x0123 => {
+                    if u.is_multiple_of(2) {
+                        'g'
+                    } else {
+                        'G'
+                    }
+                } // Ĝ-ģ
+                0x0124..=0x0127 => {
+                    if u.is_multiple_of(2) {
+                        'h'
+                    } else {
+                        'H'
+                    }
+                } // Ĥ-ħ
+                0x0128..=0x0131 => {
+                    if u.is_multiple_of(2) {
+                        'i'
+                    } else {
+                        'I'
+                    }
+                } // Ĩ-ı
+                0x0134..=0x0135 => {
+                    if u == 0x0134 {
+                        'J'
+                    } else {
+                        'j'
+                    }
+                } // Ĵ ĵ
                 0x0136..=0x013B => {
                     let m = (u - 0x0136) % 2;
                     if u < 0x0138 {
@@ -172,18 +409,78 @@ fn fold_ascii(c: char) -> char {
                         if m == 0 { 'l' } else { 'L' }
                     }
                 }
-                0x0139..=0x0142 => if u % 2 == 0 { 'l' } else { 'L' },
-                0x0143..=0x014B => if u % 2 == 0 { 'n' } else { 'N' },
-                0x014C..=0x0151 => if u % 2 == 0 { 'o' } else { 'O' },
-                0x0152 => 'O',  // Œ
-                0x0153 => 'o',  // œ
-                0x0154..=0x0159 => if u % 2 == 0 { 'r' } else { 'R' },
-                0x015A..=0x0161 => if u % 2 == 0 { 's' } else { 'S' },
-                0x0162..=0x0167 => if u % 2 == 0 { 't' } else { 'T' },
-                0x0168..=0x0173 => if u % 2 == 0 { 'u' } else { 'U' },
-                0x0174..=0x0175 => if u == 0x0174 { 'W' } else { 'w' },
-                0x0176..=0x0177 => if u == 0x0176 { 'Y' } else { 'y' },
-                0x0179..=0x017B => if u % 2 == 0 { 'z' } else { 'Z' },
+                0x013C..=0x0142 => {
+                    if u.is_multiple_of(2) {
+                        'l'
+                    } else {
+                        'L'
+                    }
+                }
+                0x0143..=0x014B => {
+                    if u.is_multiple_of(2) {
+                        'n'
+                    } else {
+                        'N'
+                    }
+                }
+                0x014C..=0x0151 => {
+                    if u.is_multiple_of(2) {
+                        'o'
+                    } else {
+                        'O'
+                    }
+                }
+                0x0152 => 'O', // Œ
+                0x0153 => 'o', // œ
+                0x0154..=0x0159 => {
+                    if u.is_multiple_of(2) {
+                        'r'
+                    } else {
+                        'R'
+                    }
+                }
+                0x015A..=0x0161 => {
+                    if u.is_multiple_of(2) {
+                        's'
+                    } else {
+                        'S'
+                    }
+                }
+                0x0162..=0x0167 => {
+                    if u.is_multiple_of(2) {
+                        't'
+                    } else {
+                        'T'
+                    }
+                }
+                0x0168..=0x0173 => {
+                    if u.is_multiple_of(2) {
+                        'u'
+                    } else {
+                        'U'
+                    }
+                }
+                0x0174..=0x0175 => {
+                    if u == 0x0174 {
+                        'W'
+                    } else {
+                        'w'
+                    }
+                }
+                0x0176..=0x0177 => {
+                    if u == 0x0176 {
+                        'Y'
+                    } else {
+                        'y'
+                    }
+                }
+                0x0179..=0x017B => {
+                    if u.is_multiple_of(2) {
+                        'z'
+                    } else {
+                        'Z'
+                    }
+                }
                 _ => c,
             }
         }
@@ -326,17 +623,23 @@ fn stem_romance(word: &str, lang: &str) -> String {
         return w.to_string();
     }
     let suffixes: &[&str] = match lang {
-        "es" => &["amiento", "imiento", "acion", "aciones", "ando", "iendo", "ar", "er", "ir", "ado", "ido", "ando", "an", "en", "es", "os", "as", "a"],
-        "fr" => &["ement", "ation", "ations", "issant", "er", "ir", "re", "ée", "ées", "ant", "ent", "ons", "ez", "s"],
-        "pt" => &["amento", "imento", "ação", "ções", "ando", "endo", "indo", "ar", "er", "ir", "ado", "ido", "ão", "ões", "os", "as", "a"],
+        "es" => &[
+            "amiento", "imiento", "acion", "aciones", "ando", "iendo", "ar", "er", "ir", "ado",
+            "ido", "ando", "an", "en", "es", "os", "as", "a",
+        ],
+        "fr" => &[
+            "ement", "ation", "ations", "issant", "er", "ir", "re", "ée", "ées", "ant", "ent",
+            "ons", "ez", "s",
+        ],
+        "pt" => &[
+            "amento", "imento", "ação", "ções", "ando", "endo", "indo", "ar", "er", "ir", "ado",
+            "ido", "ão", "ões", "os", "as", "a",
+        ],
         _ => &["tion", "ment", "ing", "ed", "es", "er"],
     };
     for suf in suffixes {
-        if w.ends_with(suf) {
-            let stem = &w[..w.len() - suf.len()];
-            if stem.len() >= 3 {
-                return stem.to_string();
-            }
+        if let Some(stem) = w.strip_suffix(suf).filter(|s| s.len() >= 3) {
+            return stem.to_string();
         }
     }
     w.to_string()
@@ -349,11 +652,8 @@ fn stem_german(word: &str) -> String {
         return w.to_string();
     }
     for suf in &["en", "er", "es", "em", "e", "s", "n"] {
-        if w.ends_with(suf) {
-            let stem = &w[..w.len() - suf.len()];
-            if stem.len() >= 3 {
-                return stem.to_string();
-            }
+        if let Some(stem) = w.strip_suffix(suf).filter(|s| s.len() >= 3) {
+            return stem.to_string();
         }
     }
     w.to_string()
@@ -489,11 +789,7 @@ fn tokenize_cjk(text: &str, lang: &str) -> Vec<String> {
 /// fell_back = true when the query matched nothing and we
 /// returned the full page — the CALLER must signal this,
 /// or the agent mistakes full content for focus matches.
-pub fn filter<'a>(
-    blocks: &'a [Block],
-    query: &str,
-    lang: &LanguageInfo,
-) -> (Vec<&'a Block>, bool) {
+pub fn filter<'a>(blocks: &'a [Block], query: &str, lang: &LanguageInfo) -> (Vec<&'a Block>, bool) {
     let qterms = tokenize(query, lang);
     if qterms.is_empty() || blocks.is_empty() {
         return (blocks.iter().collect(), false);
@@ -523,7 +819,9 @@ pub fn filter<'a>(
         let dl = doc.len() as f64;
         let mut score = 0.0;
         for q in &qterms {
-            let Some(&term_df) = df.get(q.as_str()) else { continue };
+            let Some(&term_df) = df.get(q.as_str()) else {
+                continue;
+            };
             let idf = (1.0 + (n - term_df as f64 + 0.5) / (term_df as f64 + 0.5)).ln();
             let f = tf.get(q.as_str()).copied().unwrap_or(0) as f64;
             if f > 0.0 {
@@ -554,8 +852,8 @@ pub fn filter<'a>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::language::{Script, detect};
     use super::*;
-    use super::super::language::{detect, Script};
     use scraper::Html;
 
     fn lang_from(html: &str) -> LanguageInfo {
@@ -564,19 +862,35 @@ mod tests {
     }
 
     fn en() -> LanguageInfo {
-        LanguageInfo { code: "en".to_string(), script: Script::Latin, scripts: vec![Script::Latin] }
+        LanguageInfo {
+            code: "en".to_string(),
+            script: Script::Latin,
+            scripts: vec![Script::Latin],
+        }
     }
 
     fn zh() -> LanguageInfo {
-        LanguageInfo { code: "zh".to_string(), script: Script::Han, scripts: vec![Script::Han] }
+        LanguageInfo {
+            code: "zh".to_string(),
+            script: Script::Han,
+            scripts: vec![Script::Han],
+        }
     }
 
     fn ja() -> LanguageInfo {
-        LanguageInfo { code: "ja".to_string(), script: Script::Han, scripts: vec![Script::Han, Script::Kana] }
+        LanguageInfo {
+            code: "ja".to_string(),
+            script: Script::Han,
+            scripts: vec![Script::Han, Script::Kana],
+        }
     }
 
     fn ko() -> LanguageInfo {
-        LanguageInfo { code: "ko".to_string(), script: Script::Hangul, scripts: vec![Script::Hangul] }
+        LanguageInfo {
+            code: "ko".to_string(),
+            script: Script::Hangul,
+            scripts: vec![Script::Hangul],
+        }
     }
 
     // ── English tokenizer ──
@@ -593,9 +907,9 @@ mod tests {
     #[test]
     fn tokenize_en_stemming() {
         let tokens = tokenize("running jumped quickly", &en());
-        assert!(tokens.contains(&"run".to_string()));   // running → run
-        assert!(tokens.contains(&"jump".to_string()));   // jumped → jump
-        assert!(tokens.contains(&"quick".to_string()));  // quickly → quick
+        assert!(tokens.contains(&"run".to_string())); // running → run
+        assert!(tokens.contains(&"jump".to_string())); // jumped → jump
+        assert!(tokens.contains(&"quick".to_string())); // quickly → quick
     }
 
     #[test]
@@ -727,7 +1041,7 @@ mod tests {
     #[test]
     fn stem_short_words() {
         assert_eq!(stem_en("cat"), "cat"); // too short to strip
-        assert_eq!(stem_en("is"), "is");   // too short
+        assert_eq!(stem_en("is"), "is"); // too short
     }
 
     #[test]
@@ -748,7 +1062,11 @@ mod tests {
     use super::super::blocks::Block;
 
     fn para(text: &str) -> Block {
-        Block::Para { md: text.to_string(), link_density: 0.0, path: vec![] }
+        Block::Para {
+            md: text.to_string(),
+            link_density: 0.0,
+            path: vec![],
+        }
     }
 
     #[test]
@@ -767,10 +1085,7 @@ mod tests {
 
     #[test]
     fn bm25_no_match_fell_back() {
-        let blocks = vec![
-            para("The weather is nice today"),
-            para("I like pizza"),
-        ];
+        let blocks = vec![para("The weather is nice today"), para("I like pizza")];
         let (kept, fell_back) = filter(&blocks, "quantum physics", &en());
         assert!(fell_back);
         assert_eq!(kept.len(), 2); // all blocks returned
@@ -809,22 +1124,19 @@ mod tests {
 
     #[test]
     fn bm25_stemming_match() {
-        let blocks = vec![
-            para("The runner was running fast"),
-            para("Cooking is fun"),
-        ];
+        let blocks = vec![para("The runner was running fast"), para("Cooking is fun")];
         // Query "run" should match "running" via stemming.
         let (kept, fell_back) = filter(&blocks, "run", &en());
         assert!(!fell_back);
-        assert!(kept.iter().any(|b| b.text().contains("runner") || b.text().contains("running")));
+        assert!(
+            kept.iter()
+                .any(|b| b.text().contains("runner") || b.text().contains("running"))
+        );
     }
 
     #[test]
     fn bm25_accent_match() {
-        let blocks = vec![
-            para("Le café est délicieux"),
-            para("The weather is nice"),
-        ];
+        let blocks = vec![para("Le café est délicieux"), para("The weather is nice")];
         // Query "cafe" should match "café" via accent folding.
         let (kept, fell_back) = filter(&blocks, "cafe", &en());
         assert!(!fell_back);

@@ -105,8 +105,14 @@ impl Proxy {
         stream.set_nodelay(true).ok();
 
         match self.scheme {
-            ProxyScheme::Http => self.http_connect(&mut stream, target_host, target_port).await?,
-            ProxyScheme::Socks5 => self.socks5_handshake(&mut stream, target_host, target_port).await?,
+            ProxyScheme::Http => {
+                self.http_connect(&mut stream, target_host, target_port)
+                    .await?
+            }
+            ProxyScheme::Socks5 => {
+                self.socks5_handshake(&mut stream, target_host, target_port)
+                    .await?
+            }
         }
         Ok(stream)
     }
@@ -183,11 +189,7 @@ impl Proxy {
         // Step 1: greeting — offer no-auth (0x00) and if we
         // have credentials, username/password (0x02).
         let has_auth = !self.user.is_empty();
-        let methods: &[u8] = if has_auth {
-            &[0x00, 0x02]
-        } else {
-            &[0x00]
-        };
+        let methods: &[u8] = if has_auth { &[0x00, 0x02] } else { &[0x00] };
         let greeting = {
             let mut g = vec![0x05, methods.len() as u8];
             g.extend_from_slice(methods);
@@ -303,11 +305,13 @@ impl Proxy {
                 0x06 => "TTL expired",
                 0x07 => "command not supported",
                 0x08 => "address type not supported",
-                code => return Err(FetchError::Http(format!(
-                    "proxy {} SOCKS5: reply error {:#04x}",
-                    self.id(),
-                    code
-                ))),
+                code => {
+                    return Err(FetchError::Http(format!(
+                        "proxy {} SOCKS5: reply error {:#04x}",
+                        self.id(),
+                        code
+                    )));
+                }
             };
             return Err(FetchError::Http(format!(
                 "proxy {} SOCKS5: {reason}",
@@ -319,20 +323,23 @@ impl Proxy {
         // bound address, just consume it so the stream is
         // clean for the caller's TLS handshake.
         let addr_len = match header[3] {
-            0x01 => 4,        // IPv4
-            0x03 => {         // domain: read 1 length byte, then that many
+            0x01 => 4, // IPv4
+            0x03 => {
+                // domain: read 1 length byte, then that many
                 let mut len = [0u8; 1];
                 tokio::time::timeout(PROXY_TIMEOUT, stream.read_exact(&mut len))
                     .await
                     .map_err(|_| FetchError::Timeout)??;
                 len[0] as usize
             }
-            0x04 => 16,       // IPv6
-            other => return Err(FetchError::Http(format!(
-                "proxy {} SOCKS5: bad ATYP {:#04x} in reply",
-                self.id(),
-                other
-            ))),
+            0x04 => 16, // IPv6
+            other => {
+                return Err(FetchError::Http(format!(
+                    "proxy {} SOCKS5: bad ATYP {:#04x} in reply",
+                    self.id(),
+                    other
+                )));
+            }
         };
         // For domain ATYP we already consumed the length byte
         // above; for IPv4/IPv6 addr_len is the full address.

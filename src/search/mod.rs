@@ -35,9 +35,22 @@ const ENGINE_TIMEOUT: Duration = Duration::from_secs(8);
 /// TTLs regardless of detected intent.
 fn cache_ttl(intent: Intent, query: &str) -> Duration {
     const RECENCY: &[&str] = &[
-        "latest", "today", "breaking", "recent", "this week", "this month",
-        "price", "stock", "weather", "deadline", "release date", "news",
-        "2024", "2025", "2026", "2027",
+        "latest",
+        "today",
+        "breaking",
+        "recent",
+        "this week",
+        "this month",
+        "price",
+        "stock",
+        "weather",
+        "deadline",
+        "release date",
+        "news",
+        "2024",
+        "2025",
+        "2026",
+        "2027",
     ];
     let q = query.to_lowercase();
     if RECENCY.iter().any(|s| q.contains(s)) {
@@ -55,8 +68,8 @@ fn cache_ttl(intent: Intent, query: &str) -> Duration {
 /// to spend egress budget twice.
 fn norm_query(q: &str) -> String {
     const STOP: &[&str] = &[
-        "a", "an", "the", "is", "are", "was", "were", "of", "in", "on", "at", "to",
-        "for", "and", "or", "what", "which", "how", "do", "does", "i", "you", "it",
+        "a", "an", "the", "is", "are", "was", "were", "of", "in", "on", "at", "to", "for", "and",
+        "or", "what", "which", "how", "do", "does", "i", "you", "it",
     ];
     q.to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -73,6 +86,7 @@ pub struct Searcher {
     /// normalized-query cache: zero egress cost on repeats.
     /// Stores up to 12 results; reads truncate to the
     /// requested max so max_results variants share entries.
+    #[allow(clippy::type_complexity)]
     cache: Mutex<HashMap<String, (Instant, Vec<Merged>, usize)>>,
     /// Chronic-failure quarantine: engine -> (consecutive
     /// failures, last failure). 3 strikes across any
@@ -132,12 +146,9 @@ impl Searcher {
             let mut dead = 0usize;
             for proxy in proxies {
                 let id = proxy.id();
-                let probe = this.fetcher.fetch_once_via(
-                    "https://api.ipify.org/",
-                    &[],
-                    Some(&proxy),
-                    false,
-                );
+                let probe =
+                    this.fetcher
+                        .fetch_once_via("https://api.ipify.org/", &[], Some(&proxy), false);
                 match tokio::time::timeout(Duration::from_secs(6), probe).await {
                     Ok(Ok(o)) if o.status == 200 => {}
                     Ok(Err(e)) if format!("{e}").contains("CONNECT -> 407") => {
@@ -201,18 +212,18 @@ impl Searcher {
                     .unwrap()
                     .get(&format!("{}|{intent_probe:?}", norm_query(query)))
                     .cloned();
-                if let Some((at, cached, total)) = hit {
-                    if at.elapsed() < cache_ttl(intent_probe, query) {
-                        let weak = rank::is_weak(&cached, total);
-                        return Ok(SearchOutcome {
-                            results: cached.iter().take(max_results).cloned().collect(),
-                            weak,
-                            intent: intent_probe,
-                            report: Vec::new(),
-                            cached: true,
-                            elapsed: started.elapsed(),
-                        });
-                    }
+                if let Some((at, cached, total)) = hit
+                    && at.elapsed() < cache_ttl(intent_probe, query)
+                {
+                    let weak = rank::is_weak(&cached, total);
+                    return Ok(SearchOutcome {
+                        results: cached.iter().take(max_results).cloned().collect(),
+                        weak,
+                        intent: intent_probe,
+                        report: Vec::new(),
+                        cached: true,
+                        elapsed: started.elapsed(),
+                    });
                 }
             }
             // Leader died or timed out — compute ourselves.
@@ -221,7 +232,8 @@ impl Searcher {
             map: &self.inflight,
             key: sf_key,
         };
-        self.search_inner(query, max_results, forced_intent, started).await
+        self.search_inner(query, max_results, forced_intent, started)
+            .await
     }
 
     async fn search_inner(
@@ -237,18 +249,18 @@ impl Searcher {
         let intent = forced_intent.unwrap_or_else(|| intent::detect(query));
         let cache_key = format!("{}|{intent:?}", norm_query(query));
 
-        if let Some((at, cached, total)) = self.cache.lock().unwrap().get(&cache_key) {
-            if at.elapsed() < cache_ttl(intent, query) {
-                let weak = rank::is_weak(cached, *total);
-                return Ok(SearchOutcome {
-                    results: cached.iter().take(max_results).cloned().collect(),
-                    weak,
-                    intent,
-                    report: Vec::new(),
-                    cached: true,
-                    elapsed: started.elapsed(),
-                });
-            }
+        if let Some((at, cached, total)) = self.cache.lock().unwrap().get(&cache_key)
+            && at.elapsed() < cache_ttl(intent, query)
+        {
+            let weak = rank::is_weak(cached, *total);
+            return Ok(SearchOutcome {
+                results: cached.iter().take(max_results).cloned().collect(),
+                weak,
+                intent,
+                report: Vec::new(),
+                cached: true,
+                elapsed: started.elapsed(),
+            });
         }
 
         let engines = intent::engines_for(intent);
@@ -287,8 +299,10 @@ impl Searcher {
         // construction (two independent index families).
         let width = width_for_stress(self.pool.stress(), live.len());
         live.truncate(width);
-        let mut assignments: Vec<(String, String)> =
-            live.iter().map(|e| (e.to_string(), query.to_string())).collect();
+        let mut assignments: Vec<(String, String)> = live
+            .iter()
+            .map(|e| (e.to_string(), query.to_string()))
+            .collect();
         // Recall variants spend lanes — only when the
         // governor did NOT cut the roster (healthy pool).
         if queries.len() > 1 && self.pool.stress() < 0.15 {
@@ -321,17 +335,22 @@ impl Searcher {
                 used_egresses.push(eg.id.clone());
             }
             futures.push(Box::pin(engine_task(
-                engine, q, eg.id, eg.proxy, &self.fetcher, &self.pool,
+                engine,
+                q,
+                eg.id,
+                eg.proxy,
+                &self.fetcher,
+                &self.pool,
             )));
         }
         // Verticals: direct, friendly APIs.
-        let verticals: Vec<&&str> = verticals
-            .iter()
-            .filter(|v| !self.quarantined(v))
-            .collect();
+        let verticals: Vec<&&str> = verticals.iter().filter(|v| !self.quarantined(v)).collect();
         for v in verticals {
             futures.push(Box::pin(vertical_task(
-                v.to_string(), query.to_string(), &self.fetcher, None,
+                v.to_string(),
+                query.to_string(),
+                &self.fetcher,
+                None,
             )));
         }
 
@@ -351,9 +370,7 @@ impl Searcher {
         let failed: Vec<String> = if merge_thin {
             outcomes
                 .iter()
-                .filter(|(_, r)| {
-                    matches!(r, Err((s, _, _)) if s != "no-results")
-                })
+                .filter(|(_, r)| matches!(r, Err((s, _, _)) if s != "no-results"))
                 .map(|(e, _)| e.split('@').next().unwrap_or(e).to_string())
                 .collect()
         } else {
@@ -363,13 +380,21 @@ impl Searcher {
         for engine in &failed {
             let is_vertical = matches!(
                 engine.as_str(),
-                "github" | "hn" | "wikipedia" | "scholar" | "news" | "arxiv"
-                    | "stackexchange" | "mdn"
+                "github"
+                    | "hn"
+                    | "wikipedia"
+                    | "scholar"
+                    | "news"
+                    | "arxiv"
+                    | "stackexchange"
+                    | "mdn"
             );
             if is_vertical {
                 // Vertical retry rides a proxy egress (their
                 // direct IP is what got rate-limited).
-                let Some(eg) = self.pool.pick("github", &[], false) else { continue };
+                let Some(eg) = self.pool.pick("github", &[], false) else {
+                    continue;
+                };
                 retry_futures.push(Box::pin(vertical_task(
                     engine.clone(),
                     query.to_string(),
@@ -401,21 +426,17 @@ impl Searcher {
         let retry_outcomes = if retry_futures.is_empty() {
             Vec::new()
         } else {
-            match tokio::time::timeout(
+            tokio::time::timeout(
                 Duration::from_secs(3),
                 futures_util::future::join_all(retry_futures),
             )
             .await
-            {
-                Ok(o) => o,
-                Err(_) => Vec::new(),
-            }
+            .unwrap_or_default()
         };
 
         let mut per_engine: Vec<(String, Vec<engines::Hit>)> = Vec::new();
         let mut report = Vec::new();
-        let all: Vec<(String, EngineResult)> =
-            outcomes.into_iter().chain(retry_outcomes).collect();
+        let all: Vec<(String, EngineResult)> = outcomes.into_iter().chain(retry_outcomes).collect();
         for (engine, outcome) in all {
             match outcome {
                 Ok((hits, ms, egress_id, was_engine)) => {
@@ -487,18 +508,21 @@ impl Searcher {
         if cacheable {
             let mut cache = self.cache.lock().unwrap();
             // LRU-ish cap: drop oldest when full.
-            if cache.len() >= 500 {
-                if let Some(oldest) = cache
+            if cache.len() >= 500
+                && let Some(oldest) = cache
                     .iter()
                     .max_by_key(|(_, (at, _, _))| at.elapsed())
                     .map(|(k, _)| k.clone())
-                {
-                    cache.remove(&oldest);
-                }
+            {
+                cache.remove(&oldest);
             }
             cache.insert(
                 cache_key,
-                (Instant::now(), results.iter().take(12).cloned().collect(), total),
+                (
+                    Instant::now(),
+                    results.iter().take(12).cloned().collect(),
+                    total,
+                ),
             );
             save_cache_disk(&cache);
         }
@@ -521,14 +545,10 @@ impl Searcher {
     }
 }
 
-type EngineResult = Result<
-    (Vec<engines::Hit>, u64, String, bool),
-    (String, String, bool),
->;
+type EngineResult = Result<(Vec<engines::Hit>, u64, String, bool), (String, String, bool)>;
 
-type TaskFut<'a> = std::pin::Pin<
-    Box<dyn std::future::Future<Output = (String, EngineResult)> + Send + 'a>,
->;
+type TaskFut<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = (String, EngineResult)> + Send + 'a>>;
 
 async fn engine_task(
     engine: String,
@@ -544,25 +564,30 @@ async fn engine_task(
     let Some(url) = engines::serp_url(&engine, &query) else {
         return (label, Err(("no-url".into(), egress_id, true)));
     };
-    let out =
-        match tokio::time::timeout(ENGINE_TIMEOUT, fetcher.fetch_once_via(&url, &[], proxy.as_ref(), false))
-            .await
-        {
-            Err(_) => return (label, Err(("timeout".into(), egress_id, true))),
-            Ok(Err(e)) => {
-                let status = match &e {
-                    FetchError::Timeout => "timeout",
-                    FetchError::Http(m) if m.contains("CONNECT -> 407") => "auth-fail",
-                    FetchError::Http(m) if m.contains("CONNECT") => "dead-proxy",
-                    _ => "net",
-                };
-                return (label, Err((status.into(), egress_id, true)));
-            }
-            Ok(Ok(o)) => o,
-        };
+    let out = match tokio::time::timeout(
+        ENGINE_TIMEOUT,
+        fetcher.fetch_once_via(&url, &[], proxy.as_ref(), false),
+    )
+    .await
+    {
+        Err(_) => return (label, Err(("timeout".into(), egress_id, true))),
+        Ok(Err(e)) => {
+            let status = match &e {
+                FetchError::Timeout => "timeout",
+                FetchError::Http(m) if m.contains("CONNECT -> 407") => "auth-fail",
+                FetchError::Http(m) if m.contains("CONNECT") => "dead-proxy",
+                _ => "net",
+            };
+            return (label, Err((status.into(), egress_id, true)));
+        }
+        Ok(Ok(o)) => o,
+    };
     let ms = started.elapsed().as_millis() as u64;
     if out.status == 429 || !matches!(out.verdict, Verdict::ContentOk) {
-        return (label, Err((format!("blocked:{}", out.status), egress_id, true)));
+        return (
+            label,
+            Err((format!("blocked:{}", out.status), egress_id, true)),
+        );
     }
     let html = String::from_utf8_lossy(&out.body).to_string();
     let hits = engines::parse(&engine, &html);
@@ -589,7 +614,7 @@ async fn vertical_task(
     let started = Instant::now();
     match tokio::time::timeout(
         ENGINE_TIMEOUT,
-        verticals::run(&fetcher, &vertical, &query, proxy.as_ref()),
+        verticals::run(fetcher, &vertical, &query, proxy.as_ref()),
     )
     .await
     {
@@ -622,7 +647,12 @@ fn save_cache_disk(cache: &HashMap<String, (Instant, Vec<Merged>, usize)>) {
     let entries: Vec<(String, u64, Vec<Merged>, usize)> = cache
         .iter()
         .map(|(k, (at, r, t))| {
-            (k.clone(), now.saturating_duration_since(*at).as_secs(), r.clone(), *t)
+            (
+                k.clone(),
+                now.saturating_duration_since(*at).as_secs(),
+                r.clone(),
+                *t,
+            )
         })
         .collect();
     if let Ok(json) = serde_json::to_string(&entries) {
@@ -674,10 +704,10 @@ mod tests {
 fn load_cache_disk() -> HashMap<String, (Instant, Vec<Merged>, usize)> {
     let mut map = HashMap::new();
     let Some(path) = cache_path() else { return map };
-    let Ok(raw) = std::fs::read_to_string(path) else { return map };
-    let Ok(entries) =
-        serde_json::from_str::<Vec<(String, u64, Vec<Merged>, usize)>>(&raw)
-    else {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return map;
+    };
+    let Ok(entries) = serde_json::from_str::<Vec<(String, u64, Vec<Merged>, usize)>>(&raw) else {
         return map;
     };
     for (key, age, results, total) in entries {
@@ -695,11 +725,7 @@ fn load_cache_disk() -> HashMap<String, (Instant, Vec<Merged>, usize)> {
         if Duration::from_secs(age) < ttl {
             map.insert(
                 key,
-                (
-                    Instant::now() - Duration::from_secs(age),
-                    results,
-                    total,
-                ),
+                (Instant::now() - Duration::from_secs(age), results, total),
             );
         }
     }

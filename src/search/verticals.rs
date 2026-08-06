@@ -30,12 +30,31 @@ pub fn endpoint(vertical: &str, query: &str) -> Option<String> {
         "github" => {
             let lower = query.to_lowercase().replace('+', " ");
             let words = lower.split_whitespace().count();
-            let errorish = ["error", "exception", "failed", "bug", "crash", "panic", "cannot", "undefined"]
-                .iter()
-                .any(|s| lower.contains(s));
-            let repoish = ["library", "crate", "framework", "plugin", "sdk", "cli", "tool", "vs code", "extension"]
-                .iter()
-                .any(|s| lower.contains(s))
+            let errorish = [
+                "error",
+                "exception",
+                "failed",
+                "bug",
+                "crash",
+                "panic",
+                "cannot",
+                "undefined",
+            ]
+            .iter()
+            .any(|s| lower.contains(s));
+            let repoish = [
+                "library",
+                "crate",
+                "framework",
+                "plugin",
+                "sdk",
+                "cli",
+                "tool",
+                "vs code",
+                "extension",
+            ]
+            .iter()
+            .any(|s| lower.contains(s))
                 || words <= 4;
             // Natural-language how-tos return spam repos from
             // GitHub's loose matcher — skip the vertical.
@@ -144,9 +163,7 @@ fn parse_json(vertical: &str, body: &str) -> Vec<Hit> {
                         Some(Hit {
                             title: title.to_string(),
                             url: url.to_string(),
-                            snippet: format!(
-                                "Hacker News: {points} points, {comments} comments"
-                            ),
+                            snippet: format!("Hacker News: {points} points, {comments} comments"),
                             rank,
                             published: None,
                         })
@@ -179,10 +196,7 @@ fn parse_json(vertical: &str, body: &str) -> Vec<Hit> {
                                 .replace("https://api.github.com/repos/", "");
                             let state = it["state"].as_str().unwrap_or("");
                             Hit {
-                                title: format!(
-                                    "{repo}: {}",
-                                    it["title"].as_str().unwrap_or("")
-                                ),
+                                title: format!("{repo}: {}", it["title"].as_str().unwrap_or("")),
                                 url: it["html_url"].as_str().unwrap_or("").to_string(),
                                 snippet: format!("GitHub issue ({state})"),
                                 rank,
@@ -240,7 +254,10 @@ fn parse_json(vertical: &str, body: &str) -> Vec<Hit> {
                 a.iter()
                     .enumerate()
                     .map(|(rank, it)| {
-                        let year = it["year"].as_i64().map(|y| y.to_string()).unwrap_or_default();
+                        let year = it["year"]
+                            .as_i64()
+                            .map(|y| y.to_string())
+                            .unwrap_or_default();
                         let abs: String = it["abstract"]
                             .as_str()
                             .unwrap_or("")

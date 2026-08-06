@@ -4,9 +4,7 @@
 //! native Chrome behaviors on (GREASE, extension permutation, ECH-GREASE,
 //! ALPS, brotli cert compression), configured from live-captured Chrome data.
 
-use boring::ssl::{
-    Ssl, SslConnector, SslMethod, SslSession, SslVersion,
-};
+use boring::ssl::{Ssl, SslConnector, SslMethod, SslSession, SslVersion};
 use boring::x509::X509;
 use foreign_types::ForeignType;
 use std::collections::HashMap;
@@ -83,8 +81,10 @@ pub fn build_connector(
     _sessions: SessionStore,
 ) -> Result<SslConnector, FetchError> {
     let mut b = SslConnector::builder(SslMethod::tls()).map_err(tls_err)?;
-    b.set_min_proto_version(Some(SslVersion::TLS1_2)).map_err(tls_err)?;
-    b.set_max_proto_version(Some(SslVersion::TLS1_3)).map_err(tls_err)?;
+    b.set_min_proto_version(Some(SslVersion::TLS1_2))
+        .map_err(tls_err)?;
+    b.set_max_proto_version(Some(SslVersion::TLS1_3))
+        .map_err(tls_err)?;
     b.set_cipher_list(profile.tls.ciphers_12).map_err(tls_err)?;
     b.set_curves_list(profile.tls.groups).map_err(tls_err)?;
     b.set_sigalgs_list(profile.tls.sigalgs).map_err(tls_err)?;
@@ -113,17 +113,19 @@ pub fn build_connector(
         )
     };
     if rc != 1 {
-        return Err(FetchError::Tls("cert compression registration failed".into()));
+        return Err(FetchError::Tls(
+            "cert compression registration failed".into(),
+        ));
     }
 
     // Platform-native root store (Chrome uses the OS trust store; so do we).
     let roots = rustls_native_certs::load_native_certs();
     let mut loaded = 0usize;
     for cert in roots.certs {
-        if let Ok(x) = X509::from_der(cert.as_ref()) {
-            if b.cert_store_mut().add_cert(x).is_ok() {
-                loaded += 1;
-            }
+        if let Ok(x) = X509::from_der(cert.as_ref())
+            && b.cert_store_mut().add_cert(x).is_ok()
+        {
+            loaded += 1;
         }
     }
     if loaded == 0 {
@@ -150,12 +152,12 @@ pub async fn connect(
         .map_err(tls_err)?;
 
     // Session resumption (ticket from a previous visit to this origin).
-    if let Ok(guard) = sessions.lock() {
-        if let Some(session) = guard.get(session_key) {
-            // Safe: session belongs to this client ctx; stale ticket just
-            // falls back to a full handshake.
-            let _ = unsafe { ssl.set_session(session) };
-        }
+    if let Ok(guard) = sessions.lock()
+        && let Some(session) = guard.get(session_key)
+    {
+        // Safe: session belongs to this client ctx; stale ticket just
+        // falls back to a full handshake.
+        let _ = unsafe { ssl.set_session(session) };
     }
 
     // ECH-GREASE (encrypted_client_hello extension), like Chrome.

@@ -11,9 +11,7 @@ use std::time::Duration;
 use futures_util::FutureExt;
 
 use super::governor::{Governor, Lane, LaneKind};
-use super::{
-    CrawlMode, CrawlOptions, Crawler, FetchedPage, PageFetcher, StopReason,
-};
+use super::{CrawlMode, CrawlOptions, Crawler, FetchedPage, PageFetcher, StopReason};
 use crate::detect::walls::Verdict;
 
 /// A scripted site: URL → (status, body). Missing URL = 404.
@@ -34,7 +32,8 @@ impl MockSite {
     }
 
     fn page(mut self, url: &str, status: u16, body: &str) -> Self {
-        self.pages.insert(url.to_string(), (status, body.to_string()));
+        self.pages
+            .insert(url.to_string(), (status, body.to_string()));
         self
     }
 
@@ -219,11 +218,18 @@ async fn crawl_cycles_terminate() {
 async fn crawl_max_pages_enforced() {
     let seed = format!(
         "<html><body><article><p>content words for the extractor to accept this page yes</p>{}</article></body></html>",
-        (0..50).map(|i| format!("<a href=\"/p{i}\">p{i}</a>")).collect::<Vec<_>>().join("")
+        (0..50)
+            .map(|i| format!("<a href=\"/p{i}\">p{i}</a>"))
+            .collect::<Vec<_>>()
+            .join("")
     );
     let mut site = MockSite::new().page("https://ex.com/", 200, &seed);
     for i in 0..50 {
-        site = site.page(&format!("https://ex.com/p{i}"), 200, &html(&format!("P{i}"), "body"));
+        site = site.page(
+            &format!("https://ex.com/p{i}"),
+            200,
+            &html(&format!("P{i}"), "body"),
+        );
     }
     let (fetch, _) = site.fetcher();
     let crawler = Crawler::new(fetch, gov());
@@ -240,24 +246,36 @@ async fn crawl_max_pages_enforced() {
 async fn crawl_resume_continues() {
     let seed = format!(
         "<html><body><article><p>content words for the extractor to accept this page yes</p>{}</article></body></html>",
-        (0..10).map(|i| format!("<a href=\"/p{i}\">p{i}</a>")).collect::<Vec<_>>().join("")
+        (0..10)
+            .map(|i| format!("<a href=\"/p{i}\">p{i}</a>"))
+            .collect::<Vec<_>>()
+            .join("")
     );
     let mut site = MockSite::new().page("https://ex.com/", 200, &seed);
     for i in 0..10 {
-        site = site.page(&format!("https://ex.com/p{i}"), 200, &html(&format!("P{i}"), "body"));
+        site = site.page(
+            &format!("https://ex.com/p{i}"),
+            200,
+            &html(&format!("P{i}"), "body"),
+        );
     }
     let (fetch, _) = site.fetcher();
     let crawler = Crawler::new(fetch, gov());
     let mut o = opts();
     o.mode = CrawlMode::Content;
     o.max_pages = 3;
-    let r1 = crawler.crawl("https://ex.com/", o.clone(), None).await.unwrap();
+    let r1 = crawler
+        .crawl("https://ex.com/", o.clone(), None)
+        .await
+        .unwrap();
     let tok = r1.resume.expect("resume token");
-    let seen1: std::collections::HashSet<&str> =
-        r1.pages.iter().map(|p| p.url.as_str()).collect();
+    let seen1: std::collections::HashSet<&str> = r1.pages.iter().map(|p| p.url.as_str()).collect();
 
     let o2 = o;
-    let r2 = crawler.crawl("https://ex.com/", o2, Some(&tok)).await.unwrap();
+    let r2 = crawler
+        .crawl("https://ex.com/", o2, Some(&tok))
+        .await
+        .unwrap();
     // Resumed crawl must not refetch what run 1 already got.
     for p in &r2.pages {
         assert!(!seen1.contains(p.url.as_str()), "refetched {}", p.url);
@@ -352,10 +370,8 @@ async fn crawl_walls_marked_skipped_honestly() {
         .page("https://ex.com/", 200, seed)
         .page("https://ex.com/walled", 200, wall)
         .page("https://ex.com/ok", 200, &html("Ok", "ok"));
-    site.pages.insert(
-        "https://ex.com/walled".into(),
-        (200, wall.to_string()),
-    );
+    site.pages
+        .insert("https://ex.com/walled".into(), (200, wall.to_string()));
     let (fetch, _) = site.fetcher();
     // Mock marks wall pages with a Challenge verdict via a second
     // fetcher wrapper.
@@ -396,7 +412,10 @@ async fn crawl_char_budget_caps_total() {
     let big = html("Big", &"word ".repeat(5000));
     let seed = format!(
         "<html><body><article><p>content words for extractor acceptance threshold yes yes yes</p>{}</article></body></html>",
-        (0..6).map(|i| format!("<a href=\"/big{i}\">b{i}</a>")).collect::<Vec<_>>().join("")
+        (0..6)
+            .map(|i| format!("<a href=\"/big{i}\">b{i}</a>"))
+            .collect::<Vec<_>>()
+            .join("")
     );
     let mut site = MockSite::new().page("https://ex.com/", 200, &seed);
     for i in 0..6 {
@@ -409,7 +428,10 @@ async fn crawl_char_budget_caps_total() {
     o.max_pages = 50;
     o.max_total_chars = 5_000;
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
-    assert!(matches!(r.stop, StopReason::CharBudget | StopReason::MaxPages));
+    assert!(matches!(
+        r.stop,
+        StopReason::CharBudget | StopReason::MaxPages
+    ));
 }
 
 #[tokio::test]
@@ -463,7 +485,11 @@ async fn crawl_focus_ranks_relevant_first() {
     let seed = "<html><body><article><p>content words for extractor acceptance yes yes yes yes yes</p><a href=\"/docs/migration\">the migration guide</a><a href=\"/random\">click here</a></article></body></html>";
     let site = MockSite::new()
         .page("https://ex.com/", 200, seed)
-        .page("https://ex.com/docs/migration", 200, &html("Migration", "migrate"))
+        .page(
+            "https://ex.com/docs/migration",
+            200,
+            &html("Migration", "migrate"),
+        )
         .page("https://ex.com/random", 200, &html("Random", "unrelated"));
     let (fetch, hits) = site.fetcher();
     let crawler = Crawler::new(fetch, gov());

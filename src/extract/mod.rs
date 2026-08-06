@@ -23,6 +23,7 @@ mod tests;
 
 use scraper::Html;
 
+#[derive(Default)]
 pub struct ExtractOptions {
     /// BM25 relevance query: keep only blocks matching, with context.
     pub focus: Option<String>,
@@ -42,21 +43,6 @@ pub struct ExtractOptions {
     /// Scope to one heading section (substring, case-
     /// insensitive). Pairs with toc.
     pub section: Option<String>,
-}
-
-impl Default for ExtractOptions {
-    fn default() -> Self {
-        Self {
-            focus: None,
-            selector: None,
-            max_chars: None,
-            offset: 0,
-            include_links: false,
-            include_media: false,
-            toc: false,
-            section: None,
-        }
-    }
 }
 
 pub struct Extracted {
@@ -132,15 +118,23 @@ fn quality_score(
     // 1. Content density: extracted chars vs raw HTML bytes.
     let text_len: usize = kept.iter().map(|b| b.chars()).sum();
     if raw_len > 0 {
-    let density = text_len as f64 / raw_len as f64;
+        let density = text_len as f64 / raw_len as f64;
         score += (density * 4.0).min(1.0) * 0.25;
     }
 
     // 2. Metadata completeness.
-    if meta.title.is_some() { score += 0.1; }
-    if meta.byline.is_some() { score += 0.05; }
-    if meta.published.is_some() { score += 0.05; }
-    if meta.site.is_some() { score += 0.05; }
+    if meta.title.is_some() {
+        score += 0.1;
+    }
+    if meta.byline.is_some() {
+        score += 0.05;
+    }
+    if meta.published.is_some() {
+        score += 0.05;
+    }
+    if meta.site.is_some() {
+        score += 0.05;
+    }
 
     // 3. Structure diversity: headings + paragraphs + lists.
     let mut headings = 0;
@@ -150,7 +144,7 @@ fn quality_score(
     let mut tables = 0;
     let mut quotes = 0;
     for b in kept {
-    match b {
+        match b {
             blocks::Block::Heading { .. } => headings += 1,
             blocks::Block::Para { .. } => paras += 1,
             blocks::Block::List { .. } => lists += 1,
@@ -160,15 +154,26 @@ fn quality_score(
             _ => {}
         }
     }
-    let structure_types = [headings > 0, paras > 0, lists > 0, code > 0, tables > 0, quotes > 0]
-        .iter()
-        .filter(|&&b| b)
-        .count();
+    let structure_types = [
+        headings > 0,
+        paras > 0,
+        lists > 0,
+        code > 0,
+        tables > 0,
+        quotes > 0,
+    ]
+    .iter()
+    .filter(|&&b| b)
+    .count();
     score += (structure_types as f64 / 6.0) * 0.2;
 
     // 4. Block count health: enough blocks to be real content.
-    if blocks_total >= 5 { score += 0.1; }
-    if blocks_total >= 20 { score += 0.05; }
+    if blocks_total >= 5 {
+        score += 0.1;
+    }
+    if blocks_total >= 20 {
+        score += 0.05;
+    }
 
     // 5. Language detected (not unknown).
     if lang_info.code != "unknown" && lang_info.code != "und" {
@@ -176,8 +181,12 @@ fn quality_score(
     }
 
     // 6. Text volume: actual prose exists.
-    if text_len > 500 { score += 0.1; }
-    if text_len > 2000 { score += 0.05; }
+    if text_len > 500 {
+        score += 0.1;
+    }
+    if text_len > 2000 {
+        score += 0.05;
+    }
 
     score.min(1.0) as f32
 }
@@ -250,8 +259,7 @@ pub fn extract(
 
     // Non-HTML passthrough (json/text/xml): no extraction lies.
     let ct = content_type.to_lowercase();
-    let is_pdf =
-        body.len() >= 5 && body.starts_with(b"%PDF-") || ct.contains("pdf");
+    let is_pdf = body.len() >= 5 && body.starts_with(b"%PDF-") || ct.contains("pdf");
     if !ct.is_empty() && !ct.contains("html") && !is_pdf {
         let text = String::from_utf8_lossy(body);
         let (slice, next) = paginate(&text, opts.offset, max_chars);
@@ -290,7 +298,10 @@ pub fn extract(
                 );
             }
             Err(crate::pdf::PdfFailure::Encrypted) => {
-                return Ok(empty_pdf(url, "encrypted document — a password is required; could not extract text"));
+                return Ok(empty_pdf(
+                    url,
+                    "encrypted document — a password is required; could not extract text",
+                ));
             }
             Err(crate::pdf::PdfFailure::Corrupt(msg)) => {
                 return Ok(empty_pdf(url, &format!("{msg}; could not extract text")));
@@ -305,7 +316,10 @@ pub fn extract(
                 ));
             }
             Err(crate::pdf::PdfFailure::NotPdf) => {
-                return Ok(empty_pdf(url, "bytes do not decode as a PDF; could not extract text"));
+                return Ok(empty_pdf(
+                    url,
+                    "bytes do not decode as a PDF; could not extract text",
+                ));
             }
         }
     }
@@ -324,8 +338,8 @@ pub fn extract(
 
     // Scope: explicit selector or scored main-content detection.
     let roots: Vec<scraper::ElementRef<'_>> = if let Some(sel) = &opts.selector {
-        let parsed = scraper::Selector::parse(sel)
-            .map_err(|_| ExtractError::BadSelector(sel.clone()))?;
+        let parsed =
+            scraper::Selector::parse(sel).map_err(|_| ExtractError::BadSelector(sel.clone()))?;
         doc.select(&parsed).collect()
     } else {
         score::find_main(&doc).into_iter().collect()
@@ -337,7 +351,17 @@ pub fn extract(
         blocks::segment(*root, &base, opts, &mut all_blocks);
     }
 
-    downstream(&meta, all_blocks, raw_len, thin_flag, Vec::new(), lang_info, url, opts, max_chars)
+    downstream(
+        &meta,
+        all_blocks,
+        raw_len,
+        thin_flag,
+        Vec::new(),
+        lang_info,
+        url,
+        opts,
+        max_chars,
+    )
 }
 
 /// Honest stub for PDFs that could not be parsed.
@@ -377,7 +401,6 @@ fn downstream(
     opts: &ExtractOptions,
     max_chars: usize,
 ) -> Result<Extracted, ExtractError> {
-
     // TOC mode: heading tree only.
     if opts.toc {
         let mut md = String::new();
@@ -471,15 +494,11 @@ fn downstream(
     // - empty page → silence looks like a bug
     if focus_fell_back {
         if let Some(q) = &opts.focus {
-            full = format!(
-                "*[focus \"{q}\": no matches — showing full content]*\n\n{full}"
-            );
+            full = format!("*[focus \"{q}\": no matches — showing full content]*\n\n{full}");
         }
     } else if section_missed {
         if let Some(s) = &opts.section {
-            full = format!(
-                "*[section \"{s}\": not found — showing full content]*\n\n{full}"
-            );
+            full = format!("*[section \"{s}\": not found — showing full content]*\n\n{full}");
         }
     } else if full.trim().is_empty() || (blocks_total == 0 && meta.title.is_none()) {
         full = format!("{url}\n\n*(no extractable content)*\n");

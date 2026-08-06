@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::crawl::real as crawl_real;
-use crate::crawl::{Crawler, CrawlMode, CrawlOptions};
+use crate::crawl::{CrawlMode, CrawlOptions, Crawler};
 use crate::detect::walls::Verdict;
 use crate::extract::{self, ExtractOptions};
 use crate::fetch::client::Fetcher;
@@ -16,9 +16,9 @@ use crate::ghost::cache::{CookieRecord, GhostState, RouteDecision};
 use crate::ghost::manager::GhostManager;
 use crate::ghost::ops;
 use crate::profile::BrowserProfile;
-use crate::search::{self, Searcher};
 use crate::search::egress::EgressPool;
 use crate::search::intent::Intent;
+use crate::search::{self, Searcher};
 
 use super::tools;
 
@@ -116,9 +116,7 @@ async fn handle(daemon: &Arc<Daemon>, line: &str) -> Option<String> {
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
 
     // Notifications (no id) that we recognize: stay silent.
-    if id.is_none() {
-        return None;
-    }
+    id.as_ref()?;
     let id = id.unwrap();
 
     let result: Result<Value, (i64, String)> = match method {
@@ -163,10 +161,7 @@ fn initialize(params: &Value) -> Value {
     })
 }
 
-async fn call_tool(
-    daemon: &Arc<Daemon>,
-    params: &Value,
-) -> Result<Value, (i64, String)> {
+async fn call_tool(daemon: &Arc<Daemon>, params: &Value) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     match name {
@@ -181,11 +176,10 @@ async fn call_tool(
 /// discovery (a map costs ~2 requests instead of N fetches);
 /// Phase 2 = Governor-paced frontier walk riding DonShadow +
 /// DonSift. Resume tokens make huge sites paginable.
+#[allow(clippy::field_reassign_with_default)]
 async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     let url = match args.get("url").and_then(Value::as_str) {
-        Some(u) if u.starts_with("http://") || u.starts_with("https://") => {
-            u.to_string()
-        }
+        Some(u) if u.starts_with("http://") || u.starts_with("https://") => u.to_string(),
         _ => return tool_error("crawl: url must be http(s)"),
     };
     let mut opts = CrawlOptions::default();
@@ -208,10 +202,18 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         opts.per_page_max = (n as usize).clamp(400, 40_000);
     }
     if let Some(a) = args.get("include_paths").and_then(Value::as_array) {
-        opts.include_paths = a.iter().filter_map(Value::as_str).map(String::from).collect();
+        opts.include_paths = a
+            .iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect();
     }
     if let Some(a) = args.get("exclude_paths").and_then(Value::as_array) {
-        opts.exclude_paths = a.iter().filter_map(Value::as_str).map(String::from).collect();
+        opts.exclude_paths = a
+            .iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect();
     }
     if let Some(b) = args.get("same_host").and_then(Value::as_bool) {
         opts.same_host = b;
@@ -226,7 +228,10 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
 
     // Ghost-warm: if this host was tier-2 solved recently, the
     // clearance cookies ride tier 1 from page one.
-    if let Some(host) = url::Url::parse(&url).ok().and_then(|u| u.host_str().map(String::from)) {
+    if let Some(host) = url::Url::parse(&url)
+        .ok()
+        .and_then(|u| u.host_str().map(String::from))
+    {
         let route = daemon.state.lock().await.route_for(&host);
         if let RouteDecision::Warm(cookies) = route {
             daemon.fetcher.import_cookies(&cookies).await;
@@ -260,7 +265,10 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
             continue;
         }
         text.push_str(&format!("## [{}] {}\n", p.title, p.url));
-        text.push_str(&format!("kind={:?} quality={:.2} {} chars\n\n", p.kind, p.quality, p.chars));
+        text.push_str(&format!(
+            "kind={:?} quality={:.2} {} chars\n\n",
+            p.kind, p.quality, p.chars
+        ));
         text.push_str(&p.markdown);
         text.push_str("\n\n---\n\n");
     }
@@ -271,7 +279,9 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         }
     }
     if let Some(tok) = &result.resume {
-        text.push_str(&format!("\nresume: call crawl again with resume={tok} to continue.\n"));
+        text.push_str(&format!(
+            "\nresume: call crawl again with resume={tok} to continue.\n"
+        ));
     }
 
     let structured = json!({
@@ -300,28 +310,30 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
 /// The fetch tool: tier 1 → verdict → ghost solve/render
 /// → DonSift. Ports the CLI escalation into the daemon,
 /// with warm-start and render cache.
+#[allow(clippy::field_reassign_with_default)]
 async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     let url = match args.get("url").and_then(Value::as_str) {
-        Some(u) if u.starts_with("http://") || u.starts_with("https://") => {
-            u.to_string()
-        }
+        Some(u) if u.starts_with("http://") || u.starts_with("https://") => u.to_string(),
         _ => return tool_error("fetch: url must be http(s)"),
     };
     let mut opts = ExtractOptions::default();
     opts.focus = args.get("focus").and_then(Value::as_str).map(String::from);
-    opts.max_chars =
-        args.get("max_chars").and_then(Value::as_u64).map(|n| n as usize);
-    opts.offset =
-        args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
-    opts.section =
-        args.get("section").and_then(Value::as_str).map(String::from);
-    opts.selector =
-        args.get("selector").and_then(Value::as_str).map(String::from);
+    opts.max_chars = args
+        .get("max_chars")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize);
+    opts.offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+    opts.section = args
+        .get("section")
+        .and_then(Value::as_str)
+        .map(String::from);
+    opts.selector = args
+        .get("selector")
+        .and_then(Value::as_str)
+        .map(String::from);
     opts.toc = args.get("toc").and_then(Value::as_bool).unwrap_or(false);
-    opts.include_links =
-        args.get("links").and_then(Value::as_bool).unwrap_or(false);
-    opts.include_media =
-        args.get("media").and_then(Value::as_bool).unwrap_or(false);
+    opts.include_links = args.get("links").and_then(Value::as_bool).unwrap_or(false);
+    opts.include_media = args.get("media").and_then(Value::as_bool).unwrap_or(false);
     let tier = args.get("tier").and_then(Value::as_str).unwrap_or("auto");
     let shot = args.get("shot").and_then(Value::as_str);
 
@@ -405,66 +417,48 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         .unwrap_or(true);
     if walled && tier != "1" {
         match daemon.ghost_mgr.acquire(&daemon.profile).await {
-            Ok(mut g) => {
-                match ops::solve(
-                    &mut g,
-                    &url,
-                    std::time::Duration::from_secs(30),
-                )
-                .await
-                {
-                    Ok(ops::SolveOutcome::Solved(r)) => {
-                        daemon.fetcher.import_cookies(&r.cookies).await;
-                        daemon
-                            .state
-                            .lock()
-                            .await
-                            .record_solved(&host, &r.cookies, r.vendor.as_deref());
-                        match daemon.fetcher.fetch(&url).await {
-                            Ok(retry)
-                                if matches!(
-                                    retry.verdict,
-                                    Verdict::ContentOk
-                                ) =>
-                            {
-                                out = Some(retry);
-                                tier_used = "1+ghost-solve";
-                            }
-                            Ok(retry) => {
-                                rendered_html =
-                                    Some(r.html.into_bytes());
-                                out = Some(retry);
-                                tier_used = "ghost-dom";
-                            }
-                            Err(e) => {
-                                return tool_error(format!(
-                                    "fetch after solve: {e}"
-                                ));
-                            }
+            Ok(mut g) => match ops::solve(&mut g, &url, std::time::Duration::from_secs(30)).await {
+                Ok(ops::SolveOutcome::Solved(r)) => {
+                    daemon.fetcher.import_cookies(&r.cookies).await;
+                    daemon
+                        .state
+                        .lock()
+                        .await
+                        .record_solved(&host, &r.cookies, r.vendor.as_deref());
+                    match daemon.fetcher.fetch(&url).await {
+                        Ok(retry) if matches!(retry.verdict, Verdict::ContentOk) => {
+                            out = Some(retry);
+                            tier_used = "1+ghost-solve";
                         }
-                    }
-                    Ok(ops::SolveOutcome::CaptchaWalled) => {
-                        if let Some(p) = shot {
-                            let _ = g.screenshot(p).await;
+                        Ok(retry) => {
+                            rendered_html = Some(r.html.into_bytes());
+                            out = Some(retry);
+                            tier_used = "ghost-dom";
                         }
-                        let v =
-                            out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
-                        return tool_error(format!(
-                            "blocked: interactive captcha at {url} — no solving service by design (verdict: {v:?})"
-                        ));
-                    }
-                    Ok(ops::SolveOutcome::TimedOut) => {
-                        let v =
-                            out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
-                        return tool_error(format!(
-                            "blocked: challenge did not clear in 30s at {url} (verdict: {v:?})"
-                        ));
-                    }
-                    Err(e) => {
-                        return tool_error(format!("ghost solve: {e}"));
+                        Err(e) => {
+                            return tool_error(format!("fetch after solve: {e}"));
+                        }
                     }
                 }
-            }
+                Ok(ops::SolveOutcome::CaptchaWalled) => {
+                    if let Some(p) = shot {
+                        let _ = g.screenshot(p).await;
+                    }
+                    let v = out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
+                    return tool_error(format!(
+                        "blocked: interactive captcha at {url} — no solving service by design (verdict: {v:?})"
+                    ));
+                }
+                Ok(ops::SolveOutcome::TimedOut) => {
+                    let v = out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
+                    return tool_error(format!(
+                        "blocked: challenge did not clear in 30s at {url} (verdict: {v:?})"
+                    ));
+                }
+                Err(e) => {
+                    return tool_error(format!("ghost solve: {e}"));
+                }
+            },
             Err(e) => {
                 return tool_error(format!("ghost launch: {e}"));
             }
@@ -508,35 +502,18 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         let cached = daemon.state.lock().await.render_for(&final_url).cloned();
         if let Some(rc) = cached {
             cache_hit = true;
-            if let Ok(e2) = extract::extract(
-                rc.html.as_bytes(),
-                "text/html",
-                &final_url,
-                &opts,
-            ) {
+            if let Ok(e2) = extract::extract(rc.html.as_bytes(), "text/html", &final_url, &opts) {
                 ex = e2;
                 tier_used = "render-cache";
             }
-        } else if let Ok(mut g) =
-            daemon.ghost_mgr.acquire(&daemon.profile).await
+        } else if let Ok(mut g) = daemon.ghost_mgr.acquire(&daemon.profile).await
+            && let Ok(html) =
+                ops::render(&mut g, &final_url, std::time::Duration::from_secs(30)).await
         {
-            if let Ok(html) = ops::render(
-                &mut g,
-                &final_url,
-                std::time::Duration::from_secs(30),
-            )
-            .await
-            {
-                daemon.state.lock().await.record_render(&final_url, &html);
-                if let Ok(e2) = extract::extract(
-                    html.as_bytes(),
-                    "text/html",
-                    &final_url,
-                    &opts,
-                ) {
-                    ex = e2;
-                    tier_used = "ghost-render";
-                }
+            daemon.state.lock().await.record_render(&final_url, &html);
+            if let Ok(e2) = extract::extract(html.as_bytes(), "text/html", &final_url, &opts) {
+                ex = e2;
+                tier_used = "ghost-render";
             }
         }
     }
@@ -564,8 +541,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         "structuredContent": meta,
     });
     if cache_hit {
-        result["_meta"] =
-            json!({ "ttlMs": 300_000, "cacheScope": "session" });
+        result["_meta"] = json!({ "ttlMs": 300_000, "cacheScope": "session" });
     }
     result
 }
@@ -575,10 +551,7 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         Some(q) if !q.trim().is_empty() => q.to_string(),
         _ => return tool_error("search: query required"),
     };
-    let max = args
-        .get("max_results")
-        .and_then(Value::as_u64)
-        .unwrap_or(7) as usize;
+    let max = args.get("max_results").and_then(Value::as_u64).unwrap_or(7) as usize;
     let intent = match args.get("intent").and_then(Value::as_str) {
         Some("web") => Some(Intent::Web),
         Some("code") => Some(Intent::Code),

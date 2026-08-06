@@ -105,15 +105,16 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 struct H2Placeholder;
 impl H2Placeholder {
     fn into_h1(status: u16, headers: Vec<(String, String)>, body: Vec<u8>) -> H1Response {
-        H1Response { status, headers, body }
+        H1Response {
+            status,
+            headers,
+            body,
+        }
     }
 }
 
 /// Decode chunked transfer coding from `prefix` (already-read bytes) + stream.
-async fn read_chunked<S>(
-    stream: &mut S,
-    prefix: Vec<u8>,
-) -> Result<Vec<u8>, FetchError>
+async fn read_chunked<S>(stream: &mut S, prefix: Vec<u8>) -> Result<Vec<u8>, FetchError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {

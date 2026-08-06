@@ -6,8 +6,8 @@
 //! stopwords, light stemming, accent folding all apply to crawl
 //! scoring for free.
 
-use crate::extract::language;
 use crate::extract::focus;
+use crate::extract::language;
 
 /// Score one candidate URL against the focus query.
 /// `anchor` = the link text where we found it ("" from sitemaps).
@@ -48,10 +48,7 @@ pub fn score_candidate(anchor: &str, path: &str, focus: Option<&str>) -> f64 {
 /// Path-depth prior: prefer shallower pages when relevance is
 /// neutral. /docs/guide > /a/b/c/d/e.
 fn depth_prior(path: &str) -> f64 {
-    let segs = path
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .count();
+    let segs = path.split('/').filter(|s| !s.is_empty()).count();
     -(segs as f64) * 0.15
 }
 
@@ -76,7 +73,10 @@ mod tests {
 
     #[test]
     fn empty_query_falls_back() {
-        assert_eq!(score_candidate("x", "/a", Some("")), 0.0 + depth_prior("/a"));
+        assert_eq!(
+            score_candidate("x", "/a", Some("")),
+            0.0 + depth_prior("/a")
+        );
     }
 
     #[test]

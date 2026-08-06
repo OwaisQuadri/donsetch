@@ -12,6 +12,7 @@
 
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -32,7 +33,11 @@ fn main() {
     let vendored = manifest.join("vendor").join("pdfium");
     let libdir = vendored.join("lib");
 
-    let pdfium_name = if os == "windows" { "pdfium.lib" } else { "libpdfium.a" };
+    let pdfium_name = if os == "windows" {
+        "pdfium.lib"
+    } else {
+        "libpdfium.a"
+    };
     if !libdir.join(pdfium_name).exists() {
         fetch_pdfium(&os, &arch, &vendored);
     }
@@ -104,20 +109,17 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
         .find(|(p, _)| *p == pair)
         .map(|(_, h)| *h)
     {
-        let out = Command::new("sha256sum")
-            .arg(&tgz)
-            .output()
-            .expect("pdfium: failed to spawn sha256sum");
-        let got = String::from_utf8_lossy(&out.stdout);
-        let got = got.split_whitespace().next().unwrap_or("");
+        let mut f = fs::File::open(&tgz).expect("pdfium: cannot open downloaded tarball");
+        let mut buf = Vec::with_capacity(8 * 1024 * 1024);
+        f.read_to_end(&mut buf)
+            .expect("pdfium: cannot read tarball");
+        let got = sha256_hex(&buf);
         assert_eq!(
             got, hash,
             "pdfium: sha256 mismatch for {pair} (expected {hash}, got {got})"
         );
     } else {
-        eprintln!(
-            "donsetch build: no pinned sha256 for pdfium {pair} yet (unverified download)"
-        );
+        eprintln!("donsetch build: no pinned sha256 for pdfium {pair} yet (unverified download)");
     }
 
     let status = Command::new("tar")
@@ -131,4 +133,11 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
         panic!("pdfium: tar extraction failed for {tgz:?}");
     }
     let _ = fs::remove_file(&tgz);
+}
+
+/// SHA-256 hex digest of a byte slice (build-time, no external tool).
+fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(data);
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }

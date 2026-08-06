@@ -24,7 +24,9 @@ pub struct DomainMap {
 
 impl DomainMap {
     pub fn new() -> Self {
-        Self { map: HashMap::new() }
+        Self {
+            map: HashMap::new(),
+        }
     }
 
     #[allow(dead_code)] // used by MCP/verdict surface

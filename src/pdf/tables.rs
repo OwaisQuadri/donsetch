@@ -39,14 +39,14 @@ pub fn detect(lines: &[Line], fusion: Option<&FusionData>) -> Vec<Found> {
                 j += 1;
             }
             let run_len = j - i;
-            if run_len >= 3 {
-                if let Some(block) = build_table(&lines[i..j], fusion) {
-                    out.push(Found {
-                        start: i,
-                        len: run_len,
-                        block,
-                    });
-                }
+            if run_len >= 3
+                && let Some(block) = build_table(&lines[i..j], fusion)
+            {
+                out.push(Found {
+                    start: i,
+                    len: run_len,
+                    block,
+                });
             }
             i = j;
         } else {
@@ -127,7 +127,7 @@ fn build_table(run: &[Line], fusion: Option<&FusionData>) -> Option<Block> {
                 rules_v.push(*r);
             }
         }
-            for r in &f.rules_h {
+        for r in &f.rules_h {
             let (y, rx0, rx1) = ((r[1] + r[3]) * 0.5, r[0], r[2]);
             // H-rules bounding the zone: generous margins (border rules
             // sit just outside the text bbox).
@@ -168,7 +168,11 @@ fn build_table(run: &[Line], fusion: Option<&FusionData>) -> Option<Block> {
                     c.extent = extent;
                 }
             }
-            None => cuts.push(Cut { x, extent, votes: 1 }),
+            None => cuts.push(Cut {
+                x,
+                extent,
+                votes: 1,
+            }),
         }
     }
     for r in &rules_v {
@@ -295,11 +299,10 @@ fn build_table(run: &[Line], fusion: Option<&FusionData>) -> Option<Block> {
 
 fn word_col(w: &Word, cuts: &[f32]) -> usize {
     let mid = ((w.x0 + w.x1) * 0.5) as f64;
-    let i = cuts
-        .iter()
+
+    cuts.iter()
         .position(|&c| (c as f64) > mid)
-        .unwrap_or(cuts.len());
-    i
+        .unwrap_or(cuts.len())
 }
 
 #[cfg(test)]
@@ -353,17 +356,29 @@ mod tests {
                 10.0,
             ),
             row(
-                vec![("Alice", 10.0, 50.0), ("30", 90.0, 100.0), ("KTM", 160.0, 185.0)],
+                vec![
+                    ("Alice", 10.0, 50.0),
+                    ("30", 90.0, 100.0),
+                    ("KTM", 160.0, 185.0),
+                ],
                 24.0,
                 10.0,
             ),
             row(
-                vec![("Bob", 10.0, 45.0), ("25", 90.0, 100.0), ("PKR", 160.0, 185.0)],
+                vec![
+                    ("Bob", 10.0, 45.0),
+                    ("25", 90.0, 100.0),
+                    ("PKR", 160.0, 185.0),
+                ],
                 38.0,
                 10.0,
             ),
             row(
-                vec![("Cid", 10.0, 45.0), ("41", 90.0, 100.0), ("LDN", 160.0, 185.0)],
+                vec![
+                    ("Cid", 10.0, 45.0),
+                    ("41", 90.0, 100.0),
+                    ("LDN", 160.0, 185.0),
+                ],
                 52.0,
                 10.0,
             ),
@@ -383,10 +398,26 @@ mod tests {
     fn rule_grid_merges_multi_line_cells() {
         // One band (y 25..60) contains TWO physical lines: one cell.
         let lines = vec![
-            row(vec![("Part", 10.0, 40.0), ("Spec", 90.0, 120.0)], 10.0, 10.0),
-            row(vec![("Wheel", 10.0, 40.0), ("steel", 90.0, 120.0)], 30.0, 10.0),
-            row(vec![("alloy", 10.0, 40.0), ("rim", 90.0, 120.0)], 44.0, 10.0),
-            row(vec![("Frame", 10.0, 40.0), ("carbon", 90.0, 120.0)], 70.0, 10.0),
+            row(
+                vec![("Part", 10.0, 40.0), ("Spec", 90.0, 120.0)],
+                10.0,
+                10.0,
+            ),
+            row(
+                vec![("Wheel", 10.0, 40.0), ("steel", 90.0, 120.0)],
+                30.0,
+                10.0,
+            ),
+            row(
+                vec![("alloy", 10.0, 40.0), ("rim", 90.0, 120.0)],
+                44.0,
+                10.0,
+            ),
+            row(
+                vec![("Frame", 10.0, 40.0), ("carbon", 90.0, 120.0)],
+                70.0,
+                10.0,
+            ),
         ];
         let f = FusionData {
             rules_h: vec![
@@ -417,9 +448,21 @@ mod tests {
     fn colspan_cut_not_covering_row_is_ignored() {
         // v-rule spans ONLY the second band: the first band is one wide cell.
         let lines = vec![
-            row(vec![("Summary of", 10.0, 70.0), ("everything", 110.0, 160.0)], 10.0, 10.0),
-            row(vec![("Wheel", 10.0, 40.0), ("steel", 90.0, 120.0)], 30.0, 10.0),
-            row(vec![("Frame", 10.0, 40.0), ("carbon", 90.0, 120.0)], 70.0, 10.0),
+            row(
+                vec![("Summary of", 10.0, 70.0), ("everything", 110.0, 160.0)],
+                10.0,
+                10.0,
+            ),
+            row(
+                vec![("Wheel", 10.0, 40.0), ("steel", 90.0, 120.0)],
+                30.0,
+                10.0,
+            ),
+            row(
+                vec![("Frame", 10.0, 40.0), ("carbon", 90.0, 120.0)],
+                70.0,
+                10.0,
+            ),
         ];
         let f = FusionData {
             rules_h: vec![

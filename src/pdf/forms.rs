@@ -120,7 +120,11 @@ impl FormWidget {
             WidgetKind::Signature => {
                 s.push_str(&format!(
                     "- **[signature field{}]**",
-                    if name.is_empty() { String::new() } else { format!(" `{name}`") }
+                    if name.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" `{name}`")
+                    }
                 ));
             }
             WidgetKind::PushButton | WidgetKind::Unknown(_) => {

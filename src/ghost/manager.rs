@@ -64,10 +64,7 @@ impl GhostManager {
 
     /// Acquire the ghost: launch if absent, thaw if
     /// frozen, relaunch if the thaw finds a corpse.
-    pub async fn acquire(
-        &self,
-        profile: &BrowserProfile,
-    ) -> Result<GhostGuard, FetchError> {
+    pub async fn acquire(&self, profile: &BrowserProfile) -> Result<GhostGuard, FetchError> {
         let mut slot = self.slot.clone().lock_owned().await;
         let need_launch = match slot.ghost.as_mut() {
             None => true,

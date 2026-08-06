@@ -46,8 +46,7 @@ pub struct FetchedPage {
 }
 
 /// Pluggable fetch: real = DonShadow, tests = in-memory map.
-pub type PageFetcher =
-    Arc<dyn Fn(String, String) -> BoxFuture<'static, FetchedPage> + Send + Sync>;
+pub type PageFetcher = Arc<dyn Fn(String, String) -> BoxFuture<'static, FetchedPage> + Send + Sync>;
 //            (url, lane_id) -> page
 
 /// Crawl surface mode.
@@ -201,7 +200,8 @@ impl ResumeFile {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        self.entries.retain(|_, (_, at)| now.saturating_sub(*at) < 30 * 60);
+        self.entries
+            .retain(|_, (_, at)| now.saturating_sub(*at) < 30 * 60);
     }
 }
 
@@ -213,10 +213,15 @@ pub struct Crawler {
 
 impl Crawler {
     pub fn new(fetch: PageFetcher, governor: Arc<Governor>) -> Self {
-        Self { fetch, governor, token_seq: AtomicUsize::new(0) }
+        Self {
+            fetch,
+            governor,
+            token_seq: AtomicUsize::new(0),
+        }
     }
 
     /// Run one crawl. Returns when a stop condition hits.
+    #[allow(clippy::field_reassign_with_default)]
     pub async fn crawl(
         &self,
         seed: &str,
@@ -225,14 +230,15 @@ impl Crawler {
     ) -> Result<CrawlResult, String> {
         let started = Instant::now();
         let seed_url = Url::parse(seed).map_err(|_| format!("bad seed url: {seed}"))?;
-        let seed_host = seed_url.host_str().ok_or("seed must have a host")?.to_string();
+        let seed_host = seed_url
+            .host_str()
+            .ok_or("seed must have a host")?
+            .to_string();
 
         let host_ok = {
             let sh = seed_host.clone();
             let same = opts.same_host;
-            move |u: &Url| {
-                !same || u.host_str().map(|h| h == sh).unwrap_or(false)
-            }
+            move |u: &Url| !same || u.host_str().map(|h| h == sh).unwrap_or(false)
         };
 
         // ── Phase 1: the map ───────────────────────────────
@@ -319,14 +325,13 @@ impl Crawler {
             let _ = queue.push(seed_url.clone(), 10.0, 0);
             // Sitemap entries seed frontier at depth 1.
             for e in &sitemap_entries {
-                if let Ok(u) = Url::parse(&e.loc) {
-                    if host_ok(&u)
-                        && scope_allowed(u.path(), &opts.include_paths, &opts.exclude_paths)
-                        && (!opts.respect_robots || robots.allowed(u.path()))
-                    {
-                        let s = score::score_candidate("", u.path(), opts.focus.as_deref());
-                        queue.push(u, s, 1);
-                    }
+                if let Ok(u) = Url::parse(&e.loc)
+                    && host_ok(&u)
+                    && scope_allowed(u.path(), &opts.include_paths, &opts.exclude_paths)
+                    && (!opts.respect_robots || robots.allowed(u.path()))
+                {
+                    let s = score::score_candidate("", u.path(), opts.focus.as_deref());
+                    queue.push(u, s, 1);
                 }
             }
         }
@@ -391,7 +396,7 @@ impl Crawler {
                         }
                         break 'work;
                     }
-                    if let Some(_) = *stop_flag.lock().unwrap() {
+                    if stop_flag.lock().unwrap().is_some() {
                         break 'work;
                     }
                     if pages_done.load(Ordering::SeqCst) >= max_pages {
@@ -451,7 +456,11 @@ impl Crawler {
                     // include/exclude globs only govern backlinks.
                     let is_seed = item.url == seed_norm_w;
                     if !is_seed
-                        && !scope_allowed(parsed.path(), &opts_worker.include_paths, &opts_worker.exclude_paths)
+                        && !scope_allowed(
+                            parsed.path(),
+                            &opts_worker.include_paths,
+                            &opts_worker.exclude_paths,
+                        )
                     {
                         filtered_out.fetch_add(1, Ordering::Relaxed);
                         continue 'work;
@@ -465,10 +474,7 @@ impl Crawler {
                     // Workers aren't lane-pinned: whoever's
                     // least-blocked for this host takes it.
                     let Some(lane) = governor.best_lane(host).cloned() else {
-                        if governor
-                            .wait_for(host, "*", seq)
-                            > Duration::ZERO
-                        {
+                        if governor.wait_for(host, "*", seq) > Duration::ZERO {
                             // Whole host boxed — if the frontier
                             // holds only this host, we're done.
                             if queue.lock().unwrap().is_empty() {
@@ -489,7 +495,6 @@ impl Crawler {
                         }
                         continue 'work;
                     };
-                    let lane = lane;
                     seq += 1;
                     let wait = governor.wait_for(host, &lane.id, seq);
                     // Cap wait inside remaining deadline.
@@ -537,10 +542,10 @@ impl Crawler {
                     let r = match extract::extract(&page.body, ctype, &page.url, &eo) {
                         Ok(r) => r,
                         Err(e) => {
-                            skipped.lock().unwrap().push((
-                                item.url.clone(),
-                                format!("extract failed: {e}"),
-                            ));
+                            skipped
+                                .lock()
+                                .unwrap()
+                                .push((item.url.clone(), format!("extract failed: {e}")));
                             continue 'work;
                         }
                     };
@@ -550,10 +555,7 @@ impl Crawler {
                     // chars of the CONTENT (frontmatter carries the
                     // page URL — identical docs at different URLs
                     // must still dedup).
-                    let body_md = md
-                        .splitn(2, "\n\n")
-                        .nth(1)
-                        .unwrap_or(md.as_str());
+                    let body_md = md.split_once("\n\n").map(|x| x.1).unwrap_or(md.as_str());
                     let sig_str = format!(
                         "{}|{}",
                         r.title.as_deref().unwrap_or("").trim().to_lowercase(),
@@ -589,10 +591,10 @@ impl Crawler {
                         duplicate,
                     });
                     if duplicate {
-                        skipped.lock().unwrap().push((
-                            page.url.clone(),
-                            "near-duplicate".into(),
-                        ));
+                        skipped
+                            .lock()
+                            .unwrap()
+                            .push((page.url.clone(), "near-duplicate".into()));
                         continue 'work;
                     }
 
@@ -610,7 +612,11 @@ impl Crawler {
                                 filtered_out.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             }
-                            if !scope_allowed(cu.path(), &opts_worker.include_paths, &opts_worker.exclude_paths) {
+                            if !scope_allowed(
+                                cu.path(),
+                                &opts_worker.include_paths,
+                                &opts_worker.exclude_paths,
+                            ) {
                                 filtered_out.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             }
@@ -634,7 +640,10 @@ impl Crawler {
         let elapsed = started.elapsed();
         let (final_pages, stop, queued_entries) = {
             let p = std::mem::take(&mut *pages.lock().unwrap());
-            let s = stop_flag.lock().unwrap().unwrap_or(StopReason::FrontierEmpty);
+            let s = stop_flag
+                .lock()
+                .unwrap()
+                .unwrap_or(StopReason::FrontierEmpty);
             let q = sh_queue.lock().unwrap().snapshot_entries();
             (p, s, q)
         };
@@ -656,7 +665,10 @@ impl Crawler {
                     };
                     let state = ResumeState {
                         seed: seed.to_string(),
-                        queue: queued_entries.iter().map(|(u, s, d)| (u.clone(), *s, *d)).collect(),
+                        queue: queued_entries
+                            .iter()
+                            .map(|(u, s, d)| (u.clone(), *s, *d))
+                            .collect(),
                         seen: sh_queue.lock().unwrap().seen_snapshot(),
                     };
                     let now = std::time::SystemTime::now()
@@ -707,7 +719,9 @@ fn self_harvest_static(html: &str, _base: &Url) -> Vec<(String, String)> {
     let sel = scraper::Selector::parse("a[href]").unwrap();
     let mut out = Vec::new();
     for a in doc.select(&sel) {
-        let Some(href) = a.value().attr("href") else { continue };
+        let Some(href) = a.value().attr("href") else {
+            continue;
+        };
         let anchor: String = a.text().collect::<String>().trim().to_string();
         out.push((href.to_string(), anchor));
     }

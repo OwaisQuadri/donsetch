@@ -16,7 +16,12 @@ pub struct Hit {
 }
 
 fn text(el: scraper::ElementRef) -> String {
-    el.text().collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+    el.text()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn sel(css: &str) -> Selector {
@@ -29,10 +34,10 @@ fn sel(css: &str) -> Selector {
 fn decode_ddg(href: &str) -> String {
     if let Some((_, q)) = href.split_once("uddg=") {
         let raw = q.split('&').next().unwrap_or(q);
-        if let Ok(decoded) = urlencoding_decode(raw) {
-            if decoded.starts_with("http") {
-                return decoded;
-            }
+        if let Ok(decoded) = urlencoding_decode(raw)
+            && decoded.starts_with("http")
+        {
+            return decoded;
         }
     }
     href.to_string()
@@ -62,16 +67,15 @@ fn urlencoding_decode(s: &str) -> Result<String, ()> {
 /// Bing redirect links: /ck/a?...&u=a1aHR0cHM... (base64url
 /// after the "a1" prefix).
 fn decode_bing(href: &str) -> String {
-    if href.contains("bing.com/ck/a") {
-        if let Some((_, u)) = href.split_once("&u=") {
-            let u = u.split('&').next().unwrap_or(u);
-            if let Some(b64) = u.strip_prefix("a1") {
-                if let Some(decoded) = base64url_decode(b64) {
-                    if decoded.starts_with("http") {
-                        return decoded;
-                    }
-                }
-            }
+    if href.contains("bing.com/ck/a")
+        && let Some((_, u)) = href.split_once("&u=")
+    {
+        let u = u.split('&').next().unwrap_or(u);
+        if let Some(b64) = u.strip_prefix("a1")
+            && let Some(decoded) = base64url_decode(b64)
+            && decoded.starts_with("http")
+        {
+            return decoded;
         }
     }
     href.to_string()
@@ -124,7 +128,9 @@ fn parse_brave(doc: &Html) -> Vec<Hit> {
     let snippet = sel(".generic-snippet");
     let mut hits = Vec::new();
     for (rank, block) in doc.select(&blocks).enumerate() {
-        let Some(a) = block.select(&link).next() else { continue };
+        let Some(a) = block.select(&link).next() else {
+            continue;
+        };
         let url = a.value().attr("href").unwrap_or("").to_string();
         if !url.starts_with("http") {
             continue;
@@ -142,7 +148,13 @@ fn parse_brave(doc: &Html) -> Vec<Hit> {
             .trim_start_matches(|c: char| !c.is_alphanumeric())
             .to_string();
         if !t.is_empty() {
-            hits.push(Hit { title: t, url, snippet: snip, rank, published: None });
+            hits.push(Hit {
+                title: t,
+                url,
+                snippet: snip,
+                rank,
+                published: None,
+            });
         }
     }
     hits
@@ -154,7 +166,9 @@ fn parse_bing(doc: &Html) -> Vec<Hit> {
     let cap = sel(".b_caption p, .b_lineclamp2, .b_lineclamp3, .b_lineclamp4");
     let mut hits = Vec::new();
     for (rank, li) in doc.select(&items).enumerate() {
-        let Some(a) = li.select(&link).next() else { continue };
+        let Some(a) = li.select(&link).next() else {
+            continue;
+        };
         let url = decode_bing(a.value().attr("href").unwrap_or(""));
         if !url.starts_with("http") {
             continue;
@@ -162,7 +176,13 @@ fn parse_bing(doc: &Html) -> Vec<Hit> {
         let title = text(a);
         let snippet = li.select(&cap).next().map(text).unwrap_or_default();
         if !title.is_empty() {
-            hits.push(Hit { title, url, snippet, rank, published: None });
+            hits.push(Hit {
+                title,
+                url,
+                snippet,
+                rank,
+                published: None,
+            });
         }
     }
     hits
@@ -171,8 +191,7 @@ fn parse_bing(doc: &Html) -> Vec<Hit> {
 fn parse_ddg(doc: &Html) -> Vec<Hit> {
     let links = sel("a.result__a");
     let snippets = sel("a.result__snippet, .result__snippet");
-    let snippet_vec: Vec<String> =
-        doc.select(&snippets).map(text).collect();
+    let snippet_vec: Vec<String> = doc.select(&snippets).map(text).collect();
     let mut hits = Vec::new();
     for (rank, a) in doc.select(&links).enumerate() {
         let url = decode_ddg(a.value().attr("href").unwrap_or(""));
@@ -181,7 +200,13 @@ fn parse_ddg(doc: &Html) -> Vec<Hit> {
         }
         let title = text(a);
         let snippet = snippet_vec.get(rank).cloned().unwrap_or_default();
-        hits.push(Hit { title, url, snippet, rank, published: None });
+        hits.push(Hit {
+            title,
+            url,
+            snippet,
+            rank,
+            published: None,
+        });
     }
     hits
 }
@@ -190,8 +215,7 @@ fn parse_ddg_lite(doc: &Html) -> Vec<Hit> {
     // Lite: a table — result-link anchors then snippet tds.
     let links = sel("a.result-link");
     let snippets = sel("td.result-snippet");
-    let snippet_vec: Vec<String> =
-        doc.select(&snippets).map(text).collect();
+    let snippet_vec: Vec<String> = doc.select(&snippets).map(text).collect();
     let mut hits = Vec::new();
     for (rank, a) in doc.select(&links).enumerate() {
         let url = decode_ddg(a.value().attr("href").unwrap_or(""));
@@ -218,7 +242,9 @@ fn parse_mojeek(doc: &Html) -> Vec<Hit> {
     let cap = sel("p.s");
     let mut hits = Vec::new();
     for (rank, li) in doc.select(&items).enumerate() {
-        let Some(a) = li.select(&link).next() else { continue };
+        let Some(a) = li.select(&link).next() else {
+            continue;
+        };
         let url = a.value().attr("href").unwrap_or("").to_string();
         if !url.starts_with("http") {
             continue;
@@ -244,7 +270,9 @@ fn parse_yahoo(doc: &Html) -> Vec<Hit> {
     let cap = sel(".compText");
     let mut hits = Vec::new();
     for (rank, item) in doc.select(&items).enumerate() {
-        let Some(a) = item.select(&link).next() else { continue };
+        let Some(a) = item.select(&link).next() else {
+            continue;
+        };
         let url = a.value().attr("href").unwrap_or("").to_string();
         if !url.starts_with("http") {
             continue;
@@ -252,7 +280,13 @@ fn parse_yahoo(doc: &Html) -> Vec<Hit> {
         let title = text(a);
         let snippet = item.select(&cap).next().map(text).unwrap_or_default();
         if !title.is_empty() {
-            hits.push(Hit { title, url, snippet, rank, published: None });
+            hits.push(Hit {
+                title,
+                url,
+                snippet,
+                rank,
+                published: None,
+            });
         }
     }
     hits
@@ -260,8 +294,7 @@ fn parse_yahoo(doc: &Html) -> Vec<Hit> {
 
 /// Engine URL builders.
 pub fn serp_url(engine: &str, query: &str) -> Option<String> {
-    let q = url::form_urlencoded::byte_serialize(query.as_bytes())
-        .collect::<String>();
+    let q = url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
     match engine {
         "brave" => Some(format!("https://search.brave.com/search?q={q}")),
         "bing" => Some(format!("https://www.bing.com/search?q={q}&count=15")),

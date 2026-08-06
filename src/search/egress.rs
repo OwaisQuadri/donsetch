@@ -105,7 +105,10 @@ impl EgressPool {
 
     /// All configured proxies (for preflight probing).
     pub fn proxies(&self) -> Vec<Proxy> {
-        self.egresses.iter().filter_map(|e| e.proxy.clone()).collect()
+        self.egresses
+            .iter()
+            .filter_map(|e| e.proxy.clone())
+            .collect()
     }
 
     /// Stress gauge 0.0..1.0 (recent failure mass).
@@ -119,15 +122,23 @@ impl EgressPool {
         // Decay then add: cheap EWMA over outcome counts.
         let decay = |v: u32| (v as f64 * 0.92) as u32;
         if ok {
-            self.stress_ok
-                .store(decay(self.stress_ok.load(Ordering::Relaxed)) + 1000, Ordering::Relaxed);
-            self.stress_fail
-                .store(decay(self.stress_fail.load(Ordering::Relaxed)), Ordering::Relaxed);
+            self.stress_ok.store(
+                decay(self.stress_ok.load(Ordering::Relaxed)) + 1000,
+                Ordering::Relaxed,
+            );
+            self.stress_fail.store(
+                decay(self.stress_fail.load(Ordering::Relaxed)),
+                Ordering::Relaxed,
+            );
         } else {
-            self.stress_fail
-                .store(decay(self.stress_fail.load(Ordering::Relaxed)) + 1000, Ordering::Relaxed);
-            self.stress_ok
-                .store(decay(self.stress_ok.load(Ordering::Relaxed)), Ordering::Relaxed);
+            self.stress_fail.store(
+                decay(self.stress_fail.load(Ordering::Relaxed)) + 1000,
+                Ordering::Relaxed,
+            );
+            self.stress_ok.store(
+                decay(self.stress_ok.load(Ordering::Relaxed)),
+                Ordering::Relaxed,
+            );
         }
     }
 
@@ -156,9 +167,7 @@ impl EgressPool {
                 },
             }
         };
-        let dead_globally = |id: &str| -> bool {
-            dead.get(id).is_some_and(|&t| t > now)
-        };
+        let dead_globally = |id: &str| -> bool { dead.get(id).is_some_and(|&t| t > now) };
 
         // Are ALL proxy lanes burned for this engine?
         let any_proxy_viable = self
@@ -187,7 +196,7 @@ impl EgressPool {
                     continue;
                 }
             }
-            let score = s + if e.proxy.is_none() { 0 } else { 0 };
+            let score = s;
             if best.is_none_or(|(_, bs)| score > bs) {
                 best = Some((e, score));
             }

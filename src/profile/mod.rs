@@ -103,8 +103,9 @@ impl BrowserProfile {
                 "Mozilla/5.0 ({}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
                 platform.ua_token()
             ),
-            sec_ch_ua: "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\", \"Google Chrome\";v=\"150\""
-                .to_string(),
+            sec_ch_ua:
+                "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\", \"Google Chrome\";v=\"150\""
+                    .to_string(),
             platform,
         }
     }

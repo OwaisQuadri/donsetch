@@ -2,7 +2,9 @@
 //! (CJK bigrams vs word-split), stopword filtering, and
 //! stemming. No external model — pure Unicode-range analysis
 //! + HTML hints. Good enough to route tokenization correctly;
-//! the focus filter degrades gracefully on wrong calls.
+//!
+//! The focus filter degrades gracefully on wrong calls.
+//!
 
 use scraper::Html;
 
@@ -84,9 +86,7 @@ pub fn char_script(c: char) -> Script {
         return Script::Cyrillic;
     }
     // Latin (basic + extended)
-    if c.is_ascii_alphanumeric()
-        || (0x00C0..=0x024F).contains(&u)
-        || (0x1E00..=0x1EFF).contains(&u)
+    if c.is_ascii_alphanumeric() || (0x00C0..=0x024F).contains(&u) || (0x1E00..=0x1EFF).contains(&u)
     {
         return Script::Latin;
     }
@@ -96,15 +96,17 @@ pub fn char_script(c: char) -> Script {
 /// Whether a script needs character-level tokenization
 /// (no spaces between words). CJK, Hangul, Thai.
 pub fn needs_char_tokenize(s: Script) -> bool {
-    matches!(s, Script::Han | Script::Kana | Script::Hangul | Script::Thai)
+    matches!(
+        s,
+        Script::Han | Script::Kana | Script::Hangul | Script::Thai
+    )
 }
 
 /// Detect language from raw text (no HTML). Used by crawl
 /// scoring on focus queries + anchor text. Samples up to 5000
 /// chars and classifies by script census.
 pub fn detect_from_text(text: &str) -> LanguageInfo {
-    let mut counts: std::collections::HashMap<Script, usize> =
-        std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<Script, usize> = std::collections::HashMap::new();
     let mut sampled = 0usize;
     for c in text.chars() {
         let s = char_script(c);
@@ -126,7 +128,11 @@ pub fn detect_from_text(text: &str) -> LanguageInfo {
         .map(|(&s, _)| s)
         .collect();
     scripts.sort_by(|a, b| {
-        counts.get(b).copied().unwrap_or(0).cmp(&counts.get(a).copied().unwrap_or(0))
+        counts
+            .get(b)
+            .copied()
+            .unwrap_or(0)
+            .cmp(&counts.get(a).copied().unwrap_or(0))
     });
     if scripts.is_empty() {
         return LanguageInfo {
@@ -137,7 +143,11 @@ pub fn detect_from_text(text: &str) -> LanguageInfo {
     }
     let dominant = *scripts.first().unwrap();
     let code = script_to_lang(dominant, &scripts);
-    LanguageInfo { code, script: dominant, scripts }
+    LanguageInfo {
+        code,
+        script: dominant,
+        scripts,
+    }
 }
 
 /// Detect language from an HTML document. Checks
@@ -182,14 +192,13 @@ fn meta_content_language(doc: &Html) -> Option<String> {
         "meta[http-equiv='Content-Language']",
         "meta[name='language']",
     ] {
-        if let Some(sel) = scraper::Selector::parse(selector).ok() {
-            if let Some(el) = doc.select(&sel).next() {
-                if let Some(content) = el.value().attr("content") {
-                    let code = normalize_lang(content);
-                    if !code.is_empty() && code != "und" {
-                        return Some(code);
-                    }
-                }
+        if let Ok(sel) = scraper::Selector::parse(selector)
+            && let Some(el) = doc.select(&sel).next()
+            && let Some(content) = el.value().attr("content")
+        {
+            let code = normalize_lang(content);
+            if !code.is_empty() && code != "und" {
+                return Some(code);
             }
         }
     }
@@ -276,10 +285,10 @@ fn normalize_lang(raw: &str) -> String {
         return String::new();
     }
     // Validate: should be 2-3 alpha chars.
-    if primary.len() == 2 || primary.len() == 3 {
-        if primary.chars().all(|c| c.is_ascii_alphabetic()) {
-            return primary.to_string();
-        }
+    if (primary.len() == 2 || primary.len() == 3)
+        && primary.chars().all(|c| c.is_ascii_alphabetic())
+    {
+        return primary.to_string();
     }
     String::new()
 }
@@ -316,7 +325,9 @@ mod tests {
 
     #[test]
     fn meta_content_language() {
-        let doc = parse(r#"<html><head><meta http-equiv="content-language" content="de"></head><body>Hallo</body></html>"#);
+        let doc = parse(
+            r#"<html><head><meta http-equiv="content-language" content="de"></head><body>Hallo</body></html>"#,
+        );
         let info = detect(&doc);
         assert_eq!(info.code, "de");
     }

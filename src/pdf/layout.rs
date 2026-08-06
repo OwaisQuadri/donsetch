@@ -128,8 +128,7 @@ pub fn assemble(page: PageChars) -> PageLines {
     // kerned fragments and punctuation descenders on the same physical
     // line, which scrambled reading order when clustering on centers.
     chars.sort_by(|a, b| {
-        a.y1
-            .total_cmp(&b.y1)
+        a.y1.total_cmp(&b.y1)
             .then(a.x0.total_cmp(&b.x0))
             .then(a.order.cmp(&b.order))
     });
@@ -142,7 +141,10 @@ pub fn assemble(page: PageChars) -> PageLines {
     let peek = std::env::var("DONSHEET_DEBUG_CHARS").is_ok();
     for c in chars {
         if peek {
-            eprintln!("stream y1={:6.1} cp={:?} s={:4.1} x0={:6.1} x1={:6.1}", c.y1, c.cp, c.size, c.x0, c.x1);
+            eprintln!(
+                "stream y1={:6.1} cp={:?} s={:4.1} x0={:6.1} x1={:6.1}",
+                c.y1, c.cp, c.size, c.x0, c.x1
+            );
         }
         if cur.is_empty() {
             cur.push(c);
@@ -159,7 +161,10 @@ pub fn assemble(page: PageChars) -> PageLines {
             cur_bl = (cur_bl * (cur.len() as f32 - 1.0) + c.y1) / cur.len() as f32;
         } else {
             if peek {
-                eprintln!("--- split at y1={:6.1} cp={:?} (tol {tol:.1}) ---", c.y1, c.cp);
+                eprintln!(
+                    "--- split at y1={:6.1} cp={:?} (tol {tol:.1}) ---",
+                    c.y1, c.cp
+                );
             }
             lines.push(std::mem::take(&mut cur));
             cur.push(c);
@@ -224,8 +229,7 @@ fn split_duplicate_layers(cluster: Vec<&PdfChar>) -> Vec<Vec<&PdfChar>> {
     // the whole point of this gate.
     let (a, b) = if s1 > s2 { (s1, s2) } else { (s2, s1) };
     let near = |c: &&PdfChar, s: f32| (c.size - s).abs() <= 0.2 * s;
-    let (mut g1x0, mut g1x1, mut g2x0, mut g2x1) =
-        (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    let (mut g1x0, mut g1x1, mut g2x0, mut g2x1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
     for c in &cluster {
         if near(c, a) {
             g1x0 = g1x0.min(c.x0);
@@ -255,8 +259,7 @@ fn split_duplicate_layers(cluster: Vec<&PdfChar>) -> Vec<Vec<&PdfChar>> {
 fn build_line(cluster: &[&PdfChar], page_index: usize) -> Line {
     let mut text = String::with_capacity(cluster.len());
     let mut words: Vec<Word> = Vec::new();
-    let (mut lx0, mut ly0, mut lx1, mut ly1) =
-        (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    let (mut lx0, mut ly0, mut lx1, mut ly1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
 
     // Adaptive gap baseline: medians of positive inter-glyph gaps make
     // the word-break threshold robust to letterspaced text (forms,
@@ -325,7 +328,7 @@ fn build_line(cluster: &[&PdfChar], page_index: usize) -> Line {
                 .iter()
                 .any(|&sx| sx > prev_x1 - 0.5 && sx < c.x0 + 0.5);
             // A real space glyph reaching this position is a hard break.
-            let real_space = prev_cp == ' ' && space_width_real(&reals[i - 1]);
+            let real_space = prev_cp == ' ' && space_width_real(reals[i - 1]);
             let break_here = if pair_cjk {
                 real_space
             } else if pair_deva {
@@ -333,15 +336,17 @@ fn build_line(cluster: &[&PdfChar], page_index: usize) -> Line {
             } else if mix_cjk {
                 gap > 0.55 * prev_size || (decor && gap > 0.10 * prev_size)
             } else {
-                gap > adaptive
-                    || (decor && gap > 0.10 * prev_size)
-                    || (real_space && gap > 0.02)
+                gap > adaptive || (decor && gap > 0.10 * prev_size) || (real_space && gap > 0.02)
             };
             if break_here {
                 // Close the current word.
                 if !word_x0.is_nan() {
                     let wtext = take_last_word(&mut text);
-                    words.push(Word { text: wtext, x0: word_x0, x1: prev_x1 });
+                    words.push(Word {
+                        text: wtext,
+                        x0: word_x0,
+                        x1: prev_x1,
+                    });
                     word_x0 = f32::NAN;
                 }
                 text.push(' ');
@@ -380,13 +385,21 @@ fn build_line(cluster: &[&PdfChar], page_index: usize) -> Line {
     }
     if !word_x0.is_nan() {
         let wtext = take_last_word(&mut text);
-        words.push(Word { text: wtext, x0: word_x0, x1: lx1 });
+        words.push(Word {
+            text: wtext,
+            x0: word_x0,
+            x1: lx1,
+        });
     }
 
     // Collapse runs of spaces and trim.
     let text = collapse_spaces(&text);
     if std::env::var("DONSHEET_DEBUG_WORDS").is_ok() {
-        eprintln!("[words] {:?} -> {:?}", text, words.iter().map(|w| &w.text).collect::<Vec<_>>());
+        eprintln!(
+            "[words] {:?} -> {:?}",
+            text,
+            words.iter().map(|w| &w.text).collect::<Vec<_>>()
+        );
     }
     // BiDi: the stream is VISUAL order; any strong RTL char means the line
     // needs logical-ordering. Latin-only lines are an identity pass.
@@ -444,6 +457,7 @@ fn is_cjk(cp: char) -> bool {
 /// Split off the last whitespace-separated word. Read-only on `text`:
 /// trailing whitespace is skipped BEFORE locating the word start
 /// (real-space glyphs in the stream make trailing spaces common).
+#[allow(clippy::ptr_arg)]
 fn take_last_word(text: &mut String) -> String {
     let end = text
         .char_indices()

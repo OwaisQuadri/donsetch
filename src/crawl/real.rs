@@ -20,9 +20,15 @@ use super::{Crawler, FetchedPage, PageFetcher};
 /// jar/pool/cache as everything else in the process); proxies
 /// come from env or config, same format as DonSeek.
 pub fn build(fetcher: Arc<Fetcher>, proxies: Vec<Proxy>) -> (Crawler, Arc<Governor>) {
-    let mut lanes = vec![Lane { id: "direct".into(), kind: LaneKind::Direct }];
+    let mut lanes = vec![Lane {
+        id: "direct".into(),
+        kind: LaneKind::Direct,
+    }];
     for p in &proxies {
-        lanes.push(Lane { id: p.id(), kind: LaneKind::Proxy });
+        lanes.push(Lane {
+            id: p.id(),
+            kind: LaneKind::Proxy,
+        });
     }
     let governor = Arc::new(Governor::new(lanes));
 

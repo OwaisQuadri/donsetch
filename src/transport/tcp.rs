@@ -11,13 +11,11 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const STAGGER: Duration = Duration::from_millis(250);
 
 pub async fn happy_connect(host: &str, port: u16) -> Result<TcpStream, FetchError> {
-    let addrs: Vec<SocketAddr> = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        tokio::net::lookup_host((host, port)),
-    )
-    .await
-    .map_err(|_| FetchError::Timeout)??
-    .collect();
+    let addrs: Vec<SocketAddr> =
+        tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((host, port)))
+            .await
+            .map_err(|_| FetchError::Timeout)??
+            .collect();
     if addrs.is_empty() {
         return Err(FetchError::Http(format!("dns: no address for {host}")));
     }

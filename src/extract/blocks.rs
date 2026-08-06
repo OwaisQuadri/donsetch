@@ -14,19 +14,48 @@ const MAX_DEPTH: usize = 300;
 /// link <a><h2>…</h2><p>…</p></a> has block children that
 /// must be emitted.
 pub const INLINE_TAGS: &[&str] = &[
-    "a", "span", "strong", "b", "em", "i", "code", "small", "sub", "sup",
-    "abbr", "mark", "time", "br", "wbr", "u", "s", "q", "cite", "font", "label",
+    "a", "span", "strong", "b", "em", "i", "code", "small", "sub", "sup", "abbr", "mark", "time",
+    "br", "wbr", "u", "s", "q", "cite", "font", "label",
 ];
 
 #[derive(Debug, Clone)]
 pub enum Block {
-    Heading { level: u8, text: String, path: Vec<String> },
-    Para { md: String, link_density: f32, path: Vec<String> },
-    List { ordered: bool, items: Vec<String>, link_density: f32, path: Vec<String> },
-    Table { headers: Vec<String>, rows: Vec<Vec<String>>, truncated: bool, path: Vec<String> },
-    Code { lang: Option<String>, code: String, path: Vec<String> },
-    Quote { md: String, path: Vec<String> },
-    Media { alt: String, src: String, path: Vec<String> },
+    Heading {
+        level: u8,
+        text: String,
+        path: Vec<String>,
+    },
+    Para {
+        md: String,
+        link_density: f32,
+        path: Vec<String>,
+    },
+    List {
+        ordered: bool,
+        items: Vec<String>,
+        link_density: f32,
+        path: Vec<String>,
+    },
+    Table {
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+        truncated: bool,
+        path: Vec<String>,
+    },
+    Code {
+        lang: Option<String>,
+        code: String,
+        path: Vec<String>,
+    },
+    Quote {
+        md: String,
+        path: Vec<String>,
+    },
+    Media {
+        alt: String,
+        src: String,
+        path: Vec<String>,
+    },
 }
 
 impl Block {
@@ -126,7 +155,11 @@ fn walk<'a>(
             let (md, ld) = inline::markdown(el, base, opts);
             if !md.is_empty() {
                 push_block(
-                    Block::Para { md, link_density: ld, path: current_path(headings) },
+                    Block::Para {
+                        md,
+                        link_density: ld,
+                        path: current_path(headings),
+                    },
                     out,
                 );
             }
@@ -165,7 +198,11 @@ fn walk<'a>(
                     })
                     .map(|s| s.to_string());
                 push_block(
-                    Block::Code { lang, code, path: current_path(headings) },
+                    Block::Code {
+                        lang,
+                        code,
+                        path: current_path(headings),
+                    },
                     out,
                 );
             }
@@ -173,7 +210,13 @@ fn walk<'a>(
         "blockquote" => {
             let (md, _) = inline::markdown(el, base, opts);
             if !md.is_empty() {
-                push_block(Block::Quote { md, path: current_path(headings) }, out);
+                push_block(
+                    Block::Quote {
+                        md,
+                        path: current_path(headings),
+                    },
+                    out,
+                );
             }
         }
         "dl" => {
@@ -205,7 +248,11 @@ fn walk<'a>(
                 let loose = loose_text(el, base, opts);
                 if !loose.0.is_empty() {
                     push_block(
-                        Block::Para { md: loose.0, link_density: loose.1, path: current_path(headings) },
+                        Block::Para {
+                            md: loose.0,
+                            link_density: loose.1,
+                            path: current_path(headings),
+                        },
                         out,
                     );
                 }
@@ -247,15 +294,15 @@ fn loose_text(el: ElementRef<'_>, base: &str, opts: &super::ExtractOptions) -> (
                 }
             }
             Node::Element(_) => {
-                let Some(c) = ElementRef::wrap(child) else { continue };
+                let Some(c) = ElementRef::wrap(child) else {
+                    continue;
+                };
                 let n = c.value().name();
                 // Inline phrasing content belongs to the loose paragraph —
                 // but an inline element wrapping BLOCK children (card
                 // links: <a><h2>…</h2><p>…</p></a>) must not be
                 // swallowed here; the walk emits those blocks itself.
-                if INLINE_TAGS.contains(&n)
-                    && !crate::extract::junk::skip(c)
-                    && !contains_block(c)
+                if INLINE_TAGS.contains(&n) && !crate::extract::junk::skip(c) && !contains_block(c)
                 {
                     let (md, _) = inline::markdown(c, base, opts);
                     let t = md.trim();
@@ -274,7 +321,11 @@ fn loose_text(el: ElementRef<'_>, base: &str, opts: &super::ExtractOptions) -> (
             _ => {}
         }
     }
-    let ld = if total > 0 { link as f32 / total as f32 } else { 0.0 };
+    let ld = if total > 0 {
+        link as f32 / total as f32
+    } else {
+        0.0
+    };
     (buf, ld)
 }
 
@@ -284,8 +335,23 @@ fn contains_block(el: ElementRef<'_>) -> bool {
     while let Some(node) = stack.pop() {
         if matches!(
             node.value().name(),
-            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "div" | "ul" | "ol" | "li"
-                | "table" | "pre" | "blockquote" | "section" | "article" | "figure" | "hr"
+            "h1" | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "p"
+                | "div"
+                | "ul"
+                | "ol"
+                | "li"
+                | "table"
+                | "pre"
+                | "blockquote"
+                | "section"
+                | "article"
+                | "figure"
+                | "hr"
         ) {
             return true;
         }
@@ -304,7 +370,9 @@ fn list_items(
     let mut total = 0usize;
     let mut link = 0usize;
     for child in list.children() {
-        let Some(li) = ElementRef::wrap(child) else { continue };
+        let Some(li) = ElementRef::wrap(child) else {
+            continue;
+        };
         if li.value().name() != "li" || crate::extract::junk::skip(li) {
             continue;
         }
@@ -317,28 +385,32 @@ fn list_items(
         }
         // Nested lists.
         for sub in li.children() {
-            let Some(sub_el) = ElementRef::wrap(sub) else { continue };
+            let Some(sub_el) = ElementRef::wrap(sub) else {
+                continue;
+            };
             if matches!(sub_el.value().name(), "ul" | "ol") && depth < 4 {
                 let (nested, _) = list_items(sub_el, base, opts, depth + 1);
                 items.extend(nested);
             }
         }
     }
-    let ld = if total > 0 { link as f32 / total as f32 } else { 0.0 };
+    let ld = if total > 0 {
+        link as f32 / total as f32
+    } else {
+        0.0
+    };
     (items, ld)
 }
 
 /// Definition list (dl/dt/dd) — render as
 /// "**term** — definition" list items.
-fn def_list_items(
-    dl: ElementRef<'_>,
-    base: &str,
-    opts: &super::ExtractOptions,
-) -> Vec<String> {
+fn def_list_items(dl: ElementRef<'_>, base: &str, opts: &super::ExtractOptions) -> Vec<String> {
     let mut items = Vec::new();
     let mut current_term: Option<String> = None;
     for child in dl.children() {
-        let Some(el) = ElementRef::wrap(child) else { continue };
+        let Some(el) = ElementRef::wrap(child) else {
+            continue;
+        };
         if crate::extract::junk::skip(el) {
             continue;
         }
@@ -391,7 +463,11 @@ fn table_block(el: ElementRef<'_>, headings: &[(u8, String)]) -> Option<Block> {
             .select(&scraper::Selector::parse("td").unwrap())
             .map(|c| {
                 let t = inline::plain(c).replace('|', "\\|"); // unescaped pipes break md tables
-                if t.len() > 120 { format!("{}…", &t[..floor_boundary(&t, 120)]) } else { t }
+                if t.len() > 120 {
+                    format!("{}…", &t[..floor_boundary(&t, 120)])
+                } else {
+                    t
+                }
             })
             .collect();
         if row.iter().any(|c| !c.is_empty()) {
@@ -416,12 +492,7 @@ fn table_block(el: ElementRef<'_>, headings: &[(u8, String)]) -> Option<Block> {
     })
 }
 
-fn media_block(
-    el: ElementRef<'_>,
-    base: &str,
-    headings: &[(u8, String)],
-    out: &mut Vec<Block>,
-) {
+fn media_block(el: ElementRef<'_>, base: &str, headings: &[(u8, String)], out: &mut Vec<Block>) {
     let sel = scraper::Selector::parse("img").unwrap();
     // figcaption = the alt an agent actually wants (chart/
     // diagram descriptions) when the img alt is empty.
@@ -440,7 +511,10 @@ fn media_block(
         el.select(&sel).collect()
     };
     for img in imgs.into_iter().take(3) {
-        let src = img.value().attr("src").or_else(|| img.value().attr("data-src"));
+        let src = img
+            .value()
+            .attr("src")
+            .or_else(|| img.value().attr("data-src"));
         let Some(src) = src else { continue };
         // Skip icons/spacers.
         let small = ["width", "height"].iter().any(|a| {

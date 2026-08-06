@@ -11,7 +11,7 @@
 //! the pipeline never has to think about PDF's bottom-left origin.
 
 #![allow(dead_code)]
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{CString, c_char, c_void};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::sys::*;
@@ -184,12 +184,8 @@ fn get_meta(doc: FpdfDocument, tag: &str, buf: &mut Vec<u16>) -> Option<String> 
     unsafe {
         buf.clear();
         buf.resize(512, 0);
-        let n = FPDF_GetMetaText(
-            doc,
-            tag.as_ptr(),
-            buf.as_mut_ptr() as *mut c_void,
-            512 * 2,
-        ) as usize;
+        let n =
+            FPDF_GetMetaText(doc, tag.as_ptr(), buf.as_mut_ptr() as *mut c_void, 512 * 2) as usize;
         if n < 2 {
             return None;
         }
@@ -219,15 +215,12 @@ fn get_meta(doc: FpdfDocument, tag: &str, buf: &mut Vec<u16>) -> Option<String> 
 fn bookmark_title(bm: FpdfBookmark) -> String {
     unsafe {
         let n = FPDFBookmark_GetTitle(bm, std::ptr::null_mut(), 0) as usize;
-        if n < 2 || n > 64 * 1024 {
+        if !(2..=64 * 1024).contains(&n) {
             return String::new();
         }
         let mut buf = vec![0u16; n / 2 + 2];
-        let n2 = FPDFBookmark_GetTitle(
-            bm,
-            buf.as_mut_ptr() as *mut c_void,
-            (buf.len() * 2) as u64,
-        ) as usize;
+        let n2 = FPDFBookmark_GetTitle(bm, buf.as_mut_ptr() as *mut c_void, (buf.len() * 2) as u64)
+            as usize;
         decode_utf16(&buf, n2.min(buf.len()))
     }
 }
@@ -235,7 +228,12 @@ fn bookmark_title(bm: FpdfBookmark) -> String {
 /// Walk the outline tree depth-first, flattened with levels.
 fn walk_outlines(doc: FpdfDocument) -> Vec<OutlineItem> {
     let mut out = Vec::new();
-    fn walk_level(doc: FpdfDocument, parent: FpdfBookmark, level: usize, out: &mut Vec<OutlineItem>) {
+    fn walk_level(
+        doc: FpdfDocument,
+        parent: FpdfBookmark,
+        level: usize,
+        out: &mut Vec<OutlineItem>,
+    ) {
         if level > 12 || out.len() > 10_000 {
             return;
         }
@@ -245,11 +243,7 @@ fn walk_outlines(doc: FpdfDocument) -> Vec<OutlineItem> {
             let dest = unsafe { FPDFBookmark_GetDest(doc, bm) };
             let page = if !dest.is_null() {
                 let idx = unsafe { FPDFDest_GetDestPageIndex(doc, dest) };
-                if idx >= 0 {
-                    Some(idx as usize)
-                } else {
-                    None
-                }
+                if idx >= 0 { Some(idx as usize) } else { None }
             } else {
                 None
             };
@@ -502,7 +496,7 @@ where
             // Image-object count (scanned detection).
             let mut images = 0usize;
             let nobj = FPDFPage_CountObjects(page);
-            for oi in 0..nobj.max(0).min(4096) {
+            for oi in 0..nobj.clamp(0, 4096) {
                 let obj = FPDFPage_GetObject(page, oi);
                 if !obj.is_null() && FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_IMAGE {
                     images += 1;
@@ -545,7 +539,10 @@ where
                         m.b.atan2(m.a).to_degrees()
                     };
                     if std::env::var("DONSHEET_DEBUG_MATRIX").is_ok() && i < 8 {
-                        eprintln!("[matrix] i={i} a={:.3} b={:.3} c={:.3} d={:.3} angle={angle:.1}", m.a, m.b, m.c, m.d);
+                        eprintln!(
+                            "[matrix] i={i} a={:.3} b={:.3} c={:.3} d={:.3} angle={angle:.1}",
+                            m.a, m.b, m.c, m.d
+                        );
                     }
                     let size = if size.is_finite() && size > 1.5 {
                         size as f32
@@ -572,10 +569,10 @@ where
                             .unwrap_or(namebuf.len());
                         let mut s = String::from_utf8_lossy(&namebuf[..nul]).into_owned();
                         // Strip the six-letter subset prefix ("ABCDEF+Font").
-                        if let Some(p) = s.find('+') {
-                            if p <= 8 {
-                                s = s[p + 1..].to_string();
-                            }
+                        if let Some(p) = s.find('+')
+                            && p <= 8
+                        {
+                            s = s[p + 1..].to_string();
                         }
                         match font_index.get(&s) {
                             Some(&idx) => idx,

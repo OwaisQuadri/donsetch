@@ -23,10 +23,32 @@ const SKIP_ROLES: &[&str] = &[
 /// require exact token match — "flex-nav-upsell" must not kill
 /// a whole page wrapper.
 const NEGATIVE_SUBSTR: &[&str] = &[
-    "comment", "sidebar", "widget", "footer", "related", "promo", "advert",
-    "share", "social", "newsletter", "cookie", "modal", "popup", "banner",
-    "breadcrumb", "masthead", "outbrain", "taboola", "sponsor", "toolbar",
-    "dropdown", "signup", "infobar", "subscribe", "login", "signin",
+    "comment",
+    "sidebar",
+    "widget",
+    "footer",
+    "related",
+    "promo",
+    "advert",
+    "share",
+    "social",
+    "newsletter",
+    "cookie",
+    "modal",
+    "popup",
+    "banner",
+    "breadcrumb",
+    "masthead",
+    "outbrain",
+    "taboola",
+    "sponsor",
+    "toolbar",
+    "dropdown",
+    "signup",
+    "infobar",
+    "subscribe",
+    "login",
+    "signin",
 ];
 
 const NEGATIVE_EXACT: &[&str] = &["nav", "menu", "sign-up", "sign-in"];
@@ -34,9 +56,25 @@ const NEGATIVE_EXACT: &[&str] = &["nav", "menu", "sign-up", "sign-in"];
 /// Class/id fragments that mark real content (exact token match,
 /// lowercased, separators normalized).
 pub const POSITIVE: &[&str] = &[
-    "article", "content", "main", "post", "entry", "story", "body", "prose", "markdown",
-    "articlebody", "postcontent", "article-content", "post-content", "page-content",
-    "main-content", "entry-content", "mw-content-text", "mw-parser-output", "contenttext",
+    "article",
+    "content",
+    "main",
+    "post",
+    "entry",
+    "story",
+    "body",
+    "prose",
+    "markdown",
+    "articlebody",
+    "postcontent",
+    "article-content",
+    "post-content",
+    "page-content",
+    "main-content",
+    "entry-content",
+    "mw-content-text",
+    "mw-parser-output",
+    "contenttext",
 ];
 
 fn tokens(el: &scraper::node::Element) -> Vec<String> {
@@ -65,8 +103,7 @@ fn is_negative(el: &scraper::node::Element) -> bool {
         return false;
     }
     tokens(el).iter().any(|t| {
-        NEGATIVE_EXACT.contains(&t.as_str())
-            || NEGATIVE_SUBSTR.iter().any(|n| t.contains(n))
+        NEGATIVE_EXACT.contains(&t.as_str()) || NEGATIVE_SUBSTR.iter().any(|n| t.contains(n))
     })
 }
 
@@ -84,12 +121,14 @@ pub fn skip(el: ElementRef<'_>) -> bool {
     if e.attr("hidden").is_some() {
         return true;
     }
-    if let Some(role) = e.attr("role") {
-        if SKIP_ROLES.contains(&role) {
-            return true;
-        }
+    if let Some(role) = e.attr("role")
+        && SKIP_ROLES.contains(&role)
+    {
+        return true;
     }
-    if e.attr("aria-hidden").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
+    if e.attr("aria-hidden")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+    {
         return true;
     }
     // Screen-reader-only text duplicates visible content
@@ -105,7 +144,9 @@ pub fn skip(el: ElementRef<'_>) -> bool {
     }
     if let Some(style) = e.attr("style") {
         let s: String = style.to_lowercase();
-        if s.contains("display:none") || s.contains("display: none") || s.contains("visibility:hidden")
+        if s.contains("display:none")
+            || s.contains("display: none")
+            || s.contains("visibility:hidden")
         {
             return true;
         }
@@ -133,10 +174,10 @@ pub fn text_size(el: ElementRef<'_>, cap: usize) -> usize {
             match child.value() {
                 scraper::Node::Text(t) => total += t.text.trim().len(),
                 scraper::Node::Element(_) => {
-                    if let Some(c) = ElementRef::wrap(child) {
-                        if !skip(c) {
-                            stack.push(c);
-                        }
+                    if let Some(c) = ElementRef::wrap(child)
+                        && !skip(c)
+                    {
+                        stack.push(c);
                     }
                 }
                 _ => {}

@@ -21,10 +21,10 @@ impl Pool {
     pub fn put_h2(&mut self, origin: &str, conn: H2Conn) {
         // Cap the pool; drop arbitrary oldest on overflow (origin churn
         // is rare in agent workloads).
-        if self.h2.len() >= 64 {
-            if let Some(k) = self.h2.keys().next().cloned() {
-                self.h2.remove(&k);
-            }
+        if self.h2.len() >= 64
+            && let Some(k) = self.h2.keys().next().cloned()
+        {
+            self.h2.remove(&k);
         }
         self.h2.insert(origin.to_string(), conn);
     }

@@ -57,7 +57,11 @@ pub fn classify(pages: &[PageLines], ordered_by_page: &[Vec<Line>], ctx: &FontCt
         let fusion = pages[pi].fusion.as_ref();
         classify_page_fused(lines, ctx, n_pages > 1, &mut blocks, fusion);
         if std::env::var("DONSHEET_DEBUG").is_ok() {
-            eprintln!("[classify] page {pi}/{} done ({} blocks)", n_pages, blocks.len());
+            eprintln!(
+                "[classify] page {pi}/{} done ({} blocks)",
+                n_pages,
+                blocks.len()
+            );
         }
     }
 
@@ -98,7 +102,11 @@ fn classify_page_fused(
                 j += 1;
             }
             let md = code_lines.join("\n");
-            blocks.push(Block::Code { lang: None, code: md, path: Vec::new() });
+            blocks.push(Block::Code {
+                lang: None,
+                code: md,
+                path: Vec::new(),
+            });
             i = j;
             continue;
         }
@@ -144,7 +152,12 @@ fn classify_page_fused(
                 }
                 break;
             }
-            blocks.push(Block::List { ordered, items, link_density: 0.0, path: Vec::new() });
+            blocks.push(Block::List {
+                ordered,
+                items,
+                link_density: 0.0,
+                path: Vec::new(),
+            });
             i = j;
             continue;
         }
@@ -153,8 +166,7 @@ fn classify_page_fused(
         // run, then let the table detector take coherent sub-runs.
         let start = i;
         i += 1;
-        while i < lines.len() && continue_paragraph(&lines[i - 1], &lines[i], ctx, multi)
-        {
+        while i < lines.len() && continue_paragraph(&lines[i - 1], &lines[i], ctx, multi) {
             i += 1;
         }
         let run = &lines[start..i];
@@ -203,7 +215,11 @@ fn emit_paragraph(run: &[Line], blocks: &mut Vec<Block>) {
         md.push_str(t);
     }
     if !md.is_empty() {
-        blocks.push(Block::Para { md, link_density: 0.0, path: Vec::new() });
+        blocks.push(Block::Para {
+            md,
+            link_density: 0.0,
+            path: Vec::new(),
+        });
     }
 }
 
@@ -243,7 +259,7 @@ fn gap_ok(prev: &Line, next: &Line) -> bool {
 
 /// Should `next` merge into the paragraph holding `prev`?
 fn continue_paragraph(prev: &Line, next: &Line, ctx: &FontCtx, multi_page: bool) -> bool {
-    if next.text.trim().is_empty() || is_heading(&next, ctx) {
+    if next.text.trim().is_empty() || is_heading(next, ctx) {
         return false;
     }
     if next.mono || prev.mono {
@@ -259,7 +275,7 @@ fn continue_paragraph(prev: &Line, next: &Line, ctx: &FontCtx, multi_page: bool)
     if size_delta > 0.35 * ctx.body_size.max(1.0) {
         return false;
     }
-    if !gap_ok(&prev, &next) {
+    if !gap_ok(prev, next) {
         return false;
     }
     // First-line indent of `next` far right of prev's start → new paragraph.
@@ -310,7 +326,7 @@ fn match_prefix(t: &str, re: &str) -> Option<usize> {
     match re {
         r"^\(?\d{1,3}\.(?=\s)" => {
             let mut i = 0;
-            if b.get(0) == Some(&b'(') {
+            if b.first() == Some(&b'(') {
                 i = 1;
             }
             let ds = i;
@@ -329,7 +345,7 @@ fn match_prefix(t: &str, re: &str) -> Option<usize> {
         }
         r"^\(?\d{1,3}\)(?=\s)" => {
             let mut i = 0;
-            if b.get(0) == Some(&b'(') {
+            if b.first() == Some(&b'(') {
                 i = 1;
             }
             let ds = i;
@@ -364,7 +380,22 @@ fn match_prefix(t: &str, re: &str) -> Option<usize> {
             }
             let mut i = 1;
             while i < b.len()
-                && matches!(b[i], b'i' | b'v' | b'x' | b'l' | b'c' | b'd' | b'm' | b'I' | b'V' | b'X' | b'L' | b'C' | b'D' | b'M')
+                && matches!(
+                    b[i],
+                    b'i' | b'v'
+                        | b'x'
+                        | b'l'
+                        | b'c'
+                        | b'd'
+                        | b'm'
+                        | b'I'
+                        | b'V'
+                        | b'X'
+                        | b'L'
+                        | b'C'
+                        | b'D'
+                        | b'M'
+                )
                 && i < 7
             {
                 i += 1;
@@ -399,7 +430,7 @@ pub fn is_heading(l: &Line, ctx: &FontCtx) -> bool {
     // front-matter license text can be typeset at ladder sizes; real
     // section headings do not end in commas/periods/colons.
     let numbered = numbered_section(t);
-    if !numbered && t.ends_with(|c| matches!(c, '.' | '!' | '?' | ',' | ';' | ':')) {
+    if !numbered && t.ends_with(['.', '!', '?', ',', ';', ':']) {
         return false;
     }
     let r = l.size / ctx.body_size.max(0.1);
@@ -459,7 +490,11 @@ fn numbered_section(t: &str) -> bool {
     }
     // require whitespace then a letter
     matches!(bytes.get(i), Some(b' ') | Some(b'\t'))
-        && t[i..].chars().nth(1).map(|c| c.is_alphabetic()).unwrap_or(false)
+        && t[i..]
+            .chars()
+            .nth(1)
+            .map(|c| c.is_alphabetic())
+            .unwrap_or(false)
 }
 
 fn heading_level(l: &Line, ctx: &FontCtx) -> u8 {
@@ -469,8 +504,6 @@ fn heading_level(l: &Line, ctx: &FontCtx) -> u8 {
         1
     } else if r >= 1.3 {
         2
-    } else if r >= 1.18 {
-        3
     } else {
         3
     };
@@ -510,7 +543,12 @@ fn numbered_depth(t: &str) -> Option<usize> {
         }
         depth += 1;
         match bytes.get(i) {
-            Some(b'.') if bytes.get(i + 1).map(|c| c.is_ascii_digit()).unwrap_or(false) => {
+            Some(b'.')
+                if bytes
+                    .get(i + 1)
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false) =>
+            {
                 i += 1;
             }
             Some(b'.') => {
@@ -527,11 +565,13 @@ fn numbered_depth(t: &str) -> Option<usize> {
         return None;
     }
     if matches!(bytes.get(i), Some(b' ') | Some(b'\t'))
-        && t[i..].chars().nth(1).map(|c| c.is_alphabetic()).unwrap_or(false)
+        && t[i..]
+            .chars()
+            .nth(1)
+            .map(|c| c.is_alphabetic())
+            .unwrap_or(false)
     {
         Some(depth)
-    } else if i == t.len() {
-        None
     } else {
         None
     }
@@ -549,7 +589,7 @@ fn merge_continuations(blocks: &mut Vec<Block>) {
                     // Heuristic: join when `a` doesn't end like a paragraph
                     // end (no sentence-final punctuation) OR `mb` starts
                     // lowercase. (kept conservative)
-                    let a_open = !ma.trim_end().ends_with(|c| matches!(c, '.' | '!' | '?' | ':' | ';'));
+                    let a_open = !ma.trim_end().ends_with(['.', '!', '?', ':', ';']);
                     let b_lower = mb.chars().next().map(|c| c.is_lowercase()).unwrap_or(false);
                     if a_open || b_lower {
                         Some(format!("{} {}", ma.trim_end(), mb.trim_start()))
@@ -561,11 +601,8 @@ fn merge_continuations(blocks: &mut Vec<Block>) {
             }
         };
         if let Some(md) = merge_md {
-            if let (Some(first), extra) = (blocks.get_mut(i), ()) {
-                let _ = extra;
-                if let Block::Para { md: ma, .. } = first {
-                    *ma = md;
-                }
+            if let Some(Block::Para { md: ma, .. }) = blocks.get_mut(i) {
+                *ma = md;
             }
             blocks.remove(i + 1);
         } else {
@@ -573,5 +610,3 @@ fn merge_continuations(blocks: &mut Vec<Block>) {
         }
     }
 }
-
-
