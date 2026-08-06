@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::detect::walls::{self, Verdict};
 use crate::error::FetchError;
-use crate::memory::DomainMap;
+use crate::ghost::cache::CookieRecord;
 use crate::profile::BrowserProfile;
 use crate::transport::pool::Pool;
 use crate::transport::{h1, h2::conn::H2Conn, proxy, tcp, tls};
@@ -50,7 +50,6 @@ pub struct Fetcher {
     pool: Mutex<Pool>,
     jar: Mutex<CookieJar>,
     cache: Mutex<RevalidationCache>,
-    memory: Mutex<DomainMap>,
 }
 
 impl Fetcher {
@@ -64,7 +63,6 @@ impl Fetcher {
             pool: Mutex::new(Pool::new()),
             jar: Mutex::new(CookieJar::new()),
             cache: Mutex::new(RevalidationCache::new()),
-            memory: Mutex::new(DomainMap::new()),
         })
     }
 
@@ -76,11 +74,19 @@ impl Fetcher {
     /// Import cookies harvested by DonGhost (tier-2
     /// solve) into the persistent jar so the tier-1
     /// re-fetch carries the clearance.
-    pub async fn import_cookies(&self, cookies: &[(String, String, String)]) {
+    pub async fn import_cookies(&self, cookies: &[CookieRecord]) {
         let mut jar = self.jar.lock().unwrap();
-        for (name, value, domain) in cookies {
-            jar.store_raw(name, value, domain);
+        for c in cookies {
+            jar.store_raw(&c.name, &c.value, &c.domain, c.expires_at);
         }
+    }
+
+    /// Export all cookies for a host with their expiry, for
+    /// write-back to the persistent domain profile after a
+    /// successful warm fetch.
+    pub fn jar_snapshot(&self, host: &str) -> Vec<CookieRecord> {
+        let jar = self.jar.lock().unwrap();
+        jar.snapshot_for(host)
     }
 
     /// Fetch with browser-correct redirects, cookies, cache revalidation.
@@ -199,10 +205,6 @@ impl Fetcher {
                     // cookie-warm retry (JS-less cookie walls pass on the
                     // second, cookie-carrying request).
                     if let Verdict::Challenge(_) = out.verdict {
-                        self.memory
-                            .lock()
-                            .unwrap()
-                            .update(&host, |m| m.challenged = true);
                         if header_value(&out.headers, "set-cookie").is_some() {
                             if let Ok(mut retry) =
                                 self.fetch_once_via(&current, &[], proxy, use_jar).await
@@ -218,18 +220,11 @@ impl Fetcher {
                                     cache.store(&current, retry.status, &retry.headers, &retry.body);
                                 }
                                 if retry.verdict == Verdict::ContentOk {
-                                    self.memory.lock().unwrap().update(&host, |m| {
-                                        m.warm_retry_worked = true;
-                                    });
+                                    out = retry;
+                                } else {
+                                    out = retry;
                                 }
-                                out = retry;
                             }
-                        }
-                        if matches!(out.verdict, Verdict::Challenge(_)) {
-                            self.memory
-                                .lock()
-                                .unwrap()
-                                .update(&host, |m| m.needs_tier2 = true);
                         }
                     }
 

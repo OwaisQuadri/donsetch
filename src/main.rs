@@ -149,21 +149,46 @@ async fn main() {
 
             // Warm tier 1 from a previous solve — the ghost
             // stays asleep until clearance actually fails.
-            if tier != "2" {
-                if let Some(rec) = state.solved_for(&host) {
-                    eprintln!("--- warm start: {} solved cookies from state", rec.cookies.len());
-                    fetcher.import_cookies(&rec.cookies).await;
-                    tier_used = "1(warm)";
-                }
+            // The self-improving loop: route_for decides based
+            // on the domain profile.
+            let route = state.route_for(&host);
+            let warm_cookies = match &route {
+                ghost::cache::RouteDecision::Warm(c) => c.clone(),
+                _ => Vec::new(),
+            };
+            let is_warm = !warm_cookies.is_empty();
+            if is_warm {
+                eprintln!("--- warm start: {} cookies from state", warm_cookies.len());
+                fetcher.import_cookies(&warm_cookies).await;
+                tier_used = "1(warm)";
             }
 
             let mut out = fetcher.fetch(&url).await.expect("fetch");
             let mut rendered_html: Option<Vec<u8>> = None;
 
+            // Observe the outcome — feed the self-improving loop.
             let walled = !matches!(
                 out.verdict,
                 detect::walls::Verdict::ContentOk
             );
+            {
+                if walled {
+                    if is_warm {
+                        state.record_warm_stale(&host);
+                    } else {
+                        let vendor = match &out.verdict {
+                            detect::walls::Verdict::Challenge(v) => Some(format!("{v:?}").to_lowercase()),
+                            _ => None,
+                        };
+                        state.record_cold_walled(&host, vendor.as_deref());
+                    }
+                } else if is_warm {
+                    let snap = fetcher.jar_snapshot(&host);
+                    state.record_warm_ok(&host, &snap);
+                } else {
+                    state.record_cold_ok(&host);
+                }
+            }
             if walled && tier != "1" {
                 // SOLVE mode: beat the wall, hand cookies
                 // to tier 1, re-fetch at tier-1 speed.
@@ -186,7 +211,7 @@ async fn main() {
                             ghost::ops::has_clearance(&r.cookies)
                         );
                         fetcher.import_cookies(&r.cookies).await;
-                        state.record_solved(&host, &r.cookies);
+                        state.record_solved(&host, &r.cookies, r.vendor.as_deref());
                         let retry =
                             fetcher.fetch(&url).await.expect("fetch");
                         if matches!(
@@ -528,8 +553,8 @@ async fn main() {
                             println!("SOLVED in {:?}", r.took);
                             println!("clearance: {}", ghost::ops::has_clearance(&r.cookies));
                             println!("cookies: {}", r.cookies.len());
-                            for (n, _v, d) in &r.cookies {
-                                println!("  {n} (domain {d})");
+                            for c in &r.cookies {
+                                println!("  {} (domain {})", c.name, c.domain);
                             }
                         }
                         ghost::ops::SolveOutcome::CaptchaWalled => {

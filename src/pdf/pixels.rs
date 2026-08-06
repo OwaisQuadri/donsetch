@@ -10,6 +10,7 @@
 //! visual region segmentation. All coordinates are PIXELS; conversion to
 //! PDF points happens in `fusion.rs` (`InkMask::sx`/`sy` carry the scale).
 
+#![allow(dead_code)]
 /// Raw rasterized page (BGRA bytes, white background, annotations drawn).
 pub struct PageBitmap {
     pub w: usize,

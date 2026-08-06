@@ -424,8 +424,10 @@ impl Ghost {
             .to_string())
     }
 
-    /// All browser cookies (browser-level Storage domain).
-    pub async fn cookies(&self) -> Result<Vec<(String, String, String)>, FetchError> {
+    /// All browser cookies with real expiry (browser-level Storage
+    /// domain). CDP's `expires` is a Unix timestamp in seconds
+    /// (float); -1 or 0 means session cookie → None.
+    pub async fn cookies(&self) -> Result<Vec<cache::CookieRecord>, FetchError> {
         let res = self
             .cdp
             .call(None, "Storage.getCookies", json!({}))
@@ -436,8 +438,18 @@ impl Ghost {
                 let name = c.get("name").and_then(Value::as_str).unwrap_or("");
                 let value = c.get("value").and_then(Value::as_str).unwrap_or("");
                 let domain = c.get("domain").and_then(Value::as_str).unwrap_or("");
+                let expires = c
+                    .get("expires")
+                    .and_then(|v| v.as_f64())
+                    .filter(|&e| e > 0.0)
+                    .map(|e| e as u64);
                 if !name.is_empty() {
-                    out.push((name.to_string(), value.to_string(), domain.to_string()));
+                    out.push(cache::CookieRecord {
+                        name: name.to_string(),
+                        value: value.to_string(),
+                        domain: domain.to_string(),
+                        expires_at: expires,
+                    });
                 }
             }
         }

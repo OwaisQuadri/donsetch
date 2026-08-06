@@ -8,6 +8,7 @@
 //! Requires an FPDF_FORMHANDLE (the form-fill environment), which
 //! engine::load_document initializes when `LoadOpts::want_forms` is set.
 
+#![allow(dead_code)]
 use super::sys::*;
 
 /// What the widget IS, at the PDF level.

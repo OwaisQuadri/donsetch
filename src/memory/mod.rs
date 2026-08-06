@@ -1,5 +1,10 @@
 //! Per-domain memory: what happened on this origin before.
 //! Powers verdicts now; tier-2 routing later.
+//!
+//! Superseded by the persistent DomainProfile in ghost::cache
+//! for the self-improving fetch loop. Retained for reference.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 

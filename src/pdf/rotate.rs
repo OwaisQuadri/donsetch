@@ -11,6 +11,7 @@
 //! Locked rule: canonicalization happens BEFORE line assembly
 //! (layout::assemble) so nothing downstream ever knows.
 
+#![allow(dead_code)]
 use super::engine::PageChars;
 
 /// Decide and apply frame canonicalization. Returns Some(rotation degrees

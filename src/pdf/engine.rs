@@ -10,6 +10,7 @@
 //! downward, points) using the page height at load time — the rest of
 //! the pipeline never has to think about PDF's bottom-left origin.
 
+#![allow(dead_code)]
 use std::ffi::{c_char, c_void, CString};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 

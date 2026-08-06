@@ -11,6 +11,7 @@
 //! - **Reading order 2.0** — region-based ordering that handles real
 //!   magazine-style layouts where XY-cut guesses wrong.
 
+#![allow(dead_code)]
 use super::engine::PageChars;
 use super::layout::{Line, PageLines};
 use super::pixels::{PageBitmap, Rule};

@@ -12,7 +12,7 @@ use crate::crawl::{Crawler, CrawlMode, CrawlOptions};
 use crate::detect::walls::Verdict;
 use crate::extract::{self, ExtractOptions};
 use crate::fetch::client::Fetcher;
-use crate::ghost::cache::GhostState;
+use crate::ghost::cache::{CookieRecord, GhostState, RouteDecision};
 use crate::ghost::manager::GhostManager;
 use crate::ghost::ops;
 use crate::profile::BrowserProfile;
@@ -227,10 +227,8 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // Ghost-warm: if this host was tier-2 solved recently, the
     // clearance cookies ride tier 1 from page one.
     if let Some(host) = url::Url::parse(&url).ok().and_then(|u| u.host_str().map(String::from)) {
-        let state = daemon.state.lock().await;
-        if let Some(rec) = state.solved_for(&host) {
-            let cookies = rec.cookies.clone();
-            drop(state);
+        let route = daemon.state.lock().await.route_for(&host);
+        if let RouteDecision::Warm(cookies) = route {
             daemon.fetcher.import_cookies(&cookies).await;
         }
     }
@@ -332,26 +330,79 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         .and_then(|u| u.host_str().map(String::from))
         .unwrap_or_default();
 
-    // Warm start: previous solve feeds tier 1's jar.
+    // === Decision: how to route this fetch? ===
+    // The self-improving loop: the domain profile decides
+    // cold / warm / skip-to-solve / recheck-cold.
+    let route = if tier == "2" {
+        RouteDecision::SkipToSolve
+    } else if tier == "1" {
+        RouteDecision::Cold
+    } else {
+        daemon.state.lock().await.route_for(&host)
+    };
+
+    let warm_cookies: Vec<CookieRecord> = match &route {
+        RouteDecision::Warm(c) => c.clone(),
+        _ => Vec::new(),
+    };
+    let is_warm = !warm_cookies.is_empty();
+    let is_recheck = matches!(route, RouteDecision::RecheckCold);
+    let skip_tier1 = matches!(route, RouteDecision::SkipToSolve);
+
     let mut tier_used = "1";
-    if tier != "2" {
-        let state = daemon.state.lock().await;
-        if let Some(rec) = state.solved_for(&host) {
-            let cookies = rec.cookies.clone();
-            drop(state);
-            daemon.fetcher.import_cookies(&cookies).await;
-            tier_used = "1(warm)";
+    if is_warm {
+        daemon.fetcher.import_cookies(&warm_cookies).await;
+        tier_used = "1(warm)";
+    } else if is_recheck {
+        tier_used = "1(recheck)";
+    } else if skip_tier1 {
+        tier_used = "2-direct";
+    }
+
+    // === Fetch (tier 1, unless skipped) ===
+    let mut out: Option<crate::fetch::client::FetchOutcome> = None;
+    let mut rendered_html: Option<Vec<u8>> = None;
+
+    if !skip_tier1 {
+        out = Some(match daemon.fetcher.fetch(&url).await {
+            Ok(o) => o,
+            Err(e) => return tool_error(format!("fetch: {e}")),
+        });
+
+        // === Observe the outcome ===
+        // Every fetch teaches the domain profile something.
+        let o = out.as_ref().unwrap();
+        let walled = !matches!(o.verdict, Verdict::ContentOk);
+        {
+            let mut state = daemon.state.lock().await;
+            if walled {
+                if is_warm {
+                    // Warm cookies went stale — learn the real lifetime.
+                    state.record_warm_stale(&host);
+                } else {
+                    // Cold (or recheck) was walled — domain needs tier 2.
+                    let vendor = match &o.verdict {
+                        Verdict::Challenge(v) => Some(format!("{v:?}").to_lowercase()),
+                        _ => None,
+                    };
+                    state.record_cold_walled(&host, vendor.as_deref());
+                }
+            } else if is_warm {
+                // Warm succeeded — refresh the cookie vault (write-back).
+                let snap = daemon.fetcher.jar_snapshot(&host);
+                state.record_warm_ok(&host, &snap);
+            } else {
+                // Cold (or recheck) succeeded — if was needs_tier2, wall is gone.
+                state.record_cold_ok(&host);
+            }
         }
     }
 
-    let mut out = match daemon.fetcher.fetch(&url).await {
-        Ok(o) => o,
-        Err(e) => return tool_error(format!("fetch: {e}")),
-    };
-    let mut rendered_html: Option<Vec<u8>> = None;
-
-    // SOLVE on wall.
-    let walled = !matches!(out.verdict, Verdict::ContentOk);
+    // === SOLVE on wall ===
+    let walled = out
+        .as_ref()
+        .map(|o| !matches!(o.verdict, Verdict::ContentOk))
+        .unwrap_or(true);
     if walled && tier != "1" {
         match daemon.ghost_mgr.acquire(&daemon.profile).await {
             Ok(mut g) => {
@@ -368,7 +419,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                             .state
                             .lock()
                             .await
-                            .record_solved(&host, &r.cookies);
+                            .record_solved(&host, &r.cookies, r.vendor.as_deref());
                         match daemon.fetcher.fetch(&url).await {
                             Ok(retry)
                                 if matches!(
@@ -376,13 +427,13 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                                     Verdict::ContentOk
                                 ) =>
                             {
-                                out = retry;
+                                out = Some(retry);
                                 tier_used = "1+ghost-solve";
                             }
                             Ok(retry) => {
                                 rendered_html =
                                     Some(r.html.into_bytes());
-                                out = retry;
+                                out = Some(retry);
                                 tier_used = "ghost-dom";
                             }
                             Err(e) => {
@@ -396,15 +447,17 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                         if let Some(p) = shot {
                             let _ = g.screenshot(p).await;
                         }
+                        let v =
+                            out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
                         return tool_error(format!(
-                            "blocked: interactive captcha at {url} — no solving service by design (verdict: {:?})",
-                            out.verdict
+                            "blocked: interactive captcha at {url} — no solving service by design (verdict: {v:?})"
                         ));
                     }
                     Ok(ops::SolveOutcome::TimedOut) => {
+                        let v =
+                            out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
                         return tool_error(format!(
-                            "blocked: challenge did not clear in 30s at {url} (verdict: {:?})",
-                            out.verdict
+                            "blocked: challenge did not clear in 30s at {url} (verdict: {v:?})"
                         ));
                     }
                     Err(e) => {
@@ -420,20 +473,28 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
 
     // Body source: tier-1 bytes or ghost DOM.
     let (body, ct, final_url) = if let Some(h) = &rendered_html {
-        (h.clone(), "text/html".to_string(), out.url.clone())
-    } else if matches!(out.verdict, Verdict::ContentOk) {
-        let ct = out
-            .headers
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
-            .map(|(_, v)| v.clone())
-            .unwrap_or_default();
-        (out.body.clone(), ct, out.url.clone())
+        let u = out
+            .as_ref()
+            .map(|o| o.url.clone())
+            .unwrap_or_else(|| url.clone());
+        (h.clone(), "text/html".to_string(), u)
+    } else if let Some(o) = &out {
+        if matches!(o.verdict, Verdict::ContentOk) {
+            let ct = o
+                .headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            (o.body.clone(), ct, o.url.clone())
+        } else {
+            return tool_error(format!(
+                "blocked: {:?} at {} (status {})",
+                o.verdict, o.url, o.status
+            ));
+        }
     } else {
-        return tool_error(format!(
-            "blocked: {:?} at {} (status {})",
-            out.verdict, out.url, out.status
-        ));
+        return tool_error("fetch: all tiers exhausted");
     };
 
     let mut ex = match extract::extract(&body, &ct, &final_url, &opts) {
@@ -480,10 +541,11 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         }
     }
 
+    let o = out.as_ref();
     let meta = json!({
-        "status": out.status,
+        "status": o.map(|o| o.status).unwrap_or(0),
         "tier": tier_used,
-        "verdict": format!("{:?}", out.verdict),
+        "verdict": format!("{:?}", o.map(|o| o.verdict).unwrap_or(Verdict::Blocked)),
         "thin": ex.thin,
         "content_kind": format!("{:?}", ex.content_kind),
         "title": ex.title,

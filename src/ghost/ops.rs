@@ -4,12 +4,16 @@ use std::time::{Duration, Instant};
 
 use crate::detect::walls::{self, Verdict};
 use crate::error::FetchError;
+use crate::ghost::cache::CookieRecord;
 
 use super::Ghost;
 
 pub struct SolveResult {
-    /// Clearance + session cookies: (name, value, domain).
-    pub cookies: Vec<(String, String, String)>,
+    /// Clearance + session cookies with real expiry.
+    pub cookies: Vec<CookieRecord>,
+    /// Wall vendor detected during the challenge ("cloudflare",
+    /// "datadome", etc.) — feeds the domain profile.
+    pub vendor: Option<String>,
     /// Last DOM snapshot — fallback content if tier 1 with
     /// harvested cookies still gets refused.
     pub html: String,
@@ -77,6 +81,7 @@ pub async fn solve(
     let mut clicked = false;
     let mut clear_streak = 0u8;
     let mut poll_ms = 300u64; // fast early, back off later
+    let mut vendor: Option<String> = None;
 
     while start.elapsed() < timeout {
         tokio::time::sleep(Duration::from_millis(poll_ms)).await;
@@ -108,6 +113,11 @@ pub async fn solve(
         let challenged = small && marker_hit;
 
         if challenged {
+            if vendor.is_none() {
+                if let Verdict::Challenge(v) = &verdict {
+                    vendor = Some(format!("{v:?}").to_lowercase());
+                }
+            }
             clear_streak = 0;
         } else {
             // Clear candidate: big page, or small page
@@ -121,6 +131,7 @@ pub async fn solve(
                 ghost.touch();
                 return Ok(SolveOutcome::Solved(SolveResult {
                     cookies,
+                    vendor,
                     html,
                     took: start.elapsed(),
                 }));
@@ -246,8 +257,8 @@ pub async fn selftest(ghost: &mut Ghost) -> Result<String, FetchError> {
 }
 
 /// Does a cookie list contain a known clearance name?
-pub fn has_clearance(cookies: &[(String, String, String)]) -> bool {
+pub fn has_clearance(cookies: &[CookieRecord]) -> bool {
     cookies
         .iter()
-        .any(|(n, _, _)| CLEARANCE_NAMES.contains(&n.as_str()))
+        .any(|c| CLEARANCE_NAMES.contains(&c.name.as_str()))
 }

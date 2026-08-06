@@ -1,4 +1,8 @@
 //! Minimal RFC 6265 cookie jar, scoped per domain/path.
+//! Tracks real expiry (Max-Age → expires_at) for the self-
+//! improving fetch loop's cookie write-back.
+
+use crate::ghost::cache::CookieRecord;
 
 #[derive(Clone, Debug)]
 pub struct Cookie {
@@ -7,6 +11,8 @@ pub struct Cookie {
     domain: String,
     path: String,
     host_only: bool,
+    /// Unix-seconds expiry. None = session cookie.
+    expires_at: Option<u64>,
 }
 
 #[derive(Default)]
@@ -37,6 +43,7 @@ impl CookieJar {
             let mut host_only = true;
             let mut path = "/".to_string();
             let mut expired = false;
+            let mut expires_at: Option<u64> = None;
             for attr in parts {
                 let attr = attr.trim();
                 if let Some((k, val)) = attr.split_once('=') {
@@ -47,8 +54,18 @@ impl CookieJar {
                         }
                         "path" => path = val.trim().to_string(),
                         "max-age" => {
-                            if val.trim().parse::<i64>().unwrap_or(1) <= 0 {
+                            let secs: i64 =
+                                val.trim().parse().unwrap_or(1);
+                            if secs <= 0 {
                                 expired = true;
+                            } else {
+                                expires_at = Some(
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_secs())
+                                        .unwrap_or(0)
+                                        + secs as u64,
+                                );
                             }
                         }
                         _ => {}
@@ -59,7 +76,7 @@ impl CookieJar {
             self.cookies
                 .retain(|c| !(c.name == name && c.domain == domain && c.path == path));
             if !expired {
-                self.cookies.push(Cookie { name, value, domain, path, host_only });
+                self.cookies.push(Cookie { name, value, domain, path, host_only, expires_at });
             }
         }
     }
@@ -67,7 +84,14 @@ impl CookieJar {
     /// Inject a cookie harvested out-of-band (DonGhost
     /// clearance handoff). Leading-dot domains are
     /// subdomain cookies; bare domains are host-only.
-    pub fn store_raw(&mut self, name: &str, value: &str, domain: &str) {
+    /// `expires_at` carries the real CDP expiry.
+    pub fn store_raw(
+        &mut self,
+        name: &str,
+        value: &str,
+        domain: &str,
+        expires_at: Option<u64>,
+    ) {
         let (dom, host_only) = if let Some(d) = domain.strip_prefix('.') {
             (d.to_string(), false)
         } else {
@@ -81,7 +105,30 @@ impl CookieJar {
             domain: dom,
             path: "/".into(),
             host_only,
+            expires_at,
         });
+    }
+
+    /// Export all cookies matching `host` as CookieRecords
+    /// for write-back to the persistent domain profile.
+    pub fn snapshot_for(&self, host: &str) -> Vec<CookieRecord> {
+        self.cookies
+            .iter()
+            .filter(|c| {
+                let domain_ok = if c.host_only {
+                    host == c.domain
+                } else {
+                    host == c.domain || host.ends_with(&format!(".{}", c.domain))
+                };
+                domain_ok
+            })
+            .map(|c| CookieRecord {
+                name: c.name.clone(),
+                value: c.value.clone(),
+                domain: c.domain.clone(),
+                expires_at: c.expires_at,
+            })
+            .collect()
     }
 
     /// Cookie header value for a request to `host` + `path`, if any match.
