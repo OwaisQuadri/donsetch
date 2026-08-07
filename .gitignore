@@ -34,3 +34,4 @@ tests/pdf-corpus/*.pdf
 
 # Cache directories (local state)
 .cache/
+npm/binaries/
