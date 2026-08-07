@@ -1,0 +1,199 @@
+# DonSeTch Release — build prebuilt binaries for Linux, macOS, Windows.
+#
+# Triggers on tag push (v*). Builds release binaries on 3 platforms,
+# packages them with SHA256 checksums, and creates a draft GitHub
+# release with all artifacts attached.
+#
+# Artifact naming (npm-compatible for the npm wrapper package):
+#   donsetch-linux-x64.tar.gz       (Linux x86_64)
+#   donsetch-darwin-arm64.tar.gz    (macOS arm64)
+#   donsetch-win32-x64.zip          (Windows x86_64 + pdfium.dll)
+#
+# Build steps mirror ci.yml exactly (same toolchain, same deps).
+# The only additions are: binary verification, packaging, checksums.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: darwin-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: win32-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.22.0'
+
+      - name: Install NASM (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Install NASM (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install nasm
+
+      - name: Install NASM (Windows)
+        if: matrix.os == 'windows-latest'
+        run: choco install nasm -y
+        shell: cmd
+
+      - name: Install LLVM (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: KyleMayes/install-llvm-action@v1
+        with:
+          version: "11.0"
+          directory: ${{ runner.temp }}/llvm
+
+      - name: Set LIBCLANG_PATH (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $clang = (Get-Command clang).Source
+          $libclangPath = Split-Path $clang
+          "LIBCLANG_PATH=$libclangPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Add NASM to PATH (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Verify the binary actually runs — catches broken cross-target
+      # builds, missing DLLs, and link-time issues that don't show
+      # up as compile errors.
+      - name: Verify binary runs (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          output=$(./donsetch 2>&1 | head -1)
+          if [ -z "$output" ]; then
+            echo "ERROR: binary produced no output"
+            exit 1
+          fi
+          echo "OK: $output"
+
+      - name: Verify binary runs (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          cd target\${{ matrix.target }}\release
+          $output = & .\donsetch.exe 2>&1 | Select-Object -First 1
+          if (-not $output) {
+            Write-Error "Binary produced no output"
+            exit 1
+          }
+          Write-Host "OK: $output"
+
+      # ── Package ──────────────────────────────────────────────
+      # Unix: single tar.gz with the donsetch binary.
+      # Windows: zip with donsetch.exe + pdfium.dll (runtime dep).
+      # The binary is already stripped (strip=true in release profile).
+
+      - name: Package (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf $GITHUB_WORKSPACE/donsetch-${{ matrix.name }}.tar.gz donsetch
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $releaseDir = "target\${{ matrix.target }}\release"
+          $dll = Join-Path $releaseDir "pdfium.dll"
+          if (-not (Test-Path $dll)) {
+            Write-Error "pdfium.dll not found at $dll — build.rs copy failed"
+            exit 1
+          }
+          Compress-Archive `
+            -Path "$releaseDir\donsetch.exe","$dll" `
+            -DestinationPath "$env:GITHUB_WORKSPACE\donsetch-${{ matrix.name }}.zip"
+
+      # ── Checksums ────────────────────────────────────────────
+      # sha256sum format: "<hash>  <filename>" — compatible with
+      # `sha256sum -c` on Linux/macOS.
+
+      - name: Compute SHA256 (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd $GITHUB_WORKSPACE
+          sha256sum donsetch-${{ matrix.name }}.tar.gz | tee donsetch-${{ matrix.name }}.tar.gz.sha256
+
+      - name: Compute SHA256 (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          $hash = (Get-FileHash "donsetch-${{ matrix.name }}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  donsetch-${{ matrix.name }}.zip" | Out-File -FilePath "donsetch-${{ matrix.name }}.zip.sha256" -Encoding ascii
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: donsetch-${{ matrix.name }}
+          path: donsetch-${{ matrix.name }}.*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/donsetch-*.tar.gz
+            artifacts/donsetch-*.zip
+            artifacts/donsetch-*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
