@@ -1,0 +1,12 @@
+# PDFium's static .lib (Windows) is built with /MT (static CRT).
+# Rust's MSVC target defaults to /MD (dynamic CRT).
+# Both get pulled in at link time, causing LNK2005 multiply-defined symbols.
+# /NODEFAULTLIB tells the linker to ignore the static CRT default libraries
+# embedded in pdfium.lib, so all CRT symbols resolve against the dynamic CRT.
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    "-C", "link-arg=/NODEFAULTLIB:libcmt.lib",
+    "-C", "link-arg=/NODEFAULTLIB:libcpmt.lib",
+    "-C", "link-arg=/NODEFAULTLIB:libcmtd.lib",
+    "-C", "link-arg=/NODEFAULTLIB:libcpmtd.lib",
+]
