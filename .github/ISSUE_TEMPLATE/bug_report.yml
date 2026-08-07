@@ -1,0 +1,41 @@
+---
+name: Bug report
+about: Report a bug in DonSeTch
+title: "[bug] "
+labels: bug
+assignees: ""
+---
+
+## What happened
+
+<!-- A clear description of what went wrong. -->
+
+## What I expected
+
+<!-- What you expected to happen instead. -->
+
+## How to reproduce
+
+```bash
+# The exact command or MCP call that triggered the bug
+donsetch ...
+```
+
+## Environment
+
+- DonSeTch version: `donsetch --version` →
+- OS:
+- Rust version:
+- MCP client (Claude Code, Cursor, Pi, etc.):
+
+## structuredContent
+
+<!-- If this was a fetch/search/crawl call, paste the structuredContent JSON from the response. This has the diagnostic fields (verdict, status, engines, etc.) that pinpoint the issue. -->
+
+```json
+{}
+```
+
+## Extra context
+
+<!-- Screenshots, logs, or anything else relevant. -->

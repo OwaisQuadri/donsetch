@@ -16,6 +16,8 @@ Thumbs.db
 *~
 .idea/
 .vscode/
+
+# Benchmarks (results + corpus are local, not committed)
 bench/results.json
 bench/results/
 bench/battle-corpus/
@@ -26,3 +28,9 @@ vendor/
 # PDF corpus binaries (download via scripts/download-corpus.sh)
 tests/pdf-corpus/*.pdf
 !tests/pdf-corpus/corpus.md
+
+# ONNX models (downloaded on first use, not bundled)
+*.onnx
+
+# Cache directories (local state)
+.cache/
