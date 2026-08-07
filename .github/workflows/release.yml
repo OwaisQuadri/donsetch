@@ -165,8 +165,9 @@ jobs:
       # `sha256sum -c` on Linux/macOS.
 
       - name: Compute SHA256
+        shell: bash
         run: |
-          cd $GITHUB_WORKSPACE
+          cd "$GITHUB_WORKSPACE"
           sha256sum donsetch-${{ matrix.name }}.tar.gz | tee donsetch-${{ matrix.name }}.tar.gz.sha256
 
       - name: Upload artifact
