@@ -199,6 +199,14 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
         .arg(&tgz)
         .arg("-C")
         .arg(vendored)
+        // bblanchon/pdfium-binaries tarballs have a top-level dir
+        // (pdfium-win-x64/); kognitos/pdfium-static does not.
+        // Strip it on Windows so lib/ and bin/ land in vendor/pdfium/.
+        .args(if is_windows {
+            &["--strip-components=1"]
+        } else {
+            &[][..]
+        })
         .status()
         .expect("pdfium: failed to spawn tar");
     if !status.success() {
