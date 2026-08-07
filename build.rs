@@ -27,8 +27,15 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Pinned PDFium release (PDFium 149.x, Chromium milestone 7809).
-const PDFIUM_TAG: &str = "chromium/7809";
+/// Pinned PDFium release for static archives (Linux/macOS).
+/// Source: kognitos/pdfium-static (fork of bblanchon/pdfium-binaries).
+const PDFIUM_STATIC_TAG: &str = "chromium/7809";
+
+/// Pinned PDFium release for the Windows shared library (DLL).
+/// Source: bblanchon/pdfium-binaries. This is the closest release to
+/// 7809 that bblanchon provides. The FFI surface is identical — both
+/// are Chromium 149-era PDFium builds.
+const PDFIUM_SHARED_TAG: &str = "chromium/7802";
 
 /// sha256 of the pinned tarball per platform "os-arch". Verified on download;
 /// entries are filled as each platform's artifact is prepped for CI.
@@ -142,14 +149,14 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
     let (url, tgz_name) = if is_windows {
         (
             format!(
-                "https://github.com/bblanchon/pdfium-binaries/releases/download/{PDFIUM_TAG}/pdfium-{pair}.tgz"
+                "https://github.com/bblanchon/pdfium-binaries/releases/download/{PDFIUM_SHARED_TAG}/pdfium-{pair}.tgz"
             ),
             format!("pdfium-{pair}.tgz"),
         )
     } else {
         (
             format!(
-                "https://github.com/kognitos/pdfium-static/releases/download/{PDFIUM_TAG}/pdfium-{pair}-static.tgz"
+                "https://github.com/kognitos/pdfium-static/releases/download/{PDFIUM_STATIC_TAG}/pdfium-{pair}-static.tgz"
             ),
             format!("pdfium-{pair}-static.tgz"),
         )
