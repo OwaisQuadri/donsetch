@@ -137,8 +137,10 @@ jobs:
           Write-Host "OK: $output"
 
       # ── Package ──────────────────────────────────────────────
-      # Unix: single tar.gz with the donsetch binary.
-      # Windows: zip with donsetch.exe + pdfium.dll (runtime dep).
+      # All platforms: tar.gz. Windows includes pdfium.dll alongside
+      # donsetch.exe. Using tar.gz (not zip) for all platforms means
+      # the npm install.js postinstall only needs one extraction
+      # method (tar xzf), and tar is built into Windows 10+.
       # The binary is already stripped (strip=true in release profile).
 
       - name: Package (Unix)
@@ -149,32 +151,23 @@ jobs:
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
-        shell: powershell
+        shell: cmd
         run: |
-          $releaseDir = "target\${{ matrix.target }}\release"
-          $dll = Join-Path $releaseDir "pdfium.dll"
-          if (-not (Test-Path $dll)) {
-            Write-Error "pdfium.dll not found at $dll - build.rs copy failed"
+          cd target\${{ matrix.target }}\release
+          if not exist pdfium.dll (
+            echo ERROR: pdfium.dll not found - build.rs copy failed
             exit 1
-          }
-          Compress-Archive -Path "$releaseDir\donsetch.exe","$dll" -DestinationPath "$env:GITHUB_WORKSPACE\donsetch-${{ matrix.name }}.zip"
+          )
+          tar czf %GITHUB_WORKSPACE%\donsetch-${{ matrix.name }}.tar.gz donsetch.exe pdfium.dll
 
       # ── Checksums ────────────────────────────────────────────
       # sha256sum format: "<hash>  <filename>" — compatible with
       # `sha256sum -c` on Linux/macOS.
 
-      - name: Compute SHA256 (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Compute SHA256
         run: |
           cd $GITHUB_WORKSPACE
           sha256sum donsetch-${{ matrix.name }}.tar.gz | tee donsetch-${{ matrix.name }}.tar.gz.sha256
-
-      - name: Compute SHA256 (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          $hash = (Get-FileHash "donsetch-${{ matrix.name }}.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  donsetch-${{ matrix.name }}.zip" | Out-File -FilePath "donsetch-${{ matrix.name }}.zip.sha256" -Encoding ascii
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -205,7 +198,6 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/donsetch-*.tar.gz
-            artifacts/donsetch-*.zip
             artifacts/donsetch-*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
