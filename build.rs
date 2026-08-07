@@ -203,20 +203,23 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
         .arg(&tgz)
         .arg("-C")
         .arg(vendored)
-        // bblanchon/pdfium-binaries tarballs have a top-level dir
-        // (pdfium-win-x64/); kognitos/pdfium-static does not.
-        // Strip it on Windows so lib/ and bin/ land in vendor/pdfium/.
-        .args(if is_windows {
-            &["--strip-components=1"]
-        } else {
-            &[][..]
-        })
         .status()
         .expect("pdfium: failed to spawn tar");
     if !status.success() {
         panic!("pdfium: tar extraction failed for {tgz:?}");
     }
     let _ = fs::remove_file(&tgz);
+
+    // bblanchon names the import library pdfium.dll.lib, but the MSVC
+    // linker (via cargo:rustc-link-lib=dylib=pdfium) looks for pdfium.lib.
+    // Rename so the linker finds it.
+    if is_windows {
+        let old = vendored.join("lib").join("pdfium.dll.lib");
+        let new = vendored.join("lib").join("pdfium.lib");
+        if old.exists() && !new.exists() {
+            let _ = fs::rename(&old, &new);
+        }
+    }
 }
 
 /// SHA-256 hex digest of a byte slice (build-time, no external tool).
