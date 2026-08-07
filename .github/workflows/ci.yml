@@ -92,7 +92,7 @@ jobs:
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}-v2
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
@@ -123,7 +123,7 @@ jobs:
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
         with:
-          key: clippy
+          key: clippy-v2
 
       - name: Clippy
         run: cargo clippy --release -- -Dwarnings

@@ -121,7 +121,11 @@ fn main() {
         }
     }
 
+    // Force re-run when the vendor lib dir is missing or changes.
+    // On a fresh CI checkout, vendor/pdfium/lib doesn't exist, so cargo
+    // always re-runs this build script and triggers the download.
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=vendor/pdfium/lib");
 }
 
 fn target_pair(os: &str, arch: &str) -> &'static str {
