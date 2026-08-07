@@ -115,7 +115,14 @@ jobs:
         shell: powershell
         run: |
           cd target\${{ matrix.target }}\release
-          $output = & .\donsetch.exe 2>&1 | Select-Object -First 1
+          # Use cmd /c to bypass PowerShell 5.1's stderr-as-error
+          # behavior. donsetch writes usage to stderr (eprintln!),
+          # which PowerShell treats as a NativeCommandError.
+          $output = cmd /c "donsetch.exe 2>&1" 2>$null | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Binary exited with code $LASTEXITCODE"
+            exit 1
+          }
           if (-not $output) {
             Write-Error "Binary produced no output"
             exit 1
@@ -143,9 +150,7 @@ jobs:
             Write-Error "pdfium.dll not found at $dll — build.rs copy failed"
             exit 1
           }
-          Compress-Archive `
-            -Path "$releaseDir\donsetch.exe","$dll" `
-            -DestinationPath "$env:GITHUB_WORKSPACE\donsetch-${{ matrix.name }}.zip"
+          Compress-Archive -Path "$releaseDir\donsetch.exe","$dll" -DestinationPath "$env:GITHUB_WORKSPACE\donsetch-${{ matrix.name }}.zip"
 
       # ── Checksums ────────────────────────────────────────────
       # sha256sum format: "<hash>  <filename>" — compatible with
