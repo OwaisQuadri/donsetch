@@ -12,6 +12,7 @@
 
 #![allow(dead_code)]
 use std::ffi::{CString, c_char, c_void};
+use std::os::raw::c_ulong;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::sys::*;
@@ -195,7 +196,7 @@ fn get_meta(doc: FpdfDocument, tag: &str, buf: &mut Vec<u16>) -> Option<String> 
                 doc,
                 tag.as_ptr(),
                 buf.as_mut_ptr() as *mut c_void,
-                (buf.len() * 2) as u64,
+                (buf.len() * 2) as c_ulong,
             ) as usize;
             if n2 < 2 {
                 return None;
@@ -219,8 +220,11 @@ fn bookmark_title(bm: FpdfBookmark) -> String {
             return String::new();
         }
         let mut buf = vec![0u16; n / 2 + 2];
-        let n2 = FPDFBookmark_GetTitle(bm, buf.as_mut_ptr() as *mut c_void, (buf.len() * 2) as u64)
-            as usize;
+        let n2 = FPDFBookmark_GetTitle(
+            bm,
+            buf.as_mut_ptr() as *mut c_void,
+            (buf.len() * 2) as c_ulong,
+        ) as usize;
         decode_utf16(&buf, n2.min(buf.len()))
     }
 }
@@ -559,7 +563,7 @@ where
                         tp,
                         i32_i,
                         namebuf.as_mut_ptr() as *mut c_void,
-                        namebuf.len() as u64,
+                        namebuf.len() as c_ulong,
                         &mut flags,
                     ) as usize;
                     let family = if need > 0 && need <= namebuf.len() {

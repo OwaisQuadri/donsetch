@@ -9,6 +9,8 @@
 //! engine::load_document initializes when `LoadOpts::want_forms` is set.
 
 #![allow(dead_code)]
+use std::os::raw::c_ulong;
+
 use super::sys::*;
 
 /// What the widget IS, at the PDF level.
@@ -147,7 +149,12 @@ impl FormWidget {
 fn field_string(
     handle: FpdfFormhandle,
     annot: FpdfAnnotation,
-    f: unsafe extern "C" fn(FpdfFormhandle, FpdfAnnotation, *mut std::ffi::c_void, u64) -> u64,
+    f: unsafe extern "C" fn(
+        FpdfFormhandle,
+        FpdfAnnotation,
+        *mut std::ffi::c_void,
+        c_ulong,
+    ) -> c_ulong,
 ) -> String {
     unsafe {
         let need = f(handle, annot, std::ptr::null_mut(), 0) as usize;
@@ -159,7 +166,7 @@ fn field_string(
             handle,
             annot,
             buf.as_mut_ptr() as *mut std::ffi::c_void,
-            (buf.len() * 2) as u64,
+            (buf.len() * 2) as c_ulong,
         ) as usize;
         let units = (got / 2).saturating_sub(1).min(buf.len());
         String::from_utf16_lossy(&buf[..units])

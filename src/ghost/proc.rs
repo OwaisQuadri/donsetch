@@ -43,7 +43,7 @@ pub struct Proc {
 /// ntdll process suspend/resume — always loaded, linked directly.
 #[cfg(windows)]
 #[link(name = "ntdll")]
-extern "system" {
+unsafe extern "system" {
     fn NtSuspendProcess(proc_handle: fnd::HANDLE) -> i32;
     fn NtResumeProcess(proc_handle: fnd::HANDLE) -> i32;
 }
@@ -82,61 +82,66 @@ impl Proc {
         use std::mem;
         let pid = child.id().unwrap_or(0);
 
-        // Process handle with the access rights we need:
-        //   PROCESS_SUSPEND_RESUME  — NtSuspendProcess / NtResumeProcess
-        //   PROCESS_SET_QUOTA       — AssignProcessToJobObject
-        //   PROCESS_QUERY_LIMITED_INFORMATION — status checks
-        let proc_handle = thr::OpenProcess(
-            thr::PROCESS_SUSPEND_RESUME
-                | thr::PROCESS_SET_QUOTA
-                | thr::PROCESS_QUERY_LIMITED_INFORMATION,
-            0,
-            pid,
-        );
-        if proc_handle.is_null() {
-            return Err(FetchError::ghost(format!(
-                "OpenProcess failed: {}",
-                fnd::GetLastError()
-            )));
-        }
+        // SAFETY: all FFI calls in this function target well-documented
+        // Windows kernel/ntdll APIs with correct parameter types. The
+        // `unsafe` block wraps the entire body — every call is audited.
+        unsafe {
+            // Process handle with the access rights we need:
+            //   PROCESS_SUSPEND_RESUME  — NtSuspendProcess / NtResumeProcess
+            //   PROCESS_SET_QUOTA       — AssignProcessToJobObject
+            //   PROCESS_QUERY_LIMITED_INFORMATION — status checks
+            let proc_handle = thr::OpenProcess(
+                thr::PROCESS_SUSPEND_RESUME
+                    | thr::PROCESS_SET_QUOTA
+                    | thr::PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                pid,
+            );
+            if proc_handle.is_null() {
+                return Err(FetchError::ghost(format!(
+                    "OpenProcess failed: {}",
+                    fnd::GetLastError()
+                )));
+            }
 
-        // Job Object: kernel kills the whole tree if donsetch dies.
-        let job_h = job::CreateJobObjectW(std::ptr::null(), std::ptr::null());
-        if job_h.is_null() {
-            fnd::CloseHandle(proc_handle);
-            return Err(FetchError::ghost(format!(
-                "CreateJobObjectW failed: {}",
-                fnd::GetLastError()
-            )));
+            // Job Object: kernel kills the whole tree if donsetch dies.
+            let job_h = job::CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job_h.is_null() {
+                fnd::CloseHandle(proc_handle);
+                return Err(FetchError::ghost(format!(
+                    "CreateJobObjectW failed: {}",
+                    fnd::GetLastError()
+                )));
+            }
+            let mut info: job::JOBOBJECT_EXTENDED_LIMIT_INFORMATION = mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = job::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if job::SetInformationJobObject(
+                job_h,
+                job::JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                mem::size_of::<job::JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            ) == 0
+            {
+                fnd::CloseHandle(proc_handle);
+                fnd::CloseHandle(job_h);
+                return Err(FetchError::ghost(format!(
+                    "SetInformationJobObject failed: {}",
+                    fnd::GetLastError()
+                )));
+            }
+            // Assign the child to the job. On Win8+ nested jobs are
+            // allowed, so this succeeds even if the process is already
+            // in a job. If it fails we don't abort — freeze/thaw/kill
+            // still work via the process handle; only the death-reap
+            // safety net is lost.
+            if job::AssignProcessToJobObject(job_h, proc_handle) == 0 {
+                // Non-fatal: log via the error channel's debug only.
+            }
+            Ok(Self {
+                proc_handle,
+                job: job_h,
+            })
         }
-        let mut info: job::JOBOBJECT_EXTENDED_LIMIT_INFORMATION = mem::zeroed();
-        info.BasicLimitInformation.LimitFlags = job::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if job::SetInformationJobObject(
-            job_h,
-            job::JobObjectExtendedLimitInformation,
-            &info as *const _ as *const _,
-            mem::size_of::<job::JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        ) == 0
-        {
-            fnd::CloseHandle(proc_handle);
-            fnd::CloseHandle(job_h);
-            return Err(FetchError::ghost(format!(
-                "SetInformationJobObject failed: {}",
-                fnd::GetLastError()
-            )));
-        }
-        // Assign the child to the job. On Win8+ nested jobs are
-        // allowed, so this succeeds even if the process is already
-        // in a job. If it fails we don't abort — freeze/thaw/kill
-        // still work via the process handle; only the death-reap
-        // safety net is lost.
-        if job::AssignProcessToJobObject(job_h, proc_handle) == 0 {
-            // Non-fatal: log via the error channel's debug only.
-        }
-        Ok(Self {
-            proc_handle,
-            job: job_h,
-        })
     }
 
     /// Suspend the whole process tree. CPU → 0, RAM goes cold.
@@ -189,6 +194,15 @@ pub fn pdeath_pre_exec() -> std::io::Result<()> {
     }
     Ok(())
 }
+
+// SAFETY: Windows HANDLEs are kernel object references (opaque
+// pointers), safe to move between threads. Only one thread accesses
+// them at a time (guarded by GhostManager's Mutex), and the handles
+// are closed exactly once in Drop.
+#[cfg(windows)]
+unsafe impl Send for Proc {}
+#[cfg(windows)]
+unsafe impl Sync for Proc {}
 
 impl Drop for Proc {
     fn drop(&mut self) {
