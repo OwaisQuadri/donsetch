@@ -147,7 +147,7 @@ jobs:
           $releaseDir = "target\${{ matrix.target }}\release"
           $dll = Join-Path $releaseDir "pdfium.dll"
           if (-not (Test-Path $dll)) {
-            Write-Error "pdfium.dll not found at $dll — build.rs copy failed"
+            Write-Error "pdfium.dll not found at $dll - build.rs copy failed"
             exit 1
           }
           Compress-Archive -Path "$releaseDir\donsetch.exe","$dll" -DestinationPath "$env:GITHUB_WORKSPACE\donsetch-${{ matrix.name }}.zip"
