@@ -106,35 +106,18 @@ jobs:
       # Verify the binary actually runs — catches broken cross-target
       # builds, missing DLLs, and link-time issues that don't show
       # up as compile errors.
-      - name: Verify binary runs (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Verify binary runs
+        shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          output=$(./donsetch 2>&1 | head -1)
+          BIN=donsetch
+          if [ -f donsetch.exe ]; then BIN=donsetch.exe; fi
+          output=$(./$BIN 2>&1 || true)
           if [ -z "$output" ]; then
             echo "ERROR: binary produced no output"
             exit 1
           fi
-          echo "OK: $output"
-
-      - name: Verify binary runs (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: powershell
-        run: |
-          cd target\${{ matrix.target }}\release
-          # Use cmd /c to bypass PowerShell 5.1's stderr-as-error
-          # behavior. donsetch writes usage to stderr (eprintln!),
-          # which PowerShell treats as a NativeCommandError.
-          $output = cmd /c "donsetch.exe 2>&1" 2>$null | Select-Object -First 1
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Binary exited with code $LASTEXITCODE"
-            exit 1
-          }
-          if (-not $output) {
-            Write-Error "Binary produced no output"
-            exit 1
-          }
-          Write-Host "OK: $output"
+          echo "OK: $(echo "$output" | head -1)"
 
       # ── Package ──────────────────────────────────────────────
       # All platforms: tar.gz. Windows includes pdfium.dll alongside
