@@ -507,6 +507,9 @@ async fn main() {
         "--doctor" => {
             cli::doctor::run().await;
         }
+        "--rollback" => {
+            cli::rollback::run();
+        }
         "mcp" => {
             if let Err(e) = mcp::server::run().await {
                 eprintln!("mcp daemon: {e}");
@@ -687,6 +690,7 @@ async fn main() {
             eprintln!("  -v, --version    Show version and build info");
             eprintln!("  -u, --update     Self-update from GitHub Releases");
             eprintln!("      --doctor     Health check with auto-fix");
+            eprintln!("      --rollback   Revert to previous version");
             eprintln!("      mcp          Start MCP server (JSON-RPC on stdio)");
         }
     }

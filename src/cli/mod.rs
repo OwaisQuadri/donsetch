@@ -5,6 +5,7 @@
 //! terminal processing enabled on Windows 10+).
 
 pub mod doctor;
+pub mod rollback;
 pub mod update;
 pub mod version;
 

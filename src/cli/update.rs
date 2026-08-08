@@ -360,6 +360,8 @@ fn replace_binary(exe: &Path, temp_dir: &Path) -> Result<(), String> {
         // Save backup (copy, not rename — keeps the original in place).
         let bak = exe_dir.join("donsetch.bak");
         let _ = std::fs::copy(exe, &bak);
+        // Write version metadata for rollback.
+        let _ = std::fs::write(exe_dir.join("donsetch.bak.ver"), env!("CARGO_PKG_VERSION"));
 
         // Atomic replace.
         std::fs::rename(&tmp, exe).map_err(|e| {
@@ -382,6 +384,9 @@ fn replace_binary(exe: &Path, temp_dir: &Path) -> Result<(), String> {
             format!("copy new: {e}")
         })?;
 
+        // Write version metadata for rollback.
+        let _ = std::fs::write(exe_dir.join("donsetch.bak.ver"), env!("CARGO_PKG_VERSION"));
+
         // Copy pdfium.dll if present in the tarball.
         let new_dll = temp_dir.join("pdfium.dll");
         if new_dll.exists() {
@@ -396,7 +401,9 @@ fn replace_binary(exe: &Path, temp_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove temp files and old backups from a previous interrupted update.
+/// Remove temp files from a previous interrupted update.
+/// Does NOT remove .bak files — those are managed by replace_binary
+/// and needed for rollback. Only cleans up temp artifacts.
 fn cleanup_previous(exe: &Path) {
     let exe_dir = exe.parent().unwrap_or_else(|| Path::new("."));
 
@@ -404,22 +411,7 @@ fn cleanup_previous(exe: &Path) {
     let temp_dir = paths::cache_dir().join("update-tmp");
     let _ = std::fs::remove_dir_all(&temp_dir);
 
-    // Unix temp file.
+    // Unix temp file (half-written binary from interrupted update).
     let tmp = exe_dir.join(".donsetch.update.tmp");
     let _ = std::fs::remove_file(&tmp);
-
-    // Backup files.
-    #[cfg(unix)]
-    {
-        let bak = exe_dir.join("donsetch.bak");
-        let _ = std::fs::remove_file(&bak);
-    }
-
-    #[cfg(windows)]
-    {
-        let bak = exe.with_extension("exe.bak");
-        let _ = std::fs::remove_file(&bak);
-        let dll_bak = exe_dir.join("pdfium.dll.bak");
-        let _ = std::fs::remove_file(&dll_bak);
-    }
 }
