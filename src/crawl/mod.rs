@@ -471,8 +471,9 @@ impl Crawler {
                         filtered_out.fetch_add(1, Ordering::Relaxed);
                         continue 'work;
                     }
-                    // The seed itself is explicit user intent —
-                    // include/exclude globs only govern backlinks.
+                    // The seed is always fetched (entry point for
+                    // link discovery) but its content is scope-gated
+                    // post-extraction. Non-seed URLs are filtered here.
                     let is_seed = item.url == seed_norm_w;
                     if !is_seed
                         && !scope_allowed(
@@ -604,28 +605,47 @@ impl Crawler {
                         continue 'work;
                     }
 
+                    // Scope gate for results: the seed is always
+                    // fetched for link discovery, but only included
+                    // in results if it matches include_paths. Non-seed
+                    // pages already passed scope before fetching.
+                    let in_scope = scope_allowed(
+                        parsed.path(),
+                        &opts_worker.include_paths,
+                        &opts_worker.exclude_paths,
+                    );
+
                     let chars = md.chars().count();
-                    if !duplicate {
-                        chars_total.fetch_add(chars, Ordering::SeqCst);
-                        // Budget-check AFTER charge: allow partial
-                        // truncation for the last page.
-                    }
-                    pages_done.fetch_add(1, Ordering::SeqCst);
-                    pages.lock().unwrap().push(CrawlPage {
-                        url: page.url.clone(),
-                        title: r.title.clone().unwrap_or_default(),
-                        kind: r.content_kind,
-                        markdown: md,
-                        chars,
-                        quality: r.quality,
-                        duplicate,
-                    });
-                    if duplicate {
+
+                    if !in_scope {
+                        // Navigation-only: don't add to results,
+                        // don't count against page budget. Still
+                        // harvest outlinks (seed → in-scope pages).
                         skipped
                             .lock()
                             .unwrap()
-                            .push((page.url.clone(), "near-duplicate".into()));
-                        continue 'work;
+                            .push((page.url.clone(), "out of scope (navigation-only)".into()));
+                    } else {
+                        pages_done.fetch_add(1, Ordering::SeqCst);
+                        if !duplicate {
+                            chars_total.fetch_add(chars, Ordering::SeqCst);
+                        }
+                        pages.lock().unwrap().push(CrawlPage {
+                            url: page.url.clone(),
+                            title: r.title.clone().unwrap_or_default(),
+                            kind: r.content_kind,
+                            markdown: md,
+                            chars,
+                            quality: r.quality,
+                            duplicate,
+                        });
+                        if duplicate {
+                            skipped
+                                .lock()
+                                .unwrap()
+                                .push((page.url.clone(), "near-duplicate".into()));
+                            continue 'work;
+                        }
                     }
 
                     // ── Harvest outlinks into the frontier ──

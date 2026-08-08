@@ -370,7 +370,7 @@ fn verdict_error(verdict: Verdict, status: u16, url: &str) -> String {
             format!("login required: {url} needs authentication — the page is behind a login wall")
         }
         Verdict::Paywall => format!("paywall: {url} requires payment to view content"),
-        Verdict::SoftNotFound => format!("not found: {url} returned HTTP 404"),
+        Verdict::SoftNotFound => format!("not found: {url} returned HTTP {status}"),
         Verdict::Blocked => {
             // 403/429 without challenge markers = upstream block, not a bot wall.
             match status {
@@ -521,12 +521,13 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     }
 
     // === SOLVE on wall ===
-    // Only genuine bot walls (Challenge, Blocked) trigger
-    // ghost solve. 404, AuthWall, Paywall are legitimate
-    // responses — return them as errors immediately.
+    // Only genuine bot-wall CHALLENGES trigger ghost solve.
+    // Blocked (403/429/503 without challenge markers) is a
+    // hard block or server error — ghost solve won't help.
+    // 404/AuthWall/Paywall are legitimate responses.
     let walled = out
         .as_ref()
-        .map(|o| matches!(o.verdict, Verdict::Challenge(_) | Verdict::Blocked))
+        .map(|o| matches!(o.verdict, Verdict::Challenge(_)))
         .unwrap_or(true);
     if walled && tier != "1" {
         match daemon.ghost_mgr.acquire(&daemon.profile).await {
@@ -543,10 +544,21 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                             out = Some(retry);
                             tier_used = "1+ghost-solve";
                         }
-                        Ok(retry) => {
+                        Ok(retry) if matches!(retry.verdict, Verdict::Challenge(_)) => {
+                            // Challenge didn't clear with cookies,
+                            // but ghost DOM may have real content.
                             rendered_html = Some(r.html.into_bytes());
                             out = Some(retry);
                             tier_used = "ghost-dom";
+                        }
+                        Ok(retry) => {
+                            // Blocked / 404 / AuthWall / Paywall —
+                            // ghost DOM is an error page, not content.
+                            return tool_error(verdict_error(
+                                retry.verdict,
+                                retry.status,
+                                &retry.url,
+                            ));
                         }
                         Err(e) => {
                             return tool_error(friendly_fetch_error(&e));
@@ -563,17 +575,47 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                     ));
                 }
                 Ok(ops::SolveOutcome::TimedOut) => {
-                    let v = out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
-                    return tool_error(format!(
-                        "bot wall did not clear in 30s at {url} — the challenge timed out (verdict: {v:?})"
-                    ));
+                    // Ghost couldn't clear the challenge. Fall back
+                    // to the original tier 1 response for a clean
+                    // status verdict instead of a raw timeout error.
+                    if let Some(o) = &out {
+                        return tool_error(verdict_error(o.verdict, o.status, &o.url));
+                    }
+                    // Tier 1 was skipped (SkipToSolve) — try it
+                    // now as last resort for a clean status verdict.
+                    match daemon.fetcher.fetch(&url).await {
+                        Ok(o) => return tool_error(verdict_error(o.verdict, o.status, &o.url)),
+                        Err(fe) => return tool_error(friendly_fetch_error(&fe)),
+                    }
                 }
-                Err(e) => {
-                    return tool_error(format!("browser automation error: {e}"));
+                Err(_e) => {
+                    // Ghost navigation/browser failure. Fall back
+                    // to the original tier 1 response for a clean
+                    // status verdict instead of a raw ghost error.
+                    if let Some(o) = &out {
+                        return tool_error(verdict_error(o.verdict, o.status, &o.url));
+                    }
+                    // Tier 1 was skipped (SkipToSolve) — try it
+                    // now as last resort for a clean status verdict.
+                    match daemon.fetcher.fetch(&url).await {
+                        Ok(o) => return tool_error(verdict_error(o.verdict, o.status, &o.url)),
+                        Err(fe) => return tool_error(friendly_fetch_error(&fe)),
+                    }
                 }
             },
             Err(e) => {
-                return tool_error(format!("browser launch failed: {e}"));
+                // Browser launch failed (no Chrome, wrong arch, etc.).
+                // Fall back to the original tier 1 response for a
+                // clean status verdict instead of a raw launch error.
+                if let Some(o) = &out {
+                    return tool_error(verdict_error(o.verdict, o.status, &o.url));
+                }
+                // Tier 1 was skipped (SkipToSolve) — try it
+                // now as last resort for a clean status verdict.
+                match daemon.fetcher.fetch(&url).await {
+                    Ok(o) => return tool_error(verdict_error(o.verdict, o.status, &o.url)),
+                    Err(fe) => return tool_error(format!("browser launch failed: {e}; {fe}")),
+                }
             }
         }
     }
@@ -643,6 +685,69 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 ex = e2;
                 tier_used = "ghost-render";
             }
+        }
+    }
+
+    // Escalation: render → still thin → solve.
+    // Solve imports cookies and retries tier 1, getting
+    // server-rendered content for JS-heavy sites (Reddit,
+    // Twitter) where render only captures a shell.
+    if ex.thin
+        && tier != "1"
+        && matches!(tier_used, "ghost-render" | "render-cache")
+        && let Ok(mut g) = daemon.ghost_mgr.acquire(&daemon.profile).await
+        && let Ok(ops::SolveOutcome::Solved(r)) =
+            ops::solve(&mut g, &url, std::time::Duration::from_secs(30)).await
+    {
+        daemon.fetcher.import_cookies(&r.cookies).await;
+        daemon
+            .state
+            .lock()
+            .await
+            .record_solved(&host, &r.cookies, r.vendor.as_deref());
+        match daemon.fetcher.fetch(&url).await {
+            Ok(retry) if matches!(retry.verdict, Verdict::ContentOk) => {
+                let ct = retry
+                    .headers
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default();
+                if !crate::fetch::guards::is_binary(&retry.body, &ct)
+                    && let Ok(e2) = extract::extract(&retry.body, &ct, &retry.url, &opts)
+                    && !e2.thin
+                {
+                    out = Some(retry);
+                    ex = e2;
+                    tier_used = "render+solve";
+                }
+            }
+            Ok(retry) => {
+                if let Ok(e2) = extract::extract(r.html.as_bytes(), "text/html", &url, &opts)
+                    && !e2.thin
+                {
+                    out = Some(retry);
+                    ex = e2;
+                    tier_used = "render+solve-dom";
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    // If we already rendered/solved and content is still thin,
+    // fix the SPA note — "tier 2 renders JS" is misleading.
+    if ex.thin
+        && matches!(
+            tier_used,
+            "ghost-render" | "render+solve" | "render+solve-dom" | "render-cache"
+        )
+    {
+        let note = "*[note: large page rendered almost no content — likely JS-rendered (SPA). Content below may be a shell; tier 2 renders JS.]*\n\n";
+        if let Some(stripped) = ex.markdown.strip_prefix(note) {
+            ex.markdown = format!(
+                "*[note: page content is thin even after JS rendering — the site may require authentication, use lazy loading, or block automated access]*\n\n{stripped}"
+            );
         }
     }
 

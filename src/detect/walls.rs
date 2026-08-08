@@ -81,7 +81,21 @@ fn classify_wall(
     // cf-mitigated / x-datadome header never lies,
     // regardless of page size.
     if is_cf && (status == 403 || status == 503) {
-        return Verdict::Challenge(Vendor::Cloudflare);
+        // CF 403/503: could be a challenge page OR a
+        // WAF block / origin error. Check body for
+        // challenge markers before classifying.
+        if allow_body_markers
+            && (text.contains("just a moment")
+                || text.contains("cf-chl")
+                || text.contains("challenge-platform")
+                || text.contains("turnstile")
+                || text.contains("attention required"))
+        {
+            return Verdict::Challenge(Vendor::Cloudflare);
+        }
+        // No challenge markers — WAF block (403) or
+        // origin error (503). Ghost solve won't help.
+        return Verdict::Blocked;
     }
     if header(headers, "x-datadome").is_some() {
         return Verdict::Challenge(Vendor::DataDome);
