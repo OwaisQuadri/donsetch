@@ -326,6 +326,7 @@ fn extract_tarball(data: &[u8], dest: &Path) -> Result<Vec<String>, String> {
 /// Also replaces `pdfium.dll` if the tarball includes it. Old
 /// `.bak` files are cleaned up on the next update (see
 /// `cleanup_previous`).
+#[allow(clippy::needless_borrows_for_generic_args)]
 fn replace_binary(exe: &Path, temp_dir: &Path) -> Result<(), String> {
     let binary_name = if cfg!(windows) {
         "donsetch.exe"
@@ -345,6 +346,9 @@ fn replace_binary(exe: &Path, temp_dir: &Path) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "cannot determine binary directory".to_string())?;
 
+    // Borrow as &Path for fs operations — &Path is Copy, so it
+    // won't move and won't trigger clippy::needless_borrows.
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -359,12 +363,12 @@ fn replace_binary(exe: &Path, temp_dir: &Path) -> Result<(), String> {
 
         // Save backup (copy, not rename — keeps the original in place).
         let bak = exe_dir.join("donsetch.bak");
-        let _ = std::fs::copy(exe, &bak);
+        let _ = std::fs::copy(&exe, &bak);
         // Write version metadata for rollback.
         let _ = std::fs::write(exe_dir.join("donsetch.bak.ver"), env!("CARGO_PKG_VERSION"));
 
         // Atomic replace.
-        std::fs::rename(&tmp, exe).map_err(|e| {
+        std::fs::rename(&tmp, &exe).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             format!("rename: {e}")
         })?;
@@ -376,11 +380,11 @@ fn replace_binary(exe: &Path, temp_dir: &Path) -> Result<(), String> {
         let bak = exe.with_extension("exe.bak");
         let _ = std::fs::remove_file(&bak); // Remove old .bak from previous update.
 
-        std::fs::rename(exe, &bak).map_err(|e| format!("rename old: {e}"))?;
+        std::fs::rename(&exe, &bak).map_err(|e| format!("rename old: {e}"))?;
 
-        std::fs::copy(&new_binary, exe).map_err(|e| {
+        std::fs::copy(&new_binary, &exe).map_err(|e| {
             // Restore from backup on failure.
-            let _ = std::fs::rename(&bak, exe);
+            let _ = std::fs::rename(&bak, &exe);
             format!("copy new: {e}")
         })?;
 

@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli;
 
+#[allow(clippy::needless_borrows_for_generic_args)]
 pub fn run() {
     cli::init();
     cli::print_title("DonSeTch Rollback");
@@ -33,6 +34,9 @@ pub fn run() {
     };
 
     let exe_dir = exe.parent().unwrap_or_else(|| Path::new("."));
+
+    // Borrow as &Path for fs operations — &Path is Copy, so it
+    // won't move and won't trigger clippy::needless_borrows.
 
     // ── Locate backup ────────────────────────────────────────
 
@@ -138,7 +142,7 @@ pub fn run() {
         let _ = std::fs::write(&bak_ver_path, current);
 
         // Atomic replace.
-        if let Err(e) = std::fs::rename(&tmp, exe).map_err(|e| e.to_string()) {
+        if let Err(e) = std::fs::rename(&tmp, &exe).map_err(|e| e.to_string()) {
             let _ = std::fs::remove_file(&tmp);
             println!("  {} Atomic rename failed: {e}", cli::icon_fail());
             if e.contains("Permission")
@@ -162,15 +166,15 @@ pub fn run() {
         let _ = std::fs::remove_file(&tmp);
 
         // Rename current running exe to temp.
-        if let Err(e) = std::fs::rename(exe, &tmp).map_err(|e| e.to_string()) {
+        if let Err(e) = std::fs::rename(&exe, &tmp).map_err(|e| e.to_string()) {
             println!("  {} Rename current failed: {e}", cli::icon_fail());
             return;
         }
 
         // Copy backup to exe path.
-        if let Err(e) = std::fs::copy(&bak_path, exe).map_err(|e| {
+        if let Err(e) = std::fs::copy(&bak_path, &exe).map_err(|e| {
             // Restore on failure.
-            let _ = std::fs::rename(&tmp, exe);
+            let _ = std::fs::rename(&tmp, &exe);
             e.to_string()
         }) {
             println!("  {} Copy backup failed: {e}", cli::icon_fail());
