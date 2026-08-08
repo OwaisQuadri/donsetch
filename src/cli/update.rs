@@ -124,7 +124,11 @@ pub async fn run() {
         Ok(out) if out.status == 200 => out.body,
         Ok(out) => {
             spinner.stop();
-            println!("  {} Download failed: HTTP {}", cli::icon_fail(), out.status);
+            println!(
+                "  {} Download failed: HTTP {}",
+                cli::icon_fail(),
+                out.status
+            );
             if out.status == 404 {
                 println!(
                     "    No prebuilt binary for {} {}.",
@@ -249,10 +253,7 @@ fn platform_asset_name() -> Option<&'static str> {
 /// so it is NOT subject to the 60-req/hour API rate limit.
 async fn fetch_latest_version(fetcher: &Fetcher) -> Result<String, String> {
     let url = format!("https://github.com/{REPO}/releases.atom");
-    let out = fetcher
-        .fetch(&url)
-        .await
-        .map_err(|e| e.to_string())?;
+    let out = fetcher.fetch(&url).await.map_err(|e| e.to_string())?;
 
     if out.status != 200 {
         return Err(format!("HTTP {} from releases feed", out.status));
@@ -326,7 +327,11 @@ fn extract_tarball(data: &[u8], dest: &Path) -> Result<Vec<String>, String> {
 /// `.bak` files are cleaned up on the next update (see
 /// `cleanup_previous`).
 fn replace_binary(exe: &Path, temp_dir: &Path) -> Result<(), String> {
-    let binary_name = if cfg!(windows) { "donsetch.exe" } else { "donsetch" };
+    let binary_name = if cfg!(windows) {
+        "donsetch.exe"
+    } else {
+        "donsetch"
+    };
     let new_binary = temp_dir.join(binary_name);
 
     if !new_binary.exists() {

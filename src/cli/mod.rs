@@ -54,17 +54,33 @@ fn paint(colour: &str, text: &str) -> String {
     }
 }
 
-pub fn green(s: &str) -> String { paint(GREEN, s) }
-pub fn red(s: &str) -> String { paint(RED, s) }
-pub fn yellow(s: &str) -> String { paint(YELLOW, s) }
-pub fn dim(s: &str) -> String { paint(DIM, s) }
-pub fn bold(s: &str) -> String { paint(BOLD, s) }
+pub fn green(s: &str) -> String {
+    paint(GREEN, s)
+}
+pub fn red(s: &str) -> String {
+    paint(RED, s)
+}
+pub fn yellow(s: &str) -> String {
+    paint(YELLOW, s)
+}
+pub fn dim(s: &str) -> String {
+    paint(DIM, s)
+}
+pub fn bold(s: &str) -> String {
+    paint(BOLD, s)
+}
 
 // ── Icons ─────────────────────────────────────────────────────
 
-pub fn icon_pass() -> String { green("\u{2713}") }
-pub fn icon_fail() -> String { red("\u{2717}") }
-pub fn icon_warn() -> String { yellow("\u{26A0}") }
+pub fn icon_pass() -> String {
+    green("\u{2713}")
+}
+pub fn icon_fail() -> String {
+    red("\u{2717}")
+}
+pub fn icon_warn() -> String {
+    yellow("\u{26A0}")
+}
 
 // ── Layout ────────────────────────────────────────────────────
 
@@ -109,13 +125,18 @@ pub fn check_fail(name: &str, detail: &str, instructions: &str) {
 /// `  \u{2713} Check name              fixed: detail`
 pub fn check_fixed(name: &str, detail: &str) {
     let padded = format!("{:<26}", name);
-    println!("  {} {} {}", icon_pass(), padded, dim(&format!("fixed: {detail}")));
+    println!(
+        "  {} {} {}",
+        icon_pass(),
+        padded,
+        dim(&format!("fixed: {detail}"))
+    );
 }
 
 // ── Spinner ──────────────────────────────────────────────────
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -140,9 +161,8 @@ impl Spinner {
         let msg = msg.to_string();
         let handle = thread::spawn(move || {
             let frames = [
-                '\u{2807}', '\u{2819}', '\u{2839}', '\u{2838}',
-                '\u{283C}', '\u{2834}', '\u{2826}', '\u{2827}',
-                '\u{2807}', '\u{280F}',
+                '\u{2807}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283C}', '\u{2834}', '\u{2826}',
+                '\u{2827}', '\u{2807}', '\u{280F}',
             ];
             let mut i = 0;
             while !stop_clone.load(Ordering::Relaxed) {

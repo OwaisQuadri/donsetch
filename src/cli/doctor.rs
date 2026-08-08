@@ -142,12 +142,10 @@ fn check_binary() -> CheckResult {
 
 async fn check_network(fetcher: &Fetcher) -> CheckResult {
     match fetcher.fetch("https://example.com").await {
-        Ok(out) if out.status == 200 => {
-            CheckResult::Pass(format!(
-                "example.com 200 OK ({:.0}ms)",
-                out.elapsed.as_secs_f64() * 1000.0,
-            ))
-        }
+        Ok(out) if out.status == 200 => CheckResult::Pass(format!(
+            "example.com 200 OK ({:.0}ms)",
+            out.elapsed.as_secs_f64() * 1000.0,
+        )),
         Ok(out) => CheckResult::Warn(format!("example.com returned HTTP {}", out.status)),
         Err(e) => CheckResult::Fail(
             e.to_string(),
@@ -263,22 +261,14 @@ fn check_cache_dir() -> CheckResult {
 fn check_pdfium() -> CheckResult {
     #[cfg(not(windows))]
     {
-        CheckResult::Pass(
-            option_env!("DONSHEET_PDFIUM")
-                .unwrap_or("static")
-                .into(),
-        )
+        CheckResult::Pass(option_env!("DONSHEET_PDFIUM").unwrap_or("static").into())
     }
     #[cfg(windows)]
     {
         let exe = std::env::current_exe().unwrap_or_default();
         let dll = exe.parent().unwrap_or(Path::new("")).join("pdfium.dll");
         if dll.exists() {
-            CheckResult::Pass(
-                option_env!("DONSHEET_PDFIUM")
-                    .unwrap_or("dll")
-                    .into(),
-            )
+            CheckResult::Pass(option_env!("DONSHEET_PDFIUM").unwrap_or("dll").into())
         } else {
             CheckResult::Fail(
                 "pdfium.dll not found".into(),

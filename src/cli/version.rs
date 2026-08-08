@@ -22,8 +22,5 @@ pub fn run() {
         "pdfium",
         option_env!("DONSHEET_PDFIUM").unwrap_or("unknown"),
     );
-    crate::cli::print_kv(
-        "git",
-        option_env!("DONSHEET_GIT_HASH").unwrap_or("unknown"),
-    );
+    crate::cli::print_kv("git", option_env!("DONSHEET_GIT_HASH").unwrap_or("unknown"));
 }

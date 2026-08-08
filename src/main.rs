@@ -1,5 +1,5 @@
-mod crawl;
 mod cli;
+mod crawl;
 mod detect;
 mod error;
 mod extract;

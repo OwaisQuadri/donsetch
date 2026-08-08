@@ -131,7 +131,10 @@ fn main() {
     // Captured here so the binary self-reports its build identity.
 
     // Git short hash (best-effort — may not be a git repo).
-    if let Ok(out) = Command::new("git").args(["rev-parse", "--short", "HEAD"]).output() {
+    if let Ok(out) = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+    {
         if let Ok(s) = String::from_utf8(out.stdout) {
             println!("cargo:rustc-env=DONSHEET_GIT_HASH={}", s.trim());
         } else {
@@ -142,7 +145,11 @@ fn main() {
     }
 
     // PDFium variant string.
-    let pdfium_tag = if is_windows { PDFIUM_SHARED_TAG } else { PDFIUM_STATIC_TAG };
+    let pdfium_tag = if is_windows {
+        PDFIUM_SHARED_TAG
+    } else {
+        PDFIUM_STATIC_TAG
+    };
     let pdfium_kind = if is_windows { "dll" } else { "static" };
     println!("cargo:rustc-env=DONSHEET_PDFIUM={pdfium_kind}, {pdfium_tag}");
 
@@ -160,8 +167,12 @@ fn main() {
 
     // Enabled feature flags.
     let mut feats = Vec::new();
-    if env::var_os("CARGO_FEATURE_OCR").is_some() { feats.push("ocr"); }
-    if env::var_os("CARGO_FEATURE_RERANK").is_some() { feats.push("rerank"); }
+    if env::var_os("CARGO_FEATURE_OCR").is_some() {
+        feats.push("ocr");
+    }
+    if env::var_os("CARGO_FEATURE_RERANK").is_some() {
+        feats.push("rerank");
+    }
     println!("cargo:rustc-env=DONSHEET_FEATURES={}", feats.join(", "));
 }
 
