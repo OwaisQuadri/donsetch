@@ -9,7 +9,8 @@
 # It needs NASM for x86_64 assembly crypto. On Windows it needs
 # LLVM/Clang for bindgen (pre-installed on Linux/macOS runners).
 #
-# Reference: cloudflare/boring CI for the toolchain setup pattern.
+# Tests run in debug mode (no LTO) for speed. Release builds are
+# verified by the release workflow on tag push.
 
 name: CI
 
@@ -24,7 +25,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── build + test matrix ──────────────────────────────────────
   build-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -49,6 +49,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: ${{ matrix.os == 'ubuntu-latest' && 'clippy, rustfmt' || '' }}
 
       - name: Install Go
         uses: actions/setup-go@v5
@@ -87,58 +88,20 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: |
-          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "C:\Program Files\NASM" | Out-File -FilePath $env::GITHUB_PATH -Append
 
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}-v2
-
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+          key: ${{ matrix.target }}-v3
 
       - name: Test
-        run: cargo test --release --target ${{ matrix.target }}
-
-  # ── lint ─────────────────────────────────────────────────────
-  clippy:
-    name: clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '>=1.22.0'
-
-      - name: Install NASM
-        run: sudo apt-get update && sudo apt-get install -y nasm
-
-      - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: clippy-v2
+        run: cargo test --target ${{ matrix.target }}
 
       - name: Clippy
-        run: cargo clippy --release -- -Dwarnings
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy -- -Dwarnings
 
-  # ── format check ─────────────────────────────────────────────
-  fmt:
-    name: rustfmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Check formatting
+      - name: Format check
+        if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --all -- --check
