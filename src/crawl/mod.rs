@@ -128,6 +128,9 @@ pub struct CrawlOptions {
     pub respect_robots: bool,
     /// Map hard cap.
     pub map_cap: usize,
+    /// Minimum content quality (0.0-1.0). Pages below this
+    /// are skipped (still counted against page budget).
+    pub min_quality: f32,
 }
 
 impl Default for CrawlOptions {
@@ -146,12 +149,13 @@ impl Default for CrawlOptions {
             concurrency: 1,
             respect_robots: true,
             map_cap: 120,
+            min_quality: 0.05,
         }
     }
 }
 
 /// State carried in a resume token.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct ResumeState {
     seed: String,
     queue: Vec<(String, f64, u32)>,
@@ -201,7 +205,7 @@ impl ResumeFile {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         self.entries
-            .retain(|_, (_, at)| now.saturating_sub(*at) < 30 * 60);
+            .retain(|_, (_, at)| now.saturating_sub(*at) < 120 * 60);
     }
 }
 
@@ -229,11 +233,26 @@ impl Crawler {
         resume_token: Option<&str>,
     ) -> Result<CrawlResult, String> {
         let started = Instant::now();
-        let seed_url = Url::parse(seed).map_err(|_| format!("bad seed url: {seed}"))?;
-        let seed_host = seed_url
-            .host_str()
-            .ok_or("seed must have a host")?
-            .to_string();
+
+        // Resume without url: load the seed from the resume state.
+        let (seed, seed_url, seed_host) = if seed.is_empty() {
+            let mut store = ResumeFile::load();
+            store.sweep();
+            let tok = resume_token.ok_or("resume token required when url is empty")?;
+            let state = store
+                .entries
+                .get(tok)
+                .map(|(s, _)| s.clone())
+                .ok_or(format!("resume token expired or unknown: {tok}"))?;
+            let u = Url::parse(&state.seed)
+                .map_err(|_| format!("bad seed in resume state: {}", state.seed))?;
+            let h = u.host_str().ok_or("seed must have a host")?.to_string();
+            (state.seed.clone(), u, h)
+        } else {
+            let u = Url::parse(seed).map_err(|_| format!("bad seed url: {seed}"))?;
+            let h = u.host_str().ok_or("seed must have a host")?.to_string();
+            (seed.to_string(), u, h)
+        };
 
         let host_ok = {
             let sh = seed_host.clone();
@@ -573,6 +592,17 @@ impl Crawler {
                         h.finish()
                     };
                     let duplicate = !dup_sigs.lock().unwrap().insert(sig);
+
+                    // Quality gate: skip near-empty pages (boilerplate,
+                    // redirects, error pages). Still counts against budget.
+                    if !duplicate && r.quality < opts_worker.min_quality {
+                        skipped
+                            .lock()
+                            .unwrap()
+                            .push((page.url.clone(), format!("low quality ({:.2})", r.quality)));
+                        pages_done.fetch_add(1, Ordering::SeqCst);
+                        continue 'work;
+                    }
 
                     let chars = md.chars().count();
                     if !duplicate {

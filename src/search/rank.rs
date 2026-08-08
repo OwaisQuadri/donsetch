@@ -246,6 +246,30 @@ pub fn merge(
 
     results.sort_by(|a, b| b.score.total_cmp(&a.score));
 
+    // Syndicated content dedup: same article republished under
+    // different local TV/radio sites (fox43, localmemphis, etc.)
+    // appears as separate hits with identical titles. Collapse
+    // them: keep the first (highest-scoring), drop the rest.
+    let mut deduped = Vec::with_capacity(results.len());
+    let mut seen_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for r in results {
+        let title_key = r
+            .title
+            .to_lowercase()
+            .trim()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == ' ')
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !title_key.is_empty() && !seen_titles.insert(title_key) {
+            continue; // duplicate title — syndicated content
+        }
+        deduped.push(r);
+    }
+    results = deduped;
+
     // Diversity cap: max MAX_PER_DOMAIN per domain.
     let mut domain_count: HashMap<String, usize> = HashMap::new();
     let mut diverse = Vec::with_capacity(max_results);

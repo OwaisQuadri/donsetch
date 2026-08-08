@@ -174,9 +174,17 @@ async fn call_tool(daemon: &Arc<Daemon>, params: &Value) -> Result<Value, (i64, 
 /// DonSift. Resume tokens make huge sites paginable.
 #[allow(clippy::field_reassign_with_default)]
 async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
+    // Resume can work without a url (the seed is stored in the
+    // resume state). If url is missing AND no resume token, error.
     let url = match args.get("url").and_then(Value::as_str) {
         Some(u) if u.starts_with("http://") || u.starts_with("https://") => u.to_string(),
-        _ => return tool_error("crawl: url must be http(s)"),
+        Some(u) => return tool_error(format!("crawl: url must be http(s), got: {u}")),
+        None => {
+            if args.get("resume").and_then(Value::as_str).is_none() {
+                return tool_error("crawl: url required (or provide resume token to continue)");
+            }
+            String::new()
+        }
     };
     let mut opts = CrawlOptions::default();
     opts.focus = args.get("focus").and_then(Value::as_str).map(String::from);
@@ -219,6 +227,9 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     }
     if let Some(n) = args.get("deadline_s").and_then(Value::as_u64) {
         opts.deadline = std::time::Duration::from_secs(n.clamp(5, 600));
+    }
+    if let Some(q) = args.get("min_quality").and_then(Value::as_f64) {
+        opts.min_quality = q.clamp(0.0, 1.0) as f32;
     }
     let resume = args.get("resume").and_then(Value::as_str).map(String::from);
 
@@ -303,6 +314,96 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     })
 }
 
+/// Map a raw FetchError to a user-friendly diagnostic.
+/// No Rust internals, no TLS jargon — clean, actionable.
+fn friendly_fetch_error(e: &crate::error::FetchError) -> String {
+    use crate::error::FetchError;
+    match e {
+        FetchError::Timeout => "request timed out (the server took too long to respond)".into(),
+        FetchError::TooManyRedirects => "too many redirects (the URL loops)".into(),
+        FetchError::InvalidUrl(u) => format!("invalid URL: {u}"),
+        FetchError::Tls(msg) => {
+            // TLS errors: strip the raw SSL/BoringSSL internals.
+            let msg = msg.to_lowercase();
+            if msg.contains("certificate") || msg.contains("handshake") {
+                "TLS error: the server's certificate or handshake failed".into()
+            } else if msg.contains("reset") || msg.contains("eof") {
+                "connection reset by server".into()
+            } else {
+                "TLS connection failed".into()
+            }
+        }
+        FetchError::Io(e) => {
+            let msg = e.to_string();
+            if msg.contains("refused") {
+                "connection refused (the server is not accepting connections)".into()
+            } else if msg.contains("timed out") {
+                "connection timed out".into()
+            } else if msg.contains("not found") || msg.contains("no address") {
+                "host not found (DNS lookup failed)".into()
+            } else if msg.contains("reset") {
+                "connection reset by server".into()
+            } else {
+                format!("network error: {e}")
+            }
+        }
+        FetchError::Http(msg) => {
+            // h1/h2 protocol errors: strip raw parser messages.
+            let msg = msg.to_lowercase();
+            if msg.contains("eof before headers") {
+                "server closed the connection before sending a response".into()
+            } else if msg.contains("read_server_hello") {
+                "TLS handshake failed (server rejected the connection)".into()
+            } else {
+                format!("HTTP protocol error: {e}")
+            }
+        }
+        FetchError::Ghost(msg) => format!("browser automation error: {msg}"),
+    }
+}
+
+/// Map a Verdict + status code to a clean, specific error message.
+/// Distinguishes genuine blocks from upstream errors from SPAs.
+fn verdict_error(verdict: Verdict, status: u16, url: &str) -> String {
+    match verdict {
+        Verdict::AuthWall => {
+            format!("login required: {url} needs authentication — the page is behind a login wall")
+        }
+        Verdict::Paywall => format!("paywall: {url} requires payment to view content"),
+        Verdict::SoftNotFound => format!("not found: {url} returned HTTP 404"),
+        Verdict::Blocked => {
+            // 403/429 without challenge markers = upstream block, not a bot wall.
+            match status {
+                403 => format!("forbidden: {url} returned HTTP 403 (access denied)"),
+                429 => format!("rate limited: {url} returned HTTP 429 (too many requests)"),
+                503 => format!(
+                    "service unavailable: {url} returned HTTP 503 (server overloaded or down)"
+                ),
+                _ => format!("blocked: {url} returned HTTP {status}"),
+            }
+        }
+        Verdict::Challenge(v) => format!(
+            "bot wall: {url} is protected by {:?} (try fetch with tier=2 for headless browser)",
+            v
+        ),
+        Verdict::ContentOk => format!("unexpected error: {url} (status {status})"),
+    }
+}
+
+/// Detect login-gated SPA shells: thin content + login markers.
+fn is_login_shell(html: &str) -> bool {
+    let lower = html.to_lowercase();
+    let has_login = lower.contains("sign in")
+        || lower.contains("log in")
+        || lower.contains("login") && (lower.contains("password") || lower.contains("email"));
+    let has_form = lower.contains("<form")
+        && (lower.contains("password")
+            || lower.contains("action=\"/login")
+            || lower.contains("action=\"/auth")
+            || lower.contains("action=\"/account"));
+    has_login && has_form
+}
+
 /// The fetch tool: tier 1 → verdict → ghost solve/render
 /// → DonSift. Ports the CLI escalation into the daemon,
 /// with warm-start and render cache.
@@ -312,6 +413,19 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         Some(u) if u.starts_with("http://") || u.starts_with("https://") => u.to_string(),
         _ => return tool_error("fetch: url must be http(s)"),
     };
+
+    // SSRF guard: never fetch private/loopback addresses.
+    let parsed = match url::Url::parse(&url) {
+        Ok(u) => u,
+        Err(_) => return tool_error(format!("invalid URL: {url}")),
+    };
+    if let Some(host) = parsed.host_str()
+        && crate::fetch::guards::is_ssrf_host(host)
+    {
+        return tool_error(format!(
+            "blocked: {host} is a private/loopback address — SSRF guard"
+        ));
+    }
     let mut opts = ExtractOptions::default();
     opts.focus = args.get("focus").and_then(Value::as_str).map(String::from);
     opts.max_chars = args
@@ -374,7 +488,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     if !skip_tier1 {
         out = Some(match daemon.fetcher.fetch(&url).await {
             Ok(o) => o,
-            Err(e) => return tool_error(format!("fetch: {e}")),
+            Err(e) => return tool_error(friendly_fetch_error(&e)),
         });
 
         // === Observe the outcome ===
@@ -407,9 +521,12 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     }
 
     // === SOLVE on wall ===
+    // Only genuine bot walls (Challenge, Blocked) trigger
+    // ghost solve. 404, AuthWall, Paywall are legitimate
+    // responses — return them as errors immediately.
     let walled = out
         .as_ref()
-        .map(|o| !matches!(o.verdict, Verdict::ContentOk))
+        .map(|o| matches!(o.verdict, Verdict::Challenge(_) | Verdict::Blocked))
         .unwrap_or(true);
     if walled && tier != "1" {
         match daemon.ghost_mgr.acquire(&daemon.profile).await {
@@ -432,7 +549,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                             tier_used = "ghost-dom";
                         }
                         Err(e) => {
-                            return tool_error(format!("fetch after solve: {e}"));
+                            return tool_error(friendly_fetch_error(&e));
                         }
                     }
                 }
@@ -442,21 +559,21 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                     }
                     let v = out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
                     return tool_error(format!(
-                        "blocked: interactive captcha at {url} — no solving service by design (verdict: {v:?})"
+                        "interactive captcha required at {url} — no automated solving service by design (verdict: {v:?})"
                     ));
                 }
                 Ok(ops::SolveOutcome::TimedOut) => {
                     let v = out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
                     return tool_error(format!(
-                        "blocked: challenge did not clear in 30s at {url} (verdict: {v:?})"
+                        "bot wall did not clear in 30s at {url} — the challenge timed out (verdict: {v:?})"
                     ));
                 }
                 Err(e) => {
-                    return tool_error(format!("ghost solve: {e}"));
+                    return tool_error(format!("browser automation error: {e}"));
                 }
             },
             Err(e) => {
-                return tool_error(format!("ghost launch: {e}"));
+                return tool_error(format!("browser launch failed: {e}"));
             }
         }
     }
@@ -476,25 +593,33 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
                 .map(|(_, v)| v.clone())
                 .unwrap_or_default();
+            // Binary content guard: images, video, audio, etc.
+            // Don't pass binary bytes to extract (mojibake).
+            if crate::fetch::guards::is_binary(&o.body, &ct) {
+                let kind = ct.split(';').next().unwrap_or("unknown").trim();
+                return tool_error(format!(
+                    "binary content: {url} returned {kind} ({} bytes) — not text, cannot extract",
+                    o.body.len()
+                ));
+            }
             (o.body.clone(), ct, o.url.clone())
         } else {
-            return tool_error(format!(
-                "blocked: {:?} at {} (status {})",
-                o.verdict, o.url, o.status
-            ));
+            return tool_error(verdict_error(o.verdict, o.status, &o.url));
         }
     } else {
-        return tool_error("fetch: all tiers exhausted");
+        return tool_error("all fetch tiers exhausted — no response received");
     };
 
     let mut ex = match extract::extract(&body, &ct, &final_url, &opts) {
         Ok(e) => e,
-        Err(e) => return tool_error(format!("extract: {e}")),
+        Err(e) => return tool_error(format!("content extraction failed: {e}")),
     };
 
     // RENDER on JS shell: cache first, then ghost.
+    // Only if the HTTP response was actually thin — not if
+    // tier 2 already ran (ghost-dom has real content).
     let mut cache_hit = false;
-    if ex.thin && tier == "auto" {
+    if ex.thin && tier == "auto" && !matches!(tier_used, "ghost-dom" | "1+ghost-solve") {
         let cached = daemon.state.lock().await.render_for(&final_url).cloned();
         if let Some(rc) = cached {
             cache_hit = true;
@@ -508,6 +633,13 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         {
             daemon.state.lock().await.record_render(&final_url, &html);
             if let Ok(e2) = extract::extract(html.as_bytes(), "text/html", &final_url, &opts) {
+                // Login shell detection: if the rendered page is
+                // still thin AND has login forms, it's a login wall.
+                if e2.thin && is_login_shell(&html) {
+                    return tool_error(format!(
+                        "login required: {final_url} requires authentication — the page is behind a login wall"
+                    ));
+                }
                 ex = e2;
                 tier_used = "ghost-render";
             }
