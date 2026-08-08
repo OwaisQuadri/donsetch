@@ -8,7 +8,14 @@
 use serde_json::{Value, json};
 
 /// Protocol versions we speak, newest first.
-pub const PROTOCOL_VERSIONS: &[&str] = &["2026-07-28", "2025-06-18", "2025-03-26", "2024-11-05"];
+pub const PROTOCOL_VERSIONS: &[&str] = &[
+    "2026-07-28",
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+    "2024-10-07",
+];
 
 pub const SERVER_NAME: &str = "donsetch";
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
