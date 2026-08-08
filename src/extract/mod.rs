@@ -12,6 +12,7 @@ pub mod blocks;
 pub mod charset;
 pub mod focus;
 pub mod inline;
+pub mod jsdata;
 pub mod junk;
 pub mod language;
 pub mod metadata;
@@ -369,7 +370,7 @@ pub fn extract(
         blocks::segment(*root, &base, opts, &mut all_blocks);
     }
 
-    downstream(
+    let extracted = downstream(
         &meta,
         all_blocks,
         raw_len,
@@ -380,7 +381,21 @@ pub fn extract(
         url,
         opts,
         max_chars,
-    )
+    )?;
+
+    // JSON-in-script rescue: SPAs (Next.js/React/YouTube) embed
+    // their content as a JS-assigned JSON blob. DonSift sees an
+    // empty shell, but the data is sitting in the HTML. When
+    // DonSift came up thin, mine the embedded JSON — if it's
+    // richer, it wins. This is the tier-1 unlock for the SPA
+    // class of sites.
+    if (extracted.thin || extracted.total_chars < 600)
+        && let Some(js) = jsdata::extract(&html_text, url, opts)
+        && js.total_chars > extracted.total_chars
+    {
+        return Ok(js);
+    }
+    Ok(extracted)
 }
 
 /// Honest stub for PDFs that could not be parsed.

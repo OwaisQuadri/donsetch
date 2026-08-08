@@ -34,11 +34,12 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
     out.push_str(url);
     out.push('\n');
     // Description as a one-line summary — agents use it to
-    // decide relevance before reading the body.
-    if let Some(d) = &meta.description
-        && d.len() < 300
-    {
-        out.push_str(&format!("> {d}\n"));
+    // decide relevance before reading the body. Always surface it
+    // (capped): for JS-rendered SPAs the meta description is often
+    // the only real content in the initial HTML.
+    if let Some(d) = &meta.description {
+        let trimmed: String = d.chars().take(2000).collect();
+        out.push_str(&format!("> {}\n", trimmed));
     }
     out.push('\n');
 
