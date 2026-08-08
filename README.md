@@ -2,7 +2,7 @@
 
 # 🌐 DonSeTch
 
-**Give your AI agent the web. Built from scratch in Rust. No keys, no accounts.**
+**Give your AI agent the web. Built from scratch in Rust. No keys, no accounts. Hound replacement**
 
 Fetch · search · crawl · bypass bot walls · read PDFs (even scanned) · semantic reranking
 One MCP server · Chrome's own TLS library · headless browser escalation · zero Python
@@ -15,7 +15,7 @@ One MCP server · Chrome's own TLS library · headless browser escalation · zer
 
 > ### ⚠️ BETA — DO NOT USE IN PRODUCTION
 > DonSeTch is in active development. Key systems are being built, tested, and hardened.
-> Things may break, APIs may change, features may be incomplete.
+> Things may break, APIs may change, features may be incomplete, very fragile.
 > **Star the repo and check back.** The release you want is coming.
 
 </div>
