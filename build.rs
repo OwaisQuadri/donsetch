@@ -126,6 +126,43 @@ fn main() {
     // always re-runs this build script and triggers the download.
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/pdfium/lib");
+
+    // ── Compile-time metadata for `donsetch -v` ────────────────
+    // Captured here so the binary self-reports its build identity.
+
+    // Git short hash (best-effort — may not be a git repo).
+    if let Ok(out) = Command::new("git").args(["rev-parse", "--short", "HEAD"]).output() {
+        if let Ok(s) = String::from_utf8(out.stdout) {
+            println!("cargo:rustc-env=DONSHEET_GIT_HASH={}", s.trim());
+        } else {
+            println!("cargo:rustc-env=DONSHEET_GIT_HASH=unknown");
+        }
+    } else {
+        println!("cargo:rustc-env=DONSHEET_GIT_HASH=unknown");
+    }
+
+    // PDFium variant string.
+    let pdfium_tag = if is_windows { PDFIUM_SHARED_TAG } else { PDFIUM_STATIC_TAG };
+    let pdfium_kind = if is_windows { "dll" } else { "static" };
+    println!("cargo:rustc-env=DONSHEET_PDFIUM={pdfium_kind}, {pdfium_tag}");
+
+    // Target triple.
+    let triple = match (os.as_str(), arch.as_str()) {
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
+        ("windows", "aarch64") => "aarch64-pc-windows-msvc",
+        _ => "unknown",
+    };
+    println!("cargo:rustc-env=DONSHEET_TARGET={triple}");
+
+    // Enabled feature flags.
+    let mut feats = Vec::new();
+    if env::var_os("CARGO_FEATURE_OCR").is_some() { feats.push("ocr"); }
+    if env::var_os("CARGO_FEATURE_RERANK").is_some() { feats.push("rerank"); }
+    println!("cargo:rustc-env=DONSHEET_FEATURES={}", feats.join(", "));
 }
 
 fn target_pair(os: &str, arch: &str) -> &'static str {

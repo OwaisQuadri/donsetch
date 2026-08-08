@@ -1,4 +1,5 @@
 mod crawl;
+mod cli;
 mod detect;
 mod error;
 mod extract;
@@ -497,6 +498,15 @@ async fn main() {
                 }
             }
         }
+        "-v" | "--version" => {
+            cli::version::run();
+        }
+        "-u" | "--update" => {
+            cli::update::run().await;
+        }
+        "--doctor" => {
+            cli::doctor::run().await;
+        }
         "mcp" => {
             if let Err(e) = mcp::server::run().await {
                 eprintln!("mcp daemon: {e}");
@@ -671,8 +681,13 @@ async fn main() {
         }
         _ => {
             eprintln!(
-                "donsetch — commands: fetch <url> | extract <url> [--focus q] [--max n] [--offset n] [--selector css] [--links] [--media] | fingerprint [url] | resume-test <url> | ghost <solve|render|shot> <url>"
+                "donsetch — commands: fetch <url> | extract <url> [--focus q] [--max n] [--offset n] [--selector css] [--links] [--media] | search <query> [--max n] | crawl <url> [--focus q] [--mode map|content|full] | fingerprint [url] | resume-test <url> | ghost <solve|render|shot> <url>"
             );
+            eprintln!();
+            eprintln!("  -v, --version    Show version and build info");
+            eprintln!("  -u, --update     Self-update from GitHub Releases");
+            eprintln!("      --doctor     Health check with auto-fix");
+            eprintln!("      mcp          Start MCP server (JSON-RPC on stdio)");
         }
     }
 }

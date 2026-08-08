@@ -59,7 +59,7 @@ pub fn profile_dir() -> PathBuf {
 /// Locate a Chrome-family binary. Env override first, then
 /// platform-specific known paths, then PATH search. No `which`
 /// subprocess — works on Linux, macOS, and Windows.
-fn chrome_binary() -> Result<String, FetchError> {
+pub fn chrome_binary() -> Result<String, FetchError> {
     if let Some(p) = std::env::var_os("DONGHOST_CHROME") {
         return Ok(p.to_string_lossy().into_owned());
     }
