@@ -110,6 +110,16 @@ fn classify_wall(
         return Verdict::ContentOk;
     }
 
+    // Google: sorry/consent interstitials. "unusual traffic"
+    // + recaptcha is the sorry page; /sorry/ + recaptcha is
+    // its form target. Both are challenge pages, not content —
+    // without this, a CAPTCHA page passes as ContentOk.
+    if (text.contains("unusual traffic") && text.contains("recaptcha"))
+        || (text.contains("/sorry/") && text.contains("recaptcha"))
+    {
+        return Verdict::Challenge(Vendor::Generic);
+    }
+
     // Cloudflare
     if is_cf || text.contains("cf-chl") || text.contains("cloudflare") {
         if text.contains("attention required") {

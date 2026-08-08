@@ -483,7 +483,6 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
 
     // === Fetch (tier 1, unless skipped) ===
     let mut out: Option<crate::fetch::client::FetchOutcome> = None;
-    let mut rendered_html: Option<Vec<u8>> = None;
 
     if !skip_tier1 {
         out = Some(match daemon.fetcher.fetch(&url).await {
@@ -520,263 +519,336 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         }
     }
 
-    // === SOLVE on wall ===
-    // Only genuine bot-wall CHALLENGES trigger ghost solve.
-    // Blocked (403/429/503 without challenge markers) is a
-    // hard block or server error — ghost solve won't help.
-    // 404/AuthWall/Paywall are legitimate responses.
-    let walled = out
+    // === Verdict gate: everything except ContentOk/Challenge ===
+    // is a terminal, legitimate response — clean error, no ghost.
+    // Challenge on an explicit tier=1 request is also terminal.
+    if let Some(o) = &out {
+        match o.verdict {
+            Verdict::ContentOk => {}
+            Verdict::Challenge(_) if tier != "1" => {}
+            v => return tool_error(verdict_error(v, o.status, &o.url)),
+        }
+    }
+
+    // === Tier-1 extraction (when we have a body) ===
+    let mut final_ex: Option<extract::Extracted> = None;
+    let mut final_tier: &str = tier_used;
+    let mut final_status: u16 = out.as_ref().map(|o| o.status).unwrap_or(0);
+    let mut final_url: String = url.clone();
+    let final_verdict: String = out
+        .as_ref()
+        .map(|o| format!("{:?}", o.verdict))
+        .unwrap_or_else(|| "ContentOk".to_string());
+
+    if let Some(o) = &out
+        && matches!(o.verdict, Verdict::ContentOk)
+    {
+        let ct = o
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        // Binary content guard: images, video, audio, etc.
+        // Don't pass binary bytes to extract (mojibake).
+        if crate::fetch::guards::is_binary(&o.body, &ct) {
+            let kind = ct.split(';').next().unwrap_or("unknown").trim();
+            return tool_error(format!(
+                "binary content: {url} returned {kind} ({} bytes) — not text, cannot extract",
+                o.body.len()
+            ));
+        }
+        match extract::extract(&o.body, &ct, &o.url, &opts) {
+            Ok(e) => {
+                final_url = o.url.clone();
+                final_ex = Some(e);
+            }
+            Err(e) => return tool_error(format!("content extraction failed: {e}")),
+        }
+    }
+
+    let ex_thin = final_ex.as_ref().map(|e| e.thin).unwrap_or(false);
+    let challenge = out
         .as_ref()
         .map(|o| matches!(o.verdict, Verdict::Challenge(_)))
-        .unwrap_or(true);
-    if walled && tier != "1" {
-        match daemon.ghost_mgr.acquire(&daemon.profile).await {
-            Ok(mut g) => match ops::solve(&mut g, &url, std::time::Duration::from_secs(30)).await {
-                Ok(ops::SolveOutcome::Solved(r)) => {
-                    daemon.fetcher.import_cookies(&r.cookies).await;
-                    daemon
-                        .state
-                        .lock()
-                        .await
-                        .record_solved(&host, &r.cookies, r.vendor.as_deref());
-                    match daemon.fetcher.fetch(&url).await {
-                        Ok(retry) if matches!(retry.verdict, Verdict::ContentOk) => {
-                            out = Some(retry);
-                            tier_used = "1+ghost-solve";
-                        }
-                        Ok(retry) if matches!(retry.verdict, Verdict::Challenge(_)) => {
-                            // Challenge didn't clear with cookies,
-                            // but ghost DOM may have real content.
-                            rendered_html = Some(r.html.into_bytes());
-                            out = Some(retry);
-                            tier_used = "ghost-dom";
-                        }
-                        Ok(retry) => {
-                            // Blocked / 404 / AuthWall / Paywall —
-                            // ghost DOM is an error page, not content.
-                            return tool_error(verdict_error(
-                                retry.verdict,
-                                retry.status,
-                                &retry.url,
-                            ));
-                        }
-                        Err(e) => {
-                            return tool_error(friendly_fetch_error(&e));
-                        }
+        .unwrap_or(false);
+
+    // Warm cookies that only buy a shell are stale cookies:
+    // kill the warm route and let a ghost success re-teach it.
+    let shell_warm = is_warm && ex_thin;
+    if shell_warm {
+        daemon.state.lock().await.record_warm_stale(&host);
+    }
+
+    // === Tier 2 via ghost (unified) ===
+    // Triggers: explicit tier 2, profile skip-to-solve, challenge
+    // wall, or tier 1 produced only a JS shell on auto tier.
+    let need_ghost = (challenge && tier != "1") || skip_tier1 || (ex_thin && tier == "auto");
+
+    if need_ghost {
+        // Render-cache shortcut: a previously recovered DOM.
+        // Verified non-thin before serving — the cache used to
+        // store shells and re-serve them forever.
+        if ex_thin
+            && tier == "auto"
+            && let Some(rc) = daemon.state.lock().await.render_for(&final_url).cloned()
+            && let Ok(e2) = extract::extract(rc.html.as_bytes(), "text/html", &final_url, &opts)
+            && !e2.thin
+        {
+            let mut res = finish_result(
+                &e2,
+                "render-cache",
+                final_status,
+                &final_verdict,
+                &final_url,
+            );
+            res["_meta"] = json!({ "ttlMs": 300_000, "cacheScope": "session" });
+            return res;
+        }
+
+        match ghost_escalate(daemon, &url, &host, &opts, challenge || shell_warm, shot).await {
+            Ok((e, tier2, status, furl)) => {
+                final_ex = Some(e);
+                final_tier = tier2;
+                final_status = status;
+                final_url = furl;
+            }
+            Err(msg) => {
+                // Last resort: reddit's SSR mirror (old.reddit.com)
+                // — one plain tier-1 request, no ghost needed.
+                if tier != "1"
+                    && let Some(mirror) = reddit_mirror(&url)
+                    && let Ok(o2) = daemon.fetcher.fetch(&mirror).await
+                    && matches!(o2.verdict, Verdict::ContentOk)
+                {
+                    let ct = o2
+                        .headers
+                        .iter()
+                        .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_default();
+                    if !crate::fetch::guards::is_binary(&o2.body, &ct)
+                        && let Ok(e2) = extract::extract(&o2.body, &ct, &o2.url, &opts)
+                        && !e2.thin
+                    {
+                        return finish_result(
+                            &e2,
+                            "old.reddit-fallback",
+                            o2.status,
+                            "ContentOk",
+                            &o2.url,
+                        );
                     }
                 }
-                Ok(ops::SolveOutcome::CaptchaWalled) => {
-                    if let Some(p) = shot {
-                        let _ = g.screenshot(p).await;
-                    }
-                    let v = out.as_ref().map(|o| o.verdict).unwrap_or(Verdict::Blocked);
-                    return tool_error(format!(
-                        "interactive captcha required at {url} — no automated solving service by design (verdict: {v:?})"
-                    ));
-                }
-                Ok(ops::SolveOutcome::TimedOut) => {
-                    // Ghost couldn't clear the challenge. Fall back
-                    // to the original tier 1 response for a clean
-                    // status verdict instead of a raw timeout error.
-                    if let Some(o) = &out {
-                        return tool_error(verdict_error(o.verdict, o.status, &o.url));
-                    }
-                    // Tier 1 was skipped (SkipToSolve) — try it
-                    // now as last resort for a clean status verdict.
-                    match daemon.fetcher.fetch(&url).await {
-                        Ok(o) => return tool_error(verdict_error(o.verdict, o.status, &o.url)),
-                        Err(fe) => return tool_error(friendly_fetch_error(&fe)),
-                    }
-                }
-                Err(_e) => {
-                    // Ghost navigation/browser failure. Fall back
-                    // to the original tier 1 response for a clean
-                    // status verdict instead of a raw ghost error.
-                    if let Some(o) = &out {
-                        return tool_error(verdict_error(o.verdict, o.status, &o.url));
-                    }
-                    // Tier 1 was skipped (SkipToSolve) — try it
-                    // now as last resort for a clean status verdict.
-                    match daemon.fetcher.fetch(&url).await {
-                        Ok(o) => return tool_error(verdict_error(o.verdict, o.status, &o.url)),
-                        Err(fe) => return tool_error(friendly_fetch_error(&fe)),
-                    }
-                }
-            },
-            Err(e) => {
-                // Browser launch failed (no Chrome, wrong arch, etc.).
-                // Fall back to the original tier 1 response for a
-                // clean status verdict instead of a raw launch error.
-                if let Some(o) = &out {
-                    return tool_error(verdict_error(o.verdict, o.status, &o.url));
-                }
-                // Tier 1 was skipped (SkipToSolve) — try it
-                // now as last resort for a clean status verdict.
-                match daemon.fetcher.fetch(&url).await {
-                    Ok(o) => return tool_error(verdict_error(o.verdict, o.status, &o.url)),
-                    Err(fe) => return tool_error(format!("browser launch failed: {e}; {fe}")),
-                }
+                return tool_error(msg);
             }
         }
     }
 
-    // Body source: tier-1 bytes or ghost DOM.
-    let (body, ct, final_url) = if let Some(h) = &rendered_html {
-        let u = out
-            .as_ref()
-            .map(|o| o.url.clone())
-            .unwrap_or_else(|| url.clone());
-        (h.clone(), "text/html".to_string(), u)
-    } else if let Some(o) = &out {
-        if matches!(o.verdict, Verdict::ContentOk) {
-            let ct = o
-                .headers
-                .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
-                .map(|(_, v)| v.clone())
-                .unwrap_or_default();
-            // Binary content guard: images, video, audio, etc.
-            // Don't pass binary bytes to extract (mojibake).
-            if crate::fetch::guards::is_binary(&o.body, &ct) {
-                let kind = ct.split(';').next().unwrap_or("unknown").trim();
-                return tool_error(format!(
-                    "binary content: {url} returned {kind} ({} bytes) — not text, cannot extract",
-                    o.body.len()
-                ));
-            }
-            (o.body.clone(), ct, o.url.clone())
-        } else {
-            return tool_error(verdict_error(o.verdict, o.status, &o.url));
-        }
-    } else {
+    let Some(ex) = final_ex else {
         return tool_error("all fetch tiers exhausted — no response received");
     };
 
-    let mut ex = match extract::extract(&body, &ct, &final_url, &opts) {
-        Ok(e) => e,
-        Err(e) => return tool_error(format!("content extraction failed: {e}")),
+    finish_result(&ex, final_tier, final_status, &final_verdict, &final_url)
+}
+
+/// Unified tier-2: ghost render + cookie harvest + tier-1 retry,
+/// then pick the candidate with the best content yield. Ok ONLY
+/// when a candidate extracts as real content — a shell is a
+/// failure, never a success. This is the loop the design always
+/// promised: escalate, render, hand cookies back to tier 1.
+async fn ghost_escalate(
+    daemon: &Arc<Daemon>,
+    url: &str,
+    host: &str,
+    opts: &ExtractOptions,
+    learn: bool,
+    shot: Option<&str>,
+) -> Result<(extract::Extracted, &'static str, u16, String), String> {
+    let mut g = daemon
+        .ghost_mgr
+        .acquire(&daemon.profile)
+        .await
+        .map_err(|e| format!("browser launch failed: {e}"))?;
+    let page = ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(40))
+        .await
+        .map_err(|e| format!("browser automation error: {e}"))?;
+    if std::env::var_os("DONGHOST_DEBUG").is_some() {
+        let safe: String = host
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        let p = std::env::temp_dir().join(format!("donsetch-dom-{safe}.html"));
+        let _ = std::fs::write(&p, &page.html);
+        eprintln!(
+            "[ghost_escalate] dom={}B dumped to {}",
+            page.html.len(),
+            p.display()
+        );
+    }
+    if page.captcha {
+        if let Some(p) = shot {
+            let _ = g.screenshot(p).await;
+        }
+        return Err(format!(
+            "interactive captcha required at {url} — no automated solving service by design"
+        ));
+    }
+    if !page.cookies.is_empty() {
+        daemon.fetcher.import_cookies(&page.cookies).await;
+    }
+    // Retry tier 1 with fresh cookies — the cheap path back to
+    // normal HTTP when the gate was cookie-driven.
+    let retry = if !page.cookies.is_empty() {
+        daemon.fetcher.fetch(url).await.ok()
+    } else {
+        None
     };
 
-    // RENDER on JS shell: cache first, then ghost.
-    // Only if the HTTP response was actually thin — not if
-    // tier 2 already ran (ghost-dom has real content).
-    let mut cache_hit = false;
-    if ex.thin && tier == "auto" && !matches!(tier_used, "ghost-dom" | "1+ghost-solve") {
-        let cached = daemon.state.lock().await.render_for(&final_url).cloned();
-        if let Some(rc) = cached {
-            cache_hit = true;
-            if let Ok(e2) = extract::extract(rc.html.as_bytes(), "text/html", &final_url, &opts) {
-                ex = e2;
-                tier_used = "render-cache";
-            }
-        } else if let Ok(mut g) = daemon.ghost_mgr.acquire(&daemon.profile).await
-            && let Ok(html) =
-                ops::render(&mut g, &final_url, std::time::Duration::from_secs(30)).await
+    // Candidates: retry bytes (cheap path) and the ghost's own
+    // rendered DOM. Non-thin always beats thin; within a class,
+    // bigger yield wins. The old code always preferred the retry
+    // and discarded the browser's work — the core tier-2 bug.
+    let mut best: Option<(bool, extract::Extracted, &'static str, u16, String)> = None;
+
+    if let Some(r) = &retry
+        && matches!(r.verdict, Verdict::ContentOk)
+    {
+        let ct = r
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        if !crate::fetch::guards::is_binary(&r.body, &ct)
+            && let Ok(e) = extract::extract(&r.body, &ct, &r.url, opts)
         {
-            daemon.state.lock().await.record_render(&final_url, &html);
-            if let Ok(e2) = extract::extract(html.as_bytes(), "text/html", &final_url, &opts) {
-                // Login shell detection: if the rendered page is
-                // still thin AND has login forms, it's a login wall.
-                if e2.thin && is_login_shell(&html) {
-                    return tool_error(format!(
-                        "login required: {final_url} requires authentication — the page is behind a login wall"
-                    ));
+            let thin = e.thin;
+            let better = match &best {
+                None => true,
+                Some((bt, be, ..)) => {
+                    (!thin && *bt) || (thin == *bt && e.total_chars > be.total_chars)
                 }
-                ex = e2;
-                tier_used = "ghost-render";
+            };
+            if better {
+                best = Some((thin, e, "1+ghost-solve", r.status, r.url.clone()));
+            }
+        }
+    }
+    if let Ok(e2) = extract::extract(page.html.as_bytes(), "text/html", url, opts) {
+        let thin = e2.thin;
+        let better = match &best {
+            None => true,
+            Some((bt, be, ..)) => {
+                (!thin && *bt) || (thin == *bt && e2.total_chars > be.total_chars)
+            }
+        };
+        if better {
+            best = Some((
+                thin,
+                e2,
+                "ghost-dom",
+                retry.as_ref().map(|r| r.status).unwrap_or(200),
+                url.to_string(),
+            ));
+        }
+    }
+
+    // Links fallback: listing/feed pages (marketplaces, SERPs,
+    // thread indexes) are link-dense by nature — the prose-tuned
+    // pipeline kills them. Re-extract with links kept as a last
+    // candidate before conceding.
+    if best.as_ref().map(|(thin, ..)| *thin).unwrap_or(true) {
+        let mut lopts = opts.clone();
+        lopts.include_links = true;
+        if let Ok(e3) = extract::extract(page.html.as_bytes(), "text/html", url, &lopts) {
+            let thin = e3.thin;
+            let better = match &best {
+                None => true,
+                Some((bt, be, ..)) => {
+                    (!thin && *bt) || (thin == *bt && e3.total_chars > be.total_chars)
+                }
+            };
+            if better {
+                best = Some((
+                    thin,
+                    e3,
+                    "ghost-dom(links)",
+                    retry.as_ref().map(|r| r.status).unwrap_or(200),
+                    url.to_string(),
+                ));
             }
         }
     }
 
-    // Escalation: render → still thin → solve.
-    // Solve imports cookies and retries tier 1, getting
-    // server-rendered content for JS-heavy sites (Reddit,
-    // Twitter) where render only captures a shell.
-    if ex.thin
-        && tier != "1"
-        && matches!(tier_used, "ghost-render" | "render-cache")
-        && let Ok(mut g) = daemon.ghost_mgr.acquire(&daemon.profile).await
-        && let Ok(ops::SolveOutcome::Solved(r)) =
-            ops::solve(&mut g, &url, std::time::Duration::from_secs(30)).await
+    if let Some((thin, e, t, s, u)) = best
+        && !thin
     {
-        daemon.fetcher.import_cookies(&r.cookies).await;
-        daemon
-            .state
-            .lock()
-            .await
-            .record_solved(&host, &r.cookies, r.vendor.as_deref());
-        match daemon.fetcher.fetch(&url).await {
-            Ok(retry) if matches!(retry.verdict, Verdict::ContentOk) => {
-                let ct = retry
-                    .headers
-                    .iter()
-                    .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
-                    .map(|(_, v)| v.clone())
-                    .unwrap_or_default();
-                if !crate::fetch::guards::is_binary(&retry.body, &ct)
-                    && let Ok(e2) = extract::extract(&retry.body, &ct, &retry.url, &opts)
-                    && !e2.thin
-                {
-                    out = Some(retry);
-                    ex = e2;
-                    tier_used = "render+solve";
-                }
-            }
-            Ok(retry) => {
-                if let Ok(e2) = extract::extract(r.html.as_bytes(), "text/html", &url, &opts)
-                    && !e2.thin
-                {
-                    out = Some(retry);
-                    ex = e2;
-                    tier_used = "render+solve-dom";
-                }
-            }
-            Err(_) => {}
+        // Learning is gated on CONTENT, matching the oracle —
+        // success is "we got content", not "we got HTTP 200".
+        if learn {
+            daemon
+                .state
+                .lock()
+                .await
+                .record_solved(host, &page.cookies, page.vendor.as_deref());
         }
+        daemon.state.lock().await.record_render(&u, &page.html);
+        return Ok((e, t, s, u));
     }
 
-    // If we already rendered/solved and content is still thin,
-    // fix the SPA note — "tier 2 renders JS" is misleading.
-    if ex.thin
-        && matches!(
-            tier_used,
-            "ghost-render" | "render+solve" | "render+solve-dom" | "render-cache"
-        )
-    {
-        let note = "*[note: large page rendered almost no content — likely JS-rendered (SPA). Content below may be a shell; tier 2 renders JS.]*\n\n";
-        if let Some(stripped) = ex.markdown.strip_prefix(note) {
-            ex.markdown = format!(
-                "*[note: page content is thin even after JS rendering — the site may require authentication, use lazy loading, or block automated access]*\n\n{stripped}"
-            );
-        }
+    // Nothing extractable — check for a login gate before the
+    // honest failure.
+    if is_login_shell(&page.html) {
+        return Err(format!(
+            "login required: {url} requires authentication — the page is behind a login wall"
+        ));
     }
+    Err(format!(
+        "extraction failed: {url} serves a JS shell or gated content — tier 2 rendered the page ({}KB DOM) but no real content was extractable",
+        page.html.len() / 1024
+    ))
+}
 
-    let o = out.as_ref();
-    let meta = json!({
-        "status": o.map(|o| o.status).unwrap_or(0),
-        "tier": tier_used,
-        "verdict": format!("{:?}", o.map(|o| o.verdict).unwrap_or(Verdict::Blocked)),
-        "thin": ex.thin,
-        "content_kind": format!("{:?}", ex.content_kind),
-        "title": ex.title,
-        "byline": ex.byline,
-        "published": ex.published,
-        "site": ex.site,
-        "blocks_shown": ex.blocks_shown,
-        "blocks_total": ex.blocks_total,
-        "total_chars": ex.total_chars,
-        "next_offset": ex.next_offset,
-        "tokens_est": ex.tokens_est,
-        "url": final_url,
-    });
-    let mut result = json!({
+/// www.reddit.com → old.reddit.com mirror. Reddit's SSR legacy
+/// domain serves real content to plain HTTP clients — one cheap
+/// request instead of a doomed SPA render.
+fn reddit_mirror(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    match u.host_str()? {
+        "www.reddit.com" => Some(url.replacen("www.reddit.com", "old.reddit.com", 1)),
+        "reddit.com" => Some(url.replacen("reddit.com", "old.reddit.com", 1)),
+        _ => None,
+    }
+}
+
+fn finish_result(
+    ex: &extract::Extracted,
+    tier: &str,
+    status: u16,
+    verdict: &str,
+    url: &str,
+) -> Value {
+    json!({
         "content": [{ "type": "text", "text": ex.markdown }],
-        "structuredContent": meta,
-    });
-    if cache_hit {
-        result["_meta"] = json!({ "ttlMs": 300_000, "cacheScope": "session" });
-    }
-    result
+        "structuredContent": {
+            "status": status,
+            "tier": tier,
+            "verdict": verdict,
+            "thin": ex.thin,
+            "content_kind": format!("{:?}", ex.content_kind),
+            "title": ex.title,
+            "byline": ex.byline,
+            "published": ex.published,
+            "site": ex.site,
+            "blocks_shown": ex.blocks_shown,
+            "blocks_total": ex.blocks_total,
+            "total_chars": ex.total_chars,
+            "next_offset": ex.next_offset,
+            "tokens_est": ex.tokens_est,
+            "url": url,
+        },
+    })
 }
 
 async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {

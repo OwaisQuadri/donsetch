@@ -23,7 +23,7 @@ mod tests;
 
 use scraper::Html;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ExtractOptions {
     /// BM25 relevance query: keep only blocks matching, with context.
     pub focus: Option<String>,
@@ -505,11 +505,19 @@ fn downstream(
     }
 
     // JS-shell warning: agent must know the content
-    // below is likely incomplete.
-    let thin = thin_flag && full.len() < 800;
+    // below is likely incomplete. On tier=auto the MCP
+    // fetch escalates to the browser itself — this note
+    // only surfaces on an explicit tier=1 request.
+    //
+    // Thinness: content-driven, not raw-size-driven. A big
+    // page with almost no extracted output is thin; so is a
+    // small page whose output has zero content blocks (a
+    // bare shell with only a title). A small page with at
+    // least one real block (example.com) is fine.
+    let thin = full.len() < 800 && (thin_flag || blocks_total == 0);
     if thin {
         full = format!(
-            "*[note: large page rendered almost no content — likely JS-rendered (SPA). Content below may be a shell; tier 2 renders JS.]*\n\n{full}"
+            "*[note: large page rendered almost no content — likely JS-rendered (SPA). Content below may be a shell; use tier=auto to render with a real browser.]*\n\n{full}"
         );
     }
     let (slice, next) = paginate(&full, opts.offset, max_chars);

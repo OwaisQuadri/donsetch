@@ -39,6 +39,22 @@ const CLEARANCE_NAMES: &[&str] = &[
     "reese84",
 ];
 
+/// Cookie-banner / consent-modal dismisser + lazy-load kicker.
+/// Clicks buttons whose labels look like consent actions and
+/// common modal close controls, then scrolls to trigger
+/// deferred content fetches.
+const DISMISS_MODALS_JS: &str = r#"(() => {
+  const labels = /^(accept all|accept|agree|i agree|allow all|allow cookies|got it|ok|okay|continue|reject all|close)$/i;
+  for (const el of document.querySelectorAll('button,a[role="button"],[role="button"],input[type="submit"]')) {
+    const t = (el.innerText || el.value || '').trim();
+    if (t && t.length < 40 && labels.test(t)) { try { el.click(); } catch(e){} }
+  }
+  for (const el of document.querySelectorAll('[aria-label="Close"],[class*="modal" i] [class*="close" i]')) {
+    try { el.click(); } catch(e){}
+  }
+  window.scrollTo(0, document.body.scrollHeight * 0.6);
+})();"#;
+
 /// SOLVE mode: navigate into a wall, wait for the
 /// challenge to clear, harvest everything.
 ///
@@ -176,6 +192,286 @@ pub async fn solve(
         }
     }
     Ok(SolveOutcome::TimedOut)
+}
+
+/// Tier-2 result: the browser's rendered DOM plus everything
+/// harvested from the session.
+pub struct GhostPage {
+    /// Live DOM after content-grade settle.
+    pub html: String,
+    /// Session + clearance cookies with real expiry.
+    pub cookies: Vec<CookieRecord>,
+    /// Challenge vendor seen during the wait (if any).
+    pub vendor: Option<String>,
+    /// Interactive captcha — honest dead end.
+    pub captcha: bool,
+    #[allow(dead_code)]
+    pub took: Duration,
+}
+
+/// Unified tier-2 fetch. Success oracle = CONTENT QUALITY,
+/// not wall-clear:
+///
+/// 1. Challenge page still up → keep waiting (or dead-end on
+///    captcha). Turnstile-style checkboxes clicked once.
+/// 2. Consent interstitial → one click through, keep waiting.
+/// 3. Not challenged → require a SUBSTANTIVE, STABLE DOM
+///    (visible text ≥ 1200 chars, scripts excluded; length
+///    drift < 1% across two polls).
+/// 4. Then capture DOM + cookies.
+///
+/// A cleared-but-empty shell never satisfies this oracle —
+/// that's the flaw that made tier 2 return SPA shells.
+pub async fn ghost_fetch(
+    ghost: &mut Ghost,
+    url: &str,
+    timeout: Duration,
+) -> Result<GhostPage, FetchError> {
+    let start = Instant::now();
+    ghost.navigate(url).await?;
+    let _ = ghost
+        .cdp
+        .call(
+            Some(&ghost.session),
+            "Network.enable",
+            serde_json::json!({}),
+        )
+        .await;
+    let _ = ghost
+        .cdp
+        .call(
+            Some(&ghost.session),
+            "Network.setBlockedURLs",
+            serde_json::json!({ "urls":
+                ["*.woff", "*.woff2", "*.ttf", "*.otf",
+                 "*.mp4", "*.webm", "*.mp3",
+                 "*.png", "*.jpg", "*.jpeg", "*.gif",
+                 "*.webp", "*.svg", "*.ico"] }),
+        )
+        .await;
+
+    let mut clicked_challenge = false;
+    let mut clicked_consent = false;
+    let mut kicked = false;
+    let mut vendor: Option<String> = None;
+    let mut settle_streak = 0u8;
+    let mut prev_len = 0usize;
+    let mut html = String::new();
+
+    while start.elapsed() < timeout {
+        let poll = if start.elapsed() > Duration::from_secs(4) {
+            750
+        } else {
+            300
+        };
+        tokio::time::sleep(Duration::from_millis(poll)).await;
+        html = match ghost.outer_html().await {
+            Ok(h) => h,
+            Err(_) => continue,
+        };
+        // Mid-navigation guard.
+        let cur = ghost.current_url().await.unwrap_or_default();
+        if cur.is_empty() || cur.starts_with("about:") || html.len() < 500 {
+            continue;
+        }
+        let cur_len = html.len();
+        let lower = html.to_lowercase();
+
+        // Interactive captcha: honest dead end.
+        if cur_len < 30_000
+            && (lower.contains("hcaptcha.com")
+                || lower.contains("g-recaptcha")
+                || lower.contains("www.google.com/recaptcha")
+                || lower.contains("captcha-delivery.com/captcha")
+                || lower.contains("px-captcha"))
+        {
+            return Ok(GhostPage {
+                html,
+                cookies: Vec::new(),
+                vendor,
+                captcha: true,
+                took: start.elapsed(),
+            });
+        }
+
+        // Challenge still up → wait it out (click turnstile once).
+        let verdict = walls::detect(200, &[], html.as_bytes());
+        let challenged =
+            cur_len < 30_000 && matches!(verdict, Verdict::Challenge(_) | Verdict::Blocked);
+        if challenged {
+            if vendor.is_none()
+                && let Verdict::Challenge(v) = &verdict
+            {
+                vendor = Some(format!("{v:?}").to_lowercase());
+            }
+            settle_streak = 0;
+            if !clicked_challenge
+                && (lower.contains("challenges.cloudflare.com")
+                    || lower.contains("turnstile")
+                    || lower.contains("verify you are human"))
+            {
+                let _ = ghost.click(480.0, 420.0).await;
+                clicked_challenge = true;
+            }
+            prev_len = cur_len;
+            continue;
+        }
+
+        // Consent interstitial (Google / EU GDPR walls): click
+        // through once. Not a wall detector case — the page is
+        // "ContentOk" but it's the consent form, not content.
+        if !clicked_consent && lower.contains("before you continue") {
+            let _ = ghost.click(560.0, 430.0).await;
+            let _ = ghost
+                .cdp
+                .call(
+                    Some(&ghost.session),
+                    "Runtime.evaluate",
+                    serde_json::json!({"expression": DISMISS_MODALS_JS}),
+                )
+                .await;
+            clicked_consent = true;
+            prev_len = cur_len;
+            continue;
+        }
+
+        // Still hydrating: skeleton placeholders, aria-busy
+        // spinners, modal-hidden body. Not a wall — the SPA just
+        // hasn't loaded its content yet. Kick it once (dismiss
+        // consent modals + scroll to trigger lazy fetches) and
+        // keep waiting; never settle on a skeleton page.
+        let loading = lower.matches("aria-busy=\"true\"").take(3).count() >= 3
+            || lower.matches("skeleton").take(6).count() >= 6
+            || lower.contains("<body aria-hidden=\"true\"");
+        if loading {
+            settle_streak = 0;
+            prev_len = cur_len;
+            if !kicked {
+                kicked = true;
+                let _ = ghost
+                    .cdp
+                    .call(
+                        Some(&ghost.session),
+                        "Runtime.evaluate",
+                        serde_json::json!({"expression": DISMISS_MODALS_JS}),
+                    )
+                    .await;
+            }
+            continue;
+        }
+
+        // Content-quality oracle: substantive AND stable.
+        let visible = visible_text_len(&html);
+        let substantive = cur_len >= 12_000 && visible >= 1200;
+        let stable = prev_len > 0 && cur_len.abs_diff(prev_len) < cur_len / 100 + 64;
+        if substantive && stable {
+            settle_streak += 1;
+            if settle_streak >= 2 {
+                let cookies = ghost.cookies().await.unwrap_or_default();
+                ghost.touch();
+                return Ok(GhostPage {
+                    html,
+                    cookies,
+                    vendor,
+                    captcha: false,
+                    took: start.elapsed(),
+                });
+            }
+        } else {
+            settle_streak = 0;
+        }
+        prev_len = cur_len;
+
+        if std::env::var_os("DONGHOST_DEBUG").is_some() {
+            eprintln!(
+                "[ghost_fetch] t={:.0?} html={}B visible={} challenged=false streak={}",
+                start.elapsed(),
+                cur_len,
+                visible,
+                settle_streak,
+            );
+        }
+    }
+
+    // Timeout: return whatever rendered — partial beats none,
+    // the caller's extraction yield decides success.
+    let cookies = ghost.cookies().await.unwrap_or_default();
+    ghost.touch();
+    Ok(GhostPage {
+        html,
+        cookies,
+        vendor,
+        captcha: false,
+        took: start.elapsed(),
+    })
+}
+
+/// Fast visible-text estimate: strip tags + script/style bodies,
+/// count non-whitespace. No lowercasing, no DOM — byte scan.
+fn visible_text_len(html: &str) -> usize {
+    let b = html.as_bytes();
+    let mut n = 0usize;
+    let mut i = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'<' => {
+                // Skip script/style bodies entirely.
+                if starts_ci(&b[i + 1..], b"script") {
+                    i = find_ci(b, b"</script", i + 7)
+                        .map(|p| p + 9)
+                        .unwrap_or(b.len());
+                } else if starts_ci(&b[i + 1..], b"style") {
+                    i = find_ci(b, b"</style", i + 6)
+                        .map(|p| p + 8)
+                        .unwrap_or(b.len());
+                } else {
+                    while i < b.len() && b[i] != b'>' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            c if !c.is_ascii_whitespace() => {
+                n += 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    n
+}
+
+fn starts_ci(b: &[u8], pat: &[u8]) -> bool {
+    b.len() >= pat.len()
+        && b[..pat.len()]
+            .iter()
+            .zip(pat)
+            .all(|(a, p)| a.to_ascii_lowercase() == *p)
+}
+
+fn find_ci(b: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if from >= b.len() || needle.is_empty() || b.len() < needle.len() {
+        return None;
+    }
+    (from..=b.len() - needle.len()).find(|&p| starts_ci(&b[p..], needle))
+}
+
+#[cfg(test)]
+mod ghost_fetch_tests {
+    use super::*;
+
+    #[test]
+    fn visible_text_strips_scripts_and_tags() {
+        let html = r#"<html><head><script>var x = 123456789;</script><style>.a{color:red}</style></head><body><p>Hello world this is real content that should be counted.</p></body></html>"#;
+        let v = visible_text_len(html);
+        assert!(v > 20 && v < 100, "got {v}");
+    }
+
+    #[test]
+    fn visible_text_shell_is_tiny() {
+        let html = r#"<html><head><script src="app.js"></script></head><body><div id="root"></div></body></html>"#;
+        assert!(visible_text_len(html) < 10);
+    }
 }
 
 /// RENDER mode: execute a JS shell, return the live DOM.
