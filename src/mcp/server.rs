@@ -41,11 +41,7 @@ impl Daemon {
             EgressPool::from_env(),
         ));
         searcher.preflight();
-        let proxies = std::env::var("DONSEEK_PROXIES")
-            .unwrap_or_default()
-            .split(',')
-            .filter_map(|s| crate::transport::proxy::Proxy::parse(s.trim()).ok())
-            .collect::<Vec<_>>();
+        let proxies = crate::transport::proxy::load_all();
         let (crawler, _gov) = crawl_real::build(Arc::clone(&fetcher), proxies);
         Ok(Self {
             fetcher,

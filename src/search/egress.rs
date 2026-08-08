@@ -95,12 +95,7 @@ impl EgressPool {
     }
 
     pub fn from_env() -> Self {
-        let raw = std::env::var("DONSEEK_PROXIES").unwrap_or_default();
-        let proxies = raw
-            .split(',')
-            .filter_map(|s| Proxy::parse(s.trim()).ok())
-            .collect();
-        Self::new(proxies)
+        Self::new(crate::transport::proxy::load_all())
     }
 
     /// All configured proxies (for preflight probing).

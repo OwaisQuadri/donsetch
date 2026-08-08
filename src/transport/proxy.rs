@@ -9,6 +9,7 @@
 //! as a domain name so the PROXY resolves DNS, not us
 //! (no local DNS leak = stealth-preserving).
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -350,6 +351,108 @@ impl Proxy {
 
         Ok(())
     }
+
+    /// Reconstruct the proxy URL string from parsed fields.
+    /// Handles IPv6 bracketing. Used for config-file round-trip.
+    pub fn to_url(&self) -> String {
+        let scheme = match self.scheme {
+            ProxyScheme::Http => "http",
+            ProxyScheme::Socks5 => "socks5",
+        };
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        if self.user.is_empty() {
+            format!("{scheme}://{host}:{}", self.port)
+        } else {
+            format!(
+                "{scheme}://{}:{}@{host}:{}",
+                self.user, self.pass, self.port
+            )
+        }
+    }
+}
+
+// ── Config file ──────────────────────────────────────────────
+//
+// The proxy config is a plain text file (one URL per line, #
+// comments, blanks ignored) at cache_dir/proxies.txt. The MCP
+// server and search engine read it at startup via `load_all()`,
+// which merges the file with DONSEEK_PROXIES (env overrides file
+// for duplicate host:port).
+
+/// Path to the proxy config file.
+pub fn config_path() -> PathBuf {
+    crate::paths::cache_dir().join("proxies.txt")
+}
+
+/// Load proxies from the config file. Returns empty vec if the
+/// file doesn't exist (not an error — first run).
+pub fn load_config() -> Vec<Proxy> {
+    let path = config_path();
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    parse_lines(&content)
+}
+
+/// Load proxies from `DONSEEK_PROXIES` env var (comma-separated).
+pub fn load_env() -> Vec<Proxy> {
+    let raw = std::env::var("DONSEEK_PROXIES").unwrap_or_default();
+    raw.split(',')
+        .filter_map(|s| Proxy::parse(s.trim()).ok())
+        .collect()
+}
+
+/// Load all proxies: config file first, then env var overrides
+/// duplicates by host:port. This is what the MCP server and
+/// search engine call at startup.
+pub fn load_all() -> Vec<Proxy> {
+    let mut proxies = load_config();
+    for ep in load_env() {
+        if let Some(pos) = proxies.iter().position(|p| p.id() == ep.id()) {
+            proxies[pos] = ep;
+        } else {
+            proxies.push(ep);
+        }
+    }
+    proxies
+}
+
+/// Save proxies to the config file. Atomic write (temp + rename).
+/// Sets 0600 on Unix (credentials present).
+pub fn save_config(proxies: &[Proxy]) -> std::io::Result<()> {
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut content = String::from("# DonSeTch proxy configuration\n");
+    for p in proxies {
+        content.push_str(&p.to_url());
+        content.push('\n');
+    }
+    let tmp = path.with_extension("txt.tmp");
+    std::fs::write(&tmp, &content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Parse proxy URLs from text: one per line, # comments and
+/// blank lines ignored.
+fn parse_lines(content: &str) -> Vec<Proxy> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| Proxy::parse(line).ok())
+        .collect()
 }
 
 fn base64(input: &str) -> String {
@@ -446,5 +549,76 @@ mod tests {
         assert!(Proxy::parse("garbage").is_err());
         assert!(Proxy::parse("u:p@bad").is_err());
         assert!(Proxy::parse("u:p@host:99999").is_err());
+    }
+
+    #[test]
+    fn to_url_roundtrip() {
+        let urls = [
+            "socks5://user:pass@host:1080",
+            "http://u:p@1.2.3.4:8080",
+            "socks5://host:1080",
+            "http://host:8080",
+            "user:pass@host:8080",
+            "host:8080",
+        ];
+        for url in urls {
+            let p = Proxy::parse(url).unwrap();
+            let reconstructed = p.to_url();
+            let p2 = Proxy::parse(&reconstructed).unwrap();
+            assert_eq!(p.scheme, p2.scheme, "scheme mismatch for {url}");
+            assert_eq!(p.host, p2.host, "host mismatch for {url}");
+            assert_eq!(p.port, p2.port, "port mismatch for {url}");
+            assert_eq!(p.user, p2.user, "user mismatch for {url}");
+            assert_eq!(p.pass, p2.pass, "pass mismatch for {url}");
+        }
+    }
+
+    #[test]
+    fn to_url_ipv6_brackets() {
+        let p = Proxy::parse("socks5://u:p@[::1]:1080").unwrap();
+        let url = p.to_url();
+        assert!(
+            url.contains("[::1]"),
+            "IPv6 host should be bracketed: {url}"
+        );
+        let p2 = Proxy::parse(&url).unwrap();
+        assert_eq!(p.host, p2.host);
+        assert_eq!(p.port, p2.port);
+    }
+
+    #[test]
+    fn parse_lines_ignores_comments_and_blanks() {
+        let content = "\
+# This is a comment
+socks5://u:p@host:1080
+
+  # Indented comment
+http://host:8080
+
+# Empty line above
+";
+        let proxies = parse_lines(content);
+        assert_eq!(proxies.len(), 2);
+        assert_eq!(proxies[0].id(), "host:1080");
+        assert_eq!(proxies[1].id(), "host:8080");
+    }
+
+    #[test]
+    fn parse_lines_skips_invalid() {
+        let content = "\
+socks5://valid:1080
+garbage_line
+u:p@also_valid:8080
+:99999
+";
+        let proxies = parse_lines(content);
+        assert_eq!(proxies.len(), 2);
+    }
+
+    #[test]
+    fn parse_lines_empty() {
+        assert!(parse_lines("").is_empty());
+        assert!(parse_lines("# only comments\n# more comments").is_empty());
+        assert!(parse_lines("\n\n\n").is_empty());
     }
 }

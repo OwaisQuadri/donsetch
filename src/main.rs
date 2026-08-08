@@ -441,11 +441,7 @@ async fn main() {
             }
             let profile = BrowserProfile::host_default();
             let fetcher = std::sync::Arc::new(Fetcher::new(profile).expect("fetcher"));
-            let proxies = std::env::var("DONSEEK_PROXIES")
-                .unwrap_or_default()
-                .split(',')
-                .filter_map(|s| transport::proxy::Proxy::parse(s.trim()).ok())
-                .collect::<Vec<_>>();
+            let proxies = transport::proxy::load_all();
             let (crawler, _gov) = crawl::real::build(fetcher, proxies);
             match crawler.crawl(&url, opts, resume.as_deref()).await {
                 Ok(r) => {
@@ -509,6 +505,9 @@ async fn main() {
         }
         "--rollback" => {
             cli::rollback::run();
+        }
+        "proxy" => {
+            cli::proxy::run(&args).await;
         }
         "mcp" => {
             if let Err(e) = mcp::server::run().await {
