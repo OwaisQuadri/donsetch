@@ -82,6 +82,20 @@ impl H2Conn {
         })
     }
 
+    /// Graceful close: send GOAWAY with NO_ERROR, like Chrome.
+    #[allow(dead_code)] // called when pool evicts a connection (future use)
+    pub async fn close(mut self) {
+        let last = if self.next_stream > 1 {
+            self.next_stream - 2
+        } else {
+            0
+        };
+        let mut payload = [0u8; 8];
+        payload[0..4].copy_from_slice(&last.to_be_bytes());
+        let _ = write_frame(&mut self.stream, GOAWAY, 0, 0, &payload).await;
+        let _ = self.stream.flush().await;
+    }
+
     /// One GET request → full response. Stream-per-request for now (pool later).
     pub async fn get(
         &mut self,

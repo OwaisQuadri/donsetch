@@ -102,11 +102,39 @@ pub fn huffman_decode(data: &[u8]) -> Result<Vec<u8>, FetchError> {
 
 // ---------- strings ----------
 
+/// Huffman-encode a byte string per RFC 7541 Appendix B.
+/// Returns the encoded bytes (may be longer than input for short strings).
+fn huffman_encode(input: &[u8]) -> Vec<u8> {
+    let mut bit_buf: u64 = 0;
+    let mut bit_count: u32 = 0;
+    let mut out = Vec::with_capacity(input.len());
+    for &byte in input {
+        let (code, bits) = HUFFMAN[byte as usize];
+        bit_buf = (bit_buf << bits) | code as u64;
+        bit_count += bits as u32;
+        while bit_count >= 8 {
+            bit_count -= 8;
+            out.push((bit_buf >> bit_count) as u8);
+        }
+    }
+    // Pad remaining bits with EOS prefix (all 1-bits) to byte boundary.
+    if bit_count > 0 {
+        let pad = 8 - bit_count;
+        out.push(((bit_buf << pad) | ((1u64 << pad) - 1)) as u8);
+    }
+    out
+}
+
 fn encode_string(out: &mut Vec<u8>, s: &[u8]) {
-    // Raw literal (H=0). Chrome huffman-encodes when shorter; byte-pattern only,
-    // not part of the Akamai fingerprint. Refinement candidate later.
-    encode_int(out, s.len() as u64, 7, 0);
-    out.extend_from_slice(s);
+    // Chrome Huffman-encodes when shorter; raw otherwise.
+    let huff = huffman_encode(s);
+    if huff.len() < s.len() {
+        encode_int(out, huff.len() as u64, 7, 0x80); // H=1
+        out.extend_from_slice(&huff);
+    } else {
+        encode_int(out, s.len() as u64, 7, 0); // H=0
+        out.extend_from_slice(s);
+    }
 }
 
 fn decode_string(buf: &[u8], pos: &mut usize) -> Result<Vec<u8>, FetchError> {
@@ -187,6 +215,8 @@ impl Encoder {
 
     /// Encode a header list in order. Indexed for exact static matches,
     /// literal-with-incremental-indexing otherwise (Chrome's strategy).
+    /// Sensitive headers (cookie, authorization) use never-indexed to
+    /// match Chrome's HPACK encoder — keeps the dynamic table identical.
     pub fn encode(&mut self, headers: &[(String, String)]) -> Vec<u8> {
         let mut out = Vec::new();
         for (name, value) in headers {
@@ -199,18 +229,34 @@ impl Encoder {
                 encode_int(&mut out, (i + 1) as u64, 7, 0x80);
                 continue;
             }
-            // Name-only static match → literal inc-idx with name ref.
+            // Chrome marks sensitive headers as never-indexed to prevent
+            // them from entering the dynamic table.
+            let sensitive = matches!(name_l.as_str(), "cookie" | "authorization" | "proxy-authorization");
             let name_idx = STATIC_TABLE.iter().position(|(n, _)| *n == name_l);
-            match name_idx {
-                Some(i) => encode_int(&mut out, (i + 1) as u64, 6, 0x40),
-                None => {
-                    out.push(0x40);
-                    encode_string(&mut out, name_l.as_bytes());
+            if sensitive {
+                // Never indexed (0x10 prefix, 4-bit integer).
+                match name_idx {
+                    Some(i) => encode_int(&mut out, (i + 1) as u64, 4, 0x10),
+                    None => {
+                        out.push(0x10);
+                        encode_string(&mut out, name_l.as_bytes());
+                    }
                 }
+                encode_string(&mut out, value.as_bytes());
+                // Do NOT insert into dynamic table.
+            } else {
+                // Literal with incremental indexing (0x40 prefix, 6-bit integer).
+                match name_idx {
+                    Some(i) => encode_int(&mut out, (i + 1) as u64, 6, 0x40),
+                    None => {
+                        out.push(0x40);
+                        encode_string(&mut out, name_l.as_bytes());
+                    }
+                }
+                encode_string(&mut out, value.as_bytes());
+                self.dyn_table
+                    .insert(name_l.into_bytes(), value.clone().into_bytes());
             }
-            encode_string(&mut out, value.as_bytes());
-            self.dyn_table
-                .insert(name_l.into_bytes(), value.clone().into_bytes());
         }
         out
     }
