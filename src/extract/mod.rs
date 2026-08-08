@@ -15,6 +15,7 @@ pub mod inline;
 pub mod junk;
 pub mod language;
 pub mod metadata;
+pub mod reddit;
 pub mod render;
 pub mod score;
 
@@ -328,6 +329,14 @@ pub fn extract(
     // --- HTML upstream ---
     let html_text = charset::decode(body, &ct);
     let raw_len = body.len();
+
+    // Reddit dedicated extractor: bypasses DonSift for
+    // old.reddit.com, produces compact structured output.
+    // Returns None for non-reddit or unrecognized pages.
+    if let Some(extracted) = reddit::extract(&html_text, url, opts) {
+        return Ok(extracted);
+    }
+
     let doc = Html::parse_document(&html_text);
     let base = metadata::base_url(&doc).unwrap_or_else(|| url.to_string());
     let meta = metadata::metadata(&doc);
