@@ -272,7 +272,7 @@ fn check_pdfium() -> CheckResult {
     #[cfg(windows)]
     {
         let exe = std::env::current_exe().unwrap_or_default();
-        let dll = exe.parent().unwrap_or_default().join("pdfium.dll");
+        let dll = exe.parent().unwrap_or(Path::new("")).join("pdfium.dll");
         if dll.exists() {
             CheckResult::Pass(
                 option_env!("DONSHEET_PDFIUM")
