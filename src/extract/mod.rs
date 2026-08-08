@@ -290,6 +290,7 @@ pub fn extract(
                     parsed.blocks,
                     body.len(),
                     false,
+                    false,
                     parsed.notes,
                     parsed.lang_info,
                     url,
@@ -336,6 +337,14 @@ pub fn extract(
     // shell (Medium, SPAs) — flag it for tier 2 routing.
     let thin_flag = raw_len > 50_000;
 
+    // Skeleton placeholders in the raw HTML mean the SPA
+    // hasn't hydrated — the server sent a loading skeleton,
+    // not content. Detection: multiple skeleton class
+    // occurrences or aria-busy flags.
+    let lower_html = html_text.to_lowercase();
+    let has_skeletons = lower_html.matches("skeleton").take(6).count() >= 6
+        || lower_html.matches("aria-busy=\"true\"").take(3).count() >= 3;
+
     // Scope: explicit selector or scored main-content detection.
     let roots: Vec<scraper::ElementRef<'_>> = if let Some(sel) = &opts.selector {
         let parsed =
@@ -356,6 +365,7 @@ pub fn extract(
         all_blocks,
         raw_len,
         thin_flag,
+        has_skeletons,
         Vec::new(),
         lang_info,
         url,
@@ -395,6 +405,7 @@ fn downstream(
     mut all_blocks: Vec<blocks::Block>,
     raw_len: usize,
     thin_flag: bool,
+    has_skeletons: bool,
     notes: Vec<String>,
     lang_info: language::LanguageInfo,
     url: &str,
@@ -509,12 +520,17 @@ fn downstream(
     // fetch escalates to the browser itself — this note
     // only surfaces on an explicit tier=1 request.
     //
-    // Thinness: content-driven, not raw-size-driven. A big
-    // page with almost no extracted output is thin; so is a
-    // small page whose output has zero content blocks (a
-    // bare shell with only a title). A small page with at
-    // least one real block (example.com) is fine.
-    let thin = full.len() < 800 && (thin_flag || blocks_total == 0);
+    // Thinness: a large page (> 50KB) with skeleton
+    // placeholders is an SPA that hasn't hydrated — thin
+    // regardless of extraction size (the extraction gets
+    // boilerplate, not content). Without skeletons, the
+    // original content-driven check applies: < 800 chars
+    // from a large page or a small page with zero blocks.
+    let thin = if thin_flag && has_skeletons {
+        true
+    } else {
+        full.len() < 800 && (thin_flag || blocks_total == 0)
+    };
     if thin {
         full = format!(
             "*[note: large page rendered almost no content — likely JS-rendered (SPA). Content below may be a shell; use tier=auto to render with a real browser.]*\n\n{full}"

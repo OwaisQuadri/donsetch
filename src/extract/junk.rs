@@ -5,7 +5,14 @@ use scraper::ElementRef;
 
 const SKIP_TAGS: &[&str] = &[
     "script", "style", "noscript", "template", "svg", "canvas", "iframe", "object", "embed",
-    "form", "button", "input", "select", "textarea", "option", "nav", "aside", "footer",
+    "button", "input", "select", "textarea", "option", "nav", "aside",
+    "footer",
+    // NOTE: "form" is NOT here. Old.reddit wraps comment bodies
+    // in <form class="usertext"> for the edit feature; skipping
+    // <form> nukes all comment text. The form's interactive
+    // children (input, button, select, textarea) are already
+    // skipped above, so only text content inside forms is
+    // extracted — exactly what we want.
 ];
 
 const SKIP_ROLES: &[&str] = &[

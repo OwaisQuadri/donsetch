@@ -367,7 +367,7 @@ fn friendly_fetch_error(e: &crate::error::FetchError) -> String {
 fn verdict_error(verdict: Verdict, status: u16, url: &str) -> String {
     match verdict {
         Verdict::AuthWall => {
-            format!("login required: {url} needs authentication — the page is behind a login wall")
+            format!("HTTP 401 at {url} — the server requires authentication")
         }
         Verdict::Paywall => format!("paywall: {url} requires payment to view content"),
         Verdict::SoftNotFound => format!("not found: {url} returned HTTP {status}"),
@@ -388,20 +388,6 @@ fn verdict_error(verdict: Verdict, status: u16, url: &str) -> String {
         ),
         Verdict::ContentOk => format!("unexpected error: {url} (status {status})"),
     }
-}
-
-/// Detect login-gated SPA shells: thin content + login markers.
-fn is_login_shell(html: &str) -> bool {
-    let lower = html.to_lowercase();
-    let has_login = lower.contains("sign in")
-        || lower.contains("log in")
-        || lower.contains("login") && (lower.contains("password") || lower.contains("email"));
-    let has_form = lower.contains("<form")
-        && (lower.contains("password")
-            || lower.contains("action=\"/login")
-            || lower.contains("action=\"/auth")
-            || lower.contains("action=\"/account"));
-    has_login && has_form
 }
 
 /// The fetch tool: tier 1 → verdict → ghost solve/render
@@ -580,10 +566,73 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         daemon.state.lock().await.record_warm_stale(&host);
     }
 
+    // Tier-1 links fallback: listing/feed pages over plain
+    // HTTP (Hacker News, indexes) die in the prose pipeline
+    // simply for being link-dense. Try links-keeping
+    // extraction before any ghost work.
+    if final_ex.as_ref().map(|e| e.thin).unwrap_or(false)
+        && !opts.include_links
+        && let Some(o) = &out
+        && matches!(o.verdict, Verdict::ContentOk)
+    {
+        let ct = o
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        let mut lopts = opts.clone();
+        lopts.include_links = true;
+        if let Ok(e3) = extract::extract(&o.body, &ct, &o.url, &lopts)
+            && !e3.thin
+        {
+            final_ex = Some(e3);
+            final_tier = "1(links)";
+        }
+    }
+
+    // Cheap SSR mirror FIRST among escalations (reddit →
+    // old.reddit.com): one plain request, no ghost burn,
+    // no login overlay, genuinely anonymous. The same mirror
+    // remains the last resort after ghost failure.
+    if tier == "auto" {
+        let still_needed =
+            challenge || final_ex.as_ref().map(|e| e.thin).unwrap_or(true) || final_ex.is_none();
+        if still_needed
+            && let Some(mirror) = ssr_mirror(&url)
+            && let Ok(o2) = daemon.fetcher.fetch(&mirror).await
+            && matches!(o2.verdict, Verdict::ContentOk)
+        {
+            let ct = o2
+                .headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            if !crate::fetch::guards::is_binary(&o2.body, &ct) {
+                let mut found = extract::extract(&o2.body, &ct, &o2.url, &opts)
+                    .ok()
+                    .filter(|e| !e.thin);
+                if found.is_none() {
+                    let mut lopts = opts.clone();
+                    lopts.include_links = true;
+                    found = extract::extract(&o2.body, &ct, &o2.url, &lopts)
+                        .ok()
+                        .filter(|e| !e.thin);
+                }
+                if let Some(e2) = found {
+                    return finish_result(&e2, "mirror", o2.status, "ContentOk", &o2.url);
+                }
+            }
+        }
+    }
+
     // === Tier 2 via ghost (unified) ===
     // Triggers: explicit tier 2, profile skip-to-solve, challenge
     // wall, or tier 1 produced only a JS shell on auto tier.
-    let need_ghost = (challenge && tier != "1") || skip_tier1 || (ex_thin && tier == "auto");
+    // (thin recomputed AFTER the tier-1 links fallback.)
+    let still_thin = final_ex.as_ref().map(|e| e.thin).unwrap_or(false);
+    let need_ghost = (challenge && tier != "1") || skip_tier1 || (still_thin && tier == "auto");
 
     if need_ghost {
         // Render-cache shortcut: a previously recovered DOM.
@@ -614,10 +663,10 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 final_url = furl;
             }
             Err(msg) => {
-                // Last resort: reddit's SSR mirror (old.reddit.com)
-                // — one plain tier-1 request, no ghost needed.
+                // Last resort: SSR mirror (e.g. old.reddit.com) —
+                // one plain tier-1 request, no ghost needed.
                 if tier != "1"
-                    && let Some(mirror) = reddit_mirror(&url)
+                    && let Some(mirror) = ssr_mirror(&url)
                     && let Ok(o2) = daemon.fetcher.fetch(&mirror).await
                     && matches!(o2.verdict, Verdict::ContentOk)
                 {
@@ -627,17 +676,26 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                         .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
                         .map(|(_, v)| v.clone())
                         .unwrap_or_default();
-                    if !crate::fetch::guards::is_binary(&o2.body, &ct)
-                        && let Ok(e2) = extract::extract(&o2.body, &ct, &o2.url, &opts)
-                        && !e2.thin
-                    {
-                        return finish_result(
-                            &e2,
-                            "old.reddit-fallback",
-                            o2.status,
-                            "ContentOk",
-                            &o2.url,
-                        );
+                    if !crate::fetch::guards::is_binary(&o2.body, &ct) {
+                        let mut found = extract::extract(&o2.body, &ct, &o2.url, &opts)
+                            .ok()
+                            .filter(|e| !e.thin);
+                        if found.is_none() {
+                            let mut lopts = opts.clone();
+                            lopts.include_links = true;
+                            found = extract::extract(&o2.body, &ct, &o2.url, &lopts)
+                                .ok()
+                                .filter(|e| !e.thin);
+                        }
+                        if let Some(e2) = found {
+                            return finish_result(
+                                &e2,
+                                "mirror(last-resort)",
+                                o2.status,
+                                "ContentOk",
+                                &o2.url,
+                            );
+                        }
                     }
                 }
                 return tool_error(msg);
@@ -797,23 +855,18 @@ async fn ghost_escalate(
         return Ok((e, t, s, u));
     }
 
-    // Nothing extractable — check for a login gate before the
-    // honest failure.
-    if is_login_shell(&page.html) {
-        return Err(format!(
-            "login required: {url} requires authentication — the page is behind a login wall"
-        ));
-    }
     Err(format!(
-        "extraction failed: {url} serves a JS shell or gated content — tier 2 rendered the page ({}KB DOM) but no real content was extractable",
+        "extraction failed: {url} — tier 2 rendered a {}KB DOM but no real content was extractable",
         page.html.len() / 1024
     ))
 }
 
-/// www.reddit.com → old.reddit.com mirror. Reddit's SSR legacy
-/// domain serves real content to plain HTTP clients — one cheap
-/// request instead of a doomed SPA render.
-fn reddit_mirror(url: &str) -> Option<String> {
+/// Known SSR mirrors: a cheap plain-HTTP domain that serves
+/// the same content without JS walls or login overlays.
+/// Currently reddit → old.reddit.com (Reddit's legacy SSR
+/// domain, anonymous, no overlay). Extend the match as more
+/// sites gain known mirrors.
+fn ssr_mirror(url: &str) -> Option<String> {
     let u = url::Url::parse(url).ok()?;
     match u.host_str()? {
         "www.reddit.com" => Some(url.replacen("www.reddit.com", "old.reddit.com", 1)),

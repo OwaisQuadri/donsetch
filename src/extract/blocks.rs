@@ -264,11 +264,13 @@ fn walk<'a>(
                 if crate::extract::junk::skip(child_el) {
                     continue;
                 }
-                if crate::extract::junk::negative(child_el)
-                    && crate::extract::junk::text_size(child_el, 400) < 400
-                {
-                    continue;
-                }
+                // No negative+size gate here: find_main already
+                // chose the scope. Extract everything within it.
+                // The gate in score.rs handles main-content
+                // detection; applying it again here nukes real
+                // content (Reddit/HN comments have class "comment"
+                // which is in NEGATIVE_SUBSTR — the gate was
+                // silently dropping all short comments).
                 walk(child_el, base, opts, headings, out, depth + 1);
             }
         }

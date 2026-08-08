@@ -125,6 +125,15 @@ fn walk<'a>(el: ElementRef<'a>, depth: usize) -> (Stats, Option<(f64, ElementRef
             + stats.paras as f64 * 40.0
             + tag_prior(name)
             + class_prior(el.value());
+        // Body is always a wrapper — it includes nav, sidebar,
+        // footer, and content. Without this penalty, large pages
+        // (old.reddit with comments) score body higher than the
+        // real content container, and extraction drowns in
+        // boilerplate. 0.5× lets real content containers (with
+        // positive classes) always win, while on simple pages
+        // without containers, body still beats individual
+        // paragraphs (its total score is higher than any one).
+        let score = if name == "body" { score * 0.5 } else { score };
         if best.is_none_or(|(b, _)| score > b) {
             best = Some((score, el));
         }
