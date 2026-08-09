@@ -298,9 +298,10 @@ pub fn merge(
 /// consensus (a Bing hit + DDG hit = one opinion, not two).
 fn engine_family(engine: &str) -> &str {
     match engine {
-        "bing" | "ddg" | "ddg_lite" | "yahoo" => "bing",
+        "bing" | "ddg" | "ddg_lite" | "ddg_html" | "yahoo" => "bing",
         "brave" => "brave",
         "mojeek" => "mojeek",
+        "google" => "google",
         other => other, // verticals are their own family
     }
 }

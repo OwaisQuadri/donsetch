@@ -24,6 +24,7 @@ use crate::fetch::client::Fetcher;
 use egress::EgressPool;
 use intent::Intent;
 use rank::Merged;
+use scraper::Selector;
 
 const ENGINE_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -312,27 +313,25 @@ impl Searcher {
             }
         }
 
-        // The premium-lane cap only exists when proxies
-        // exist to be workhorses. A zero-config install has
-        // ONE lane — direct serves every engine, paced
-        // strictly (the governor's jitter does that).
-        let cap_direct = self.pool.has_proxies();
-        let mut direct_used = false;
+        // ── Egress assignment ──
+        //
+        // PROXY_AVERSE engines (brave, ddg) prefer the direct
+        // lane because proxy IPs get CAPTCHA'd/429'd. Multiple
+        // proxy-averse engines can share direct (with pacing).
+        // Non-averse engines spread across proxies.
+        //
+        // We only exclude proxy egresses from reuse — direct
+        // is shared, not exclusive.
+        let has_proxies = self.pool.has_proxies();
         for (engine, q) in assignments {
-            let Some(eg) = self
-                .pool
-                .pick(&engine, &used_egresses, !direct_used || !cap_direct)
+            let Some(eg) = self.pool.pick(&engine, &used_egresses, true)
             else {
                 break;
             };
-            if eg.proxy.is_none() {
-                direct_used = true;
-            }
-            // In no-proxy mode every engine shares the one
-            // lane — exclusion by egress id would bench
-            // engines 2..N, so only exclude when proxies
-            // give lanes their own identity.
-            if cap_direct {
+            // Exclude proxy egresses (spread across proxies)
+            // but NOT direct (multiple PROXY_AVERSE engines
+            // share the direct lane with pacing).
+            if has_proxies && eg.proxy.is_some() {
                 used_egresses.push(eg.id.clone());
             }
             futures.push(Box::pin(engine_task(
@@ -404,17 +403,12 @@ impl Searcher {
                 )));
                 continue;
             }
-            // ddg's lite endpoint often lives when html dies.
-            let retry_engine = if engine == "ddg" { "ddg_lite" } else { engine };
-            let Some(eg) = self
-                .pool
-                .pick(engine, &used_egresses, !direct_used || !cap_direct)
+            // ddg's html endpoint is the fallback when lite fails.
+            let retry_engine = if engine == "ddg" { "ddg_html" } else { engine };
+            let Some(eg) = self.pool.pick(engine, &used_egresses, true)
             else {
                 continue;
             };
-            if eg.proxy.is_none() {
-                direct_used = true;
-            }
             retry_futures.push(Box::pin(engine_task(
                 retry_engine.to_string(),
                 query.to_string(),
@@ -500,8 +494,15 @@ impl Searcher {
 
         let trust = self.trust.lock().unwrap().clone();
         let total = rank::merged_total(&per_engine);
-        let results = rank::merge(&per_engine, query, intent, &trust, max_results);
+        let mut results = rank::merge(&per_engine, query, intent, &trust, max_results);
         let weak = rank::is_weak(&results, total);
+
+        // ── Result enrichment: prefetch top results to extract
+        // real <title> and <meta description> from the actual
+        // pages. Richer than SERP snippets, filters dead links.
+        // The genius feature: results carry the page's own title
+        // and description, not the SERP's truncated version.
+        self.enrich_results(&mut results).await;
         // Poisoning guard: a merge built while engines
         // were down must NOT persist for 30 minutes —
         // degraded-period results expire with the moment.
@@ -543,6 +544,105 @@ impl Searcher {
         let t = trust.entry(base_engine.to_string()).or_insert(1.0);
         let target = if ok { 1.2 } else { 0.3 };
         *t = (*t * 0.7 + target * 0.3).clamp(0.2, 2.0);
+    }
+
+    /// Enrich top results by prefetching destination pages.
+    ///
+    /// Extracts real <title> and <meta name="description">
+    /// from the actual page HTML — richer than any SERP
+    /// snippet. Dead links (404/timeout) get demoted 50%.
+    /// Pages behind bot walls are left untouched (still
+    /// valid results, agent fetches via tier 2).
+    ///
+    /// This is what makes our search better than any
+    /// individual engine: results carry the page's own
+    /// title and description, not the SERP's truncated
+    /// version. Works even when SERP parsers return empty
+    /// snippets. Dead links that rank well are demoted.
+    async fn enrich_results(&self, results: &mut [Merged]) {
+        const ENRICH_TOP: usize = 3;
+        const ENRICH_TIMEOUT: Duration = Duration::from_secs(4);
+
+        let n = results.len().min(ENRICH_TOP);
+        if n == 0 {
+            return;
+        }
+
+        // Spawn parallel fetches for top N results.
+        let fetcher = &self.fetcher;
+        type EnrichFut<'a> = std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = (usize, Option<String>, Option<String>)>
+                    + Send
+                    + 'a,
+            >,
+        >;
+        let mut futures: Vec<EnrichFut> = Vec::new();
+        for (i, r) in results.iter().take(n).enumerate() {
+            let url = r.url.clone();
+            futures.push(Box::pin(async move {
+                let out = tokio::time::timeout(
+                    ENRICH_TIMEOUT,
+                    fetcher.fetch_once_via(&url, &[], None, false),
+                )
+                .await;
+                match out {
+                    Err(_) | Ok(Err(_)) => (i, None, None),
+                    Ok(Ok(o)) => {
+                        // Dead link (4xx/5xx) → demote.
+                        if o.status >= 400 {
+                            return (i, None, None);
+                        }
+                        // Bot wall (200 but not ContentOk) →
+                        // don't enrich, don't demote.
+                        if !matches!(o.verdict, Verdict::ContentOk) {
+                            return (i, None, Some(String::new()));
+                        }
+                        let html = String::from_utf8_lossy(&o.body);
+                        let title = extract_title(&html);
+                        let desc = extract_description(&html);
+                        (i, title, desc)
+                    }
+                }
+            }));
+        }
+
+        let enriched = futures_util::future::join_all(futures).await;
+
+        for (i, title, desc) in enriched {
+            if i >= results.len() {
+                continue;
+            }
+            let r = &mut results[i];
+            match (&title, &desc) {
+                (None, None) => {
+                    // Dead link — demote 50%.
+                    r.score *= 0.5;
+                }
+                (None, Some(d)) if d.is_empty() => {
+                    // Bot wall — leave untouched.
+                }
+                _ => {
+                    if let Some(t) = title {
+                        let bad = |t: &str| {
+                            t.contains(" › ") || t.starts_with("http") || t.len() < 3
+                        };
+                        if !bad(&t) && (bad(&r.title) || t.len() > r.title.len()) {
+                            r.title = t;
+                        }
+                    }
+                    if let Some(d) = desc
+                        && !d.is_empty()
+                        && d.len() > r.snippet.len()
+                    {
+                        r.snippet = d;
+                    }
+                }
+            }
+        }
+
+        // Re-sort after enrichment (dead links demoted).
+        results.sort_by(|a, b| b.score.total_cmp(&a.score));
     }
 }
 
@@ -796,6 +896,34 @@ pub fn render_meta(out: &SearchOutcome) -> Value {
             "egress": if r.egress == "direct" { "direct".to_string() } else { "proxy".to_string() },
         })).collect::<Vec<_>>(),
     })
+}
+
+/// Extract <title> from raw HTML.
+fn extract_title(html: &str) -> Option<String> {
+    let doc = scraper::Html::parse_document(html);
+    let sel = Selector::parse("title").ok()?;
+    doc.select(&sel)
+        .next()
+        .map(|e| {
+            e.text()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string()
+        })
+        .filter(|t| !t.is_empty())
+}
+
+/// Extract <meta name="description"> (or og:description)
+/// from raw HTML.
+fn extract_description(html: &str) -> Option<String> {
+    let doc = scraper::Html::parse_document(html);
+    let sel = Selector::parse(r#"meta[name="description"], meta[property="og:description"]"#).ok()?;
+    doc.select(&sel)
+        .next()
+        .and_then(|e| e.value().attr("content"))
+        .map(|s| s.trim().to_string())
+        .filter(|t| !t.is_empty())
 }
 
 /// Removes the inflight key when the leader finishes

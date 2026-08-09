@@ -30,6 +30,13 @@ const JITTER_MS: u64 = 1300;
 const DIRECT_MIN_INTERVAL: Duration = Duration::from_millis(2500);
 const DIRECT_JITTER_MS: u64 = 2000;
 
+/// Engines known to aggressively block proxy/datacenter IPs.
+/// These prefer the direct lane even when proxies are
+/// available — a 429/CAPTCHA from DDG or Brave on a proxy
+/// is a wasted fan-out slot. Direct works for these engines
+/// because our residential IP isn't on blocklists.
+const PROXY_AVERSE: &[&str] = &["brave", "ddg"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Health {
     Healthy,
@@ -165,11 +172,17 @@ impl EgressPool {
         let dead_globally = |id: &str| -> bool { dead.get(id).is_some_and(|&t| t > now) };
 
         // Are ALL proxy lanes burned for this engine?
-        let any_proxy_viable = self
-            .egresses
-            .iter()
-            .filter(|e| e.proxy.is_some() && !exclude.contains(&e.id))
-            .any(|e| !dead_globally(&e.id) && state_of(&e.id) > 0);
+        // For proxy-averse engines (Brave, etc.), pretend no
+        // proxy is viable so the direct lane is preferred.
+        let proxy_averse = PROXY_AVERSE.contains(&engine);
+        let any_proxy_viable = if proxy_averse {
+            false
+        } else {
+            self.egresses
+                .iter()
+                .filter(|e| e.proxy.is_some() && !exclude.contains(&e.id))
+                .any(|e| !dead_globally(&e.id) && state_of(&e.id) > 0)
+        };
 
         let mut best: Option<(&Egress, u8)> = None;
         for e in &self.egresses {
