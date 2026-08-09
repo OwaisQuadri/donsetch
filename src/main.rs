@@ -191,7 +191,7 @@ async fn main() {
             if walled && tier != "1" {
                 // SOLVE mode: beat the wall, hand cookies
                 // to tier 1, re-fetch at tier-1 speed.
-                let mut g = ghost::Ghost::launch(&profile).await.expect("ghost launch");
+                let mut g = ghost::Ghost::launch(&profile, None).await.expect("ghost launch");
                 match ghost::ops::solve(&mut g, &url, std::time::Duration::from_secs(30))
                     .await
                     .expect("ghost solve")
@@ -281,7 +281,7 @@ async fn main() {
                 } else {
                     let g = match ghost {
                         Some(g) => g,
-                        None => ghost::Ghost::launch(&profile).await.expect("ghost launch"),
+                        None => ghost::Ghost::launch(&profile, None).await.expect("ghost launch"),
                     };
                     let mut g = g;
                     match ghost::ops::render(&mut g, &final_url, std::time::Duration::from_secs(30))
@@ -589,7 +589,7 @@ async fn main() {
                 "solve" => {
                     let url = args.get(3).expect("usage: ghost solve <url>");
                     let t0 = std::time::Instant::now();
-                    let mut g = ghost::Ghost::launch(&profile).await.expect("launch");
+                    let mut g = ghost::Ghost::launch(&profile, None).await.expect("launch");
                     eprintln!("launched in {:.0}ms", t0.elapsed().as_secs_f64() * 1000.0);
                     match ghost::ops::solve(&mut g, url, std::time::Duration::from_secs(30))
                         .await
@@ -612,7 +612,7 @@ async fn main() {
                 }
                 "render" => {
                     let url = args.get(3).expect("usage: ghost render <url>");
-                    let mut g = ghost::Ghost::launch(&profile).await.expect("launch");
+                    let mut g = ghost::Ghost::launch(&profile, None).await.expect("launch");
                     let html = ghost::ops::render(&mut g, url, std::time::Duration::from_secs(30))
                         .await
                         .expect("render");
@@ -634,7 +634,7 @@ async fn main() {
                 "shot" => {
                     let url = args.get(3).expect("usage: ghost shot <url> [path]");
                     let path = args.get(4).cloned().unwrap_or("/tmp/ghost.png".into());
-                    let mut g = ghost::Ghost::launch(&profile).await.expect("launch");
+                    let mut g = ghost::Ghost::launch(&profile, None).await.expect("launch");
                     g.navigate(url).await.expect("nav");
                     tokio::time::sleep(std::time::Duration::from_secs(4)).await;
                     g.screenshot(&path).await.expect("shot");
@@ -642,7 +642,7 @@ async fn main() {
                     g.kill().await;
                 }
                 "selftest" => {
-                    let mut g = ghost::Ghost::launch(&profile).await.expect("launch");
+                    let mut g = ghost::Ghost::launch(&profile, None).await.expect("launch");
                     match ghost::ops::selftest(&mut g).await {
                         Ok(j) => println!("{j}"),
                         Err(e) => eprintln!("selftest: {e}"),
@@ -652,7 +652,7 @@ async fn main() {
                 "freeze-check" => {
                     // Lifecycle roundtrip: launch → render →
                     // freeze (0 CPU) → thaw → render again.
-                    let mut g = ghost::Ghost::launch(&profile).await.expect("launch");
+                    let mut g = ghost::Ghost::launch(&profile, None).await.expect("launch");
                     let h1 = ghost::ops::render(
                         &mut g,
                         "https://example.com",

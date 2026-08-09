@@ -33,7 +33,7 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub fn new() -> Result<Self, crate::error::FetchError> {
+    pub async fn new() -> Result<Self, crate::error::FetchError> {
         let profile = BrowserProfile::host_default();
         let fetcher = Arc::new(Fetcher::new(profile.clone())?);
         let searcher = Arc::new(Searcher::new(
@@ -46,7 +46,7 @@ impl Daemon {
         Ok(Self {
             fetcher,
             profile,
-            ghost_mgr: GhostManager::new(),
+            ghost_mgr: GhostManager::new().await,
             state: Mutex::new(GhostState::load()),
             searcher,
             crawler,
@@ -57,7 +57,7 @@ impl Daemon {
 /// Run the daemon until stdin closes. Never returns Err
 /// on client garbage — only on fatal IO.
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let daemon = Arc::new(Daemon::new()?);
+    let daemon = Arc::new(Daemon::new().await?);
     let (tx, mut rx) = mpsc::channel::<String>(256);
 
     // Single writer: response lines can never interleave.
@@ -675,7 +675,7 @@ async fn ghost_escalate(
         .acquire(&daemon.profile)
         .await
         .map_err(|e| format!("browser launch failed: {e}"))?;
-    let page = ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(40))
+    let page = ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(20))
         .await
         .map_err(|e| format!("browser automation error: {e}"))?;
     if std::env::var_os("DONGHOST_DEBUG").is_some() {

@@ -18,6 +18,7 @@ pub mod cdp;
 pub mod manager;
 pub mod ops;
 pub mod proc;
+pub mod xvfb;
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -158,11 +159,19 @@ fn is_executable(path: &std::path::Path) -> bool {
 }
 
 impl Ghost {
-    /// Launch cold. Clean by construction: no automation
-    /// flags, no anti-automation flags, UA pinned to the
-    /// DonShadow profile so harvested cookies stay valid
+    /// Launch cold. Headful Chrome on Xvfb (Linux) — the real
+    /// stealth mode. Headful has real WebGL, real window.chrome,
+    /// real screen geometry. Headless is detectable; headful on
+    /// a virtual display is not. Falls back to `--headless=new`
+    /// on macOS/Windows where Xvfb is unavailable.
+    ///
+    /// Clean by construction: no automation flags, UA pinned to
+    /// the DonShadow profile so harvested cookies stay valid
     /// when tier 1 reuses them (cf_clearance binds IP+UA).
-    pub async fn launch(profile: &BrowserProfile) -> Result<Self, FetchError> {
+    pub async fn launch(
+        profile: &BrowserProfile,
+        display: Option<&str>,
+    ) -> Result<Self, FetchError> {
         let bin = chrome_binary()?;
         let dir = profile_dir();
         std::fs::create_dir_all(&dir)
@@ -174,7 +183,6 @@ impl Ghost {
         }
         let mut cmd = Command::new(bin);
         let mut chrome_args: Vec<String> = vec![
-            "--headless=new".into(),
             "--remote-debugging-port=0".into(),
             format!("--user-data-dir={}", dir.display()),
             format!("--user-agent={}", profile.user_agent),
@@ -189,10 +197,28 @@ impl Ghost {
             "--disable-translate".into(),
             "--mute-audio".into(),
         ];
+        // Headful on Xvfb (Linux), headless elsewhere.
+        #[cfg(target_os = "linux")]
+        if let Some(disp) = display {
+            // Headful Chrome on virtual display — the stealth path.
+            cmd.env("DISPLAY", disp);
+            // Force X11 backend (Wayland host → Xvfb needs this).
+            chrome_args.push("--ozone-platform=x11".into());
+        } else {
+            // No Xvfb — headless fallback.
+            chrome_args.push("--headless=new".into());
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            chrome_args.push("--headless=new".into());
+            let _ = display;
+        }
         // ANGLE GPU backend: Vulkan on Linux (headless needs it);
         // Windows/macOS use their native defaults (D3D11/Metal).
         #[cfg(target_os = "linux")]
-        chrome_args.push("--use-angle=vulkan".into());
+        if display.is_none() {
+            chrome_args.push("--use-angle=vulkan".into());
+        }
         // Modern Chrome (136+) sets navigator.webdriver
         // under --headless/--remote-debugging-port even
         // raw. This blink switch restores the real-
@@ -257,45 +283,44 @@ impl Ghost {
             .ok_or_else(|| FetchError::ghost("no sessionId"))?
             .to_string();
         cdp.call(Some(&session), "Page.enable", json!({})).await?;
-        // Headless reports screen 800x600 + outer 0x0 while
-        // the window is 1920x1080 — a glaring contradiction.
-        // Emulation.setDeviceMetricsOverride makes the
-        // geometry tell ONE story. Not Runtime; the standard
-        // non-injectable way to align the viewport.
-        cdp.call(
-            Some(&session),
-            "Emulation.setDeviceMetricsOverride",
-            json!({
-                "width": 1920,
-                "height": 1080,
-                "deviceScaleFactor": 1,
-                "mobile": false,
-                "screenWidth": 1920,
-                "screenHeight": 1080
-            }),
-        )
-        .await?;
-        // outerWidth/Height stay 0 in headless — a classic
-        // tell. Give the window real bounds so outer size
-        // is window size + chrome frame.
-        if let Ok(win) = cdp
-            .call(Some(&session), "Browser.getWindowForTarget", json!({}))
-            .await
-            && let Some(id) = win.get("windowId").and_then(Value::as_i64)
+        // Headful Chrome on Xvfb has real screen geometry —
+        // no Emulation.setDeviceMetricsOverride needed.
+        // (Headless mode needs it to fix the 800x600 vs
+        // 1920x1080 mismatch; headful is honest by construction.)
+        #[cfg(not(target_os = "linux"))]
         {
-            let _ = cdp
-                .call(
-                    None,
-                    "Browser.setWindowBounds",
-                    json!({
-                        "windowId": id,
-                        "bounds": {
-                            "left": 0, "top": 0,
-                            "width": 1920, "height": 1167
-                        }
-                    }),
-                )
-                .await;
+            cdp.call(
+                Some(&session),
+                "Emulation.setDeviceMetricsOverride",
+                json!({
+                    "width": 1920,
+                    "height": 1080,
+                    "deviceScaleFactor": 1,
+                    "mobile": false,
+                    "screenWidth": 1920,
+                    "screenHeight": 1080
+                }),
+            )
+            .await?;
+            if let Ok(win) = cdp
+                .call(Some(&session), "Browser.getWindowForTarget", json!({}))
+                .await
+                && let Some(id) = win.get("windowId").and_then(Value::as_i64)
+            {
+                let _ = cdp
+                    .call(
+                        None,
+                        "Browser.setWindowBounds",
+                        json!({
+                            "windowId": id,
+                            "bounds": {
+                                "left": 0, "top": 0,
+                                "width": 1920, "height": 1167
+                            }
+                        }),
+                    )
+                    .await;
+            }
         }
 
         Ok(Self {

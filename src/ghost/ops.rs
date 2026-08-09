@@ -71,8 +71,7 @@ pub async fn solve(
 ) -> Result<SolveOutcome, FetchError> {
     let start = Instant::now();
     ghost.navigate(url).await?;
-    // Challenge scripts need no media/fonts/images;
-    // blocking them cuts wall time meaningfully.
+    // No resource blocking — challenges need resources to load.
     let _ = ghost
         .cdp
         .call(
@@ -81,22 +80,10 @@ pub async fn solve(
             serde_json::json!({}),
         )
         .await;
-    let _ = ghost
-        .cdp
-        .call(
-            Some(&ghost.session),
-            "Network.setBlockedURLs",
-            serde_json::json!({ "urls":
-                ["*.woff", "*.woff2", "*.ttf", "*.otf",
-                 "*.mp4", "*.webm", "*.mp3",
-                 "*.png", "*.jpg", "*.jpeg", "*.gif",
-                 "*.webp", "*.svg", "*.ico"] }),
-        )
-        .await;
 
     let mut clicked = false;
     let mut clear_streak = 0u8;
-    let mut poll_ms = 300u64; // fast early, back off later
+    let mut poll_ms = 200u64; // fast early, back off later
     let mut vendor: Option<String> = None;
 
     while start.elapsed() < timeout {
@@ -174,21 +161,48 @@ pub async fn solve(
             return Ok(SolveOutcome::CaptchaWalled);
         }
 
-        // Turnstile-style checkbox: one human click, once.
+        // Turnstile-style checkbox: find the actual iframe position
+        // via JS and click at its center. Fixed coordinates miss
+        // because Turnstile renders at different positions per site.
         if !clicked
             && small
             && (lower.contains("challenges.cloudflare.com")
                 || lower.contains("turnstile")
                 || lower.contains("verify you are human"))
         {
-            let _ = ghost.click(480.0, 420.0).await;
+            // Use Runtime.evaluate to find the Turnstile iframe's
+            // bounding rect, then click at its center.
+            let turnstile_pos = ghost
+                .cdp
+                .call(
+                    Some(&ghost.session),
+                    "Runtime.evaluate",
+                    serde_json::json!({
+                        "expression": "(() => { const f = document.querySelector('iframe[src*=challenges.cloudflare], iframe[src*=turnstile], cf-turnstile > div > iframe'); if (f) { const r = f.getBoundingClientRect(); return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2}); } return null; })()",
+                        "returnByValue": true
+                    }),
+                )
+                .await
+                .ok()
+                .and_then(|v| v.get("result").and_then(|r| r.get("value")).cloned())
+                .and_then(|v| v.as_str().map(String::from))
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+            let (x, y) = if let Some(ref coords) = turnstile_pos {
+                (
+                    coords.get("x").and_then(|v| v.as_f64()).unwrap_or(480.0),
+                    coords.get("y").and_then(|v| v.as_f64()).unwrap_or(420.0),
+                )
+            } else {
+                (480.0, 420.0)
+            };
+            let _ = ghost.click(x, y).await;
             clicked = true;
         }
 
         // Adaptive backoff: 300ms for the first 4s,
         // then settle to 750ms.
-        if start.elapsed() > Duration::from_secs(4) {
-            poll_ms = 750;
+        if start.elapsed() > Duration::from_secs(5) {
+            poll_ms = 500;
         }
     }
     Ok(SolveOutcome::TimedOut)
@@ -229,26 +243,10 @@ pub async fn ghost_fetch(
 ) -> Result<GhostPage, FetchError> {
     let start = Instant::now();
     ghost.navigate(url).await?;
-    let _ = ghost
-        .cdp
-        .call(
-            Some(&ghost.session),
-            "Network.enable",
-            serde_json::json!({}),
-        )
-        .await;
-    let _ = ghost
-        .cdp
-        .call(
-            Some(&ghost.session),
-            "Network.setBlockedURLs",
-            serde_json::json!({ "urls":
-                ["*.woff", "*.woff2", "*.ttf", "*.otf",
-                 "*.mp4", "*.webm", "*.mp3",
-                 "*.png", "*.jpg", "*.jpeg", "*.gif",
-                 "*.webp", "*.svg", "*.ico"] }),
-        )
-        .await;
+    // No resource blocking — challenges verify that resources
+    // (images, fonts) load. Blocking them breaks Cloudflare
+    // and DataDome challenge solving. The speed cost is small
+    // (a few extra KB of fonts/images) vs the reliability gain.
 
     let mut clicked_challenge = false;
     let mut clicked_consent = false;
@@ -259,10 +257,10 @@ pub async fn ghost_fetch(
     let mut html = String::new();
 
     while start.elapsed() < timeout {
-        let poll = if start.elapsed() > Duration::from_secs(4) {
-            750
+        let poll = if start.elapsed() > Duration::from_secs(5) {
+            500
         } else {
-            300
+            200
         };
         tokio::time::sleep(Duration::from_millis(poll)).await;
         html = match ghost.outer_html().await {
@@ -310,7 +308,31 @@ pub async fn ghost_fetch(
                     || lower.contains("turnstile")
                     || lower.contains("verify you are human"))
             {
-                let _ = ghost.click(480.0, 420.0).await;
+                // Find Turnstile iframe position via JS and click center.
+                let turnstile_pos = ghost
+                    .cdp
+                    .call(
+                        Some(&ghost.session),
+                        "Runtime.evaluate",
+                        serde_json::json!({
+                            "expression": "(() => { const f = document.querySelector('iframe[src*=challenges.cloudflare], iframe[src*=turnstile], cf-turnstile > div > iframe'); if (f) { const r = f.getBoundingClientRect(); return JSON.stringify({x: r.x + r.width/2, y: r.y + r.height/2}); } return null; })()",
+                            "returnByValue": true
+                        }),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|v| v.get("result").and_then(|r| r.get("value")).cloned())
+                    .and_then(|v| v.as_str().map(String::from))
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+                let (x, y) = if let Some(ref coords) = turnstile_pos {
+                    (
+                        coords.get("x").and_then(|v| v.as_f64()).unwrap_or(480.0),
+                        coords.get("y").and_then(|v| v.as_f64()).unwrap_or(420.0),
+                    )
+                } else {
+                    (480.0, 420.0)
+                };
+                let _ = ghost.click(x, y).await;
                 clicked_challenge = true;
             }
             prev_len = cur_len;
@@ -362,7 +384,7 @@ pub async fn ghost_fetch(
 
         // Content-quality oracle: substantive AND stable.
         let visible = visible_text_len(&html);
-        let substantive = cur_len >= 12_000 && visible >= 1200;
+        let substantive = cur_len >= 4_000 && visible >= 200;
         let stable = prev_len > 0 && cur_len.abs_diff(prev_len) < cur_len / 100 + 64;
         if substantive && stable {
             settle_streak += 1;

@@ -3,6 +3,10 @@
 //! One browser, one tab, one job at a time. Frozen
 //! between jobs (0 CPU), reaped after 10 min frozen,
 //! crash-transparent on acquire.
+//!
+//! On Linux, an Xvfb virtual display is started at init
+//! and kept warm. Ghost launches headful Chrome on this
+//! display — the stealth path that passes Cloudflare/DataDome.
 
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -21,6 +25,8 @@ struct Slot {
 
 pub struct GhostManager {
     slot: Arc<Mutex<Slot>>,
+    /// Xvfb display string (":99") on Linux, None elsewhere.
+    display: Option<String>,
 }
 
 /// RAII handle: derefs straight to the live Ghost, so
@@ -50,12 +56,38 @@ impl Drop for GhostGuard {
 }
 
 impl GhostManager {
-    pub fn new() -> Arc<Self> {
+    pub async fn new() -> Arc<Self> {
+        // Start Xvfb on Linux if available.
+        let display = if super::xvfb::is_available() {
+            match super::xvfb::Xvfb::start().await {
+                Ok(xvfb) => {
+                    let disp = xvfb.display_env();
+                    // Leak the Xvfb — it lives for the daemon's lifetime.
+                    // We never kill it (keeping it warm is the point).
+                    std::mem::forget(xvfb);
+                    if std::env::var_os("DONGHOST_DEBUG").is_some() {
+                        eprintln!("[ghost] Xvfb started on {disp}");
+                    }
+                    Some(disp)
+                }
+                Err(e) => {
+                    eprintln!("[ghost] Xvfb start failed: {e}, falling back to headless");
+                    None
+                }
+            }
+        } else {
+            if std::env::var_os("DONGHOST_DEBUG").is_some() {
+                eprintln!("[ghost] Xvfb not available, using headless mode");
+            }
+            None
+        };
+
         let mgr = Arc::new(Self {
             slot: Arc::new(Mutex::new(Slot {
                 ghost: None,
                 last_used: Instant::now(),
             })),
+            display,
         });
         let reaper = Arc::clone(&mgr);
         tokio::spawn(async move { reaper.reap_loop().await });
@@ -74,7 +106,7 @@ impl GhostManager {
             if let Some(mut old) = slot.ghost.take() {
                 old.kill().await;
             }
-            slot.ghost = Some(Ghost::launch(profile).await?);
+            slot.ghost = Some(Ghost::launch(profile, self.display.as_deref()).await?);
         }
         Ok(GhostGuard { guard: slot })
     }
@@ -107,5 +139,11 @@ impl GhostManager {
         if let Some(mut g) = slot.ghost.take() {
             g.kill().await;
         }
+    }
+
+    /// Is Xvfb active (headful mode)?
+    #[allow(dead_code)]
+    pub fn is_headful(&self) -> bool {
+        self.display.is_some()
     }
 }
