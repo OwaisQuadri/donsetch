@@ -197,27 +197,55 @@ impl Ghost {
             "--disable-translate".into(),
             "--mute-audio".into(),
         ];
-        // Headful on Xvfb (Linux), headless elsewhere.
+        // ── Stealth mode selection ──
+        //
+        // The goal: run headful Chrome (real GPU, real WebGL, real
+        // window.chrome) WITHOUT being visible to the user.
+        //
+        // Linux: Xvfb virtual display (display = Some(":99")).
+        //   Headful on a virtual X display. Zero user-visible artifacts.
+        //
+        // macOS / Windows: no Xvfb, but headful Chrome with the
+        //   window positioned at -32000,-32000 (far off-screen).
+        //   The window exists, has real GPU, real WebGL — but the
+        //   user never sees it. This is strictly better than
+        //   --headless=new, which uses SwiftShader (detectable).
+        //
+        // Fallback (no display, no platform support): --headless=new.
+
         #[cfg(target_os = "linux")]
         if let Some(disp) = display {
-            // Headful Chrome on virtual display — the stealth path.
+            // Linux + Xvfb: headful on virtual display.
             cmd.env("DISPLAY", disp);
-            // Force X11 backend (Wayland host → Xvfb needs this).
             chrome_args.push("--ozone-platform=x11".into());
         } else {
-            // No Xvfb — headless fallback.
-            chrome_args.push("--headless=new".into());
+            // Linux without Xvfb: off-screen headful.
+            // Position the window far off-screen so the user
+            // never sees it, but Chrome still has real GPU.
+            chrome_args.push("--window-position=-32000,-32000".into());
         }
-        #[cfg(not(target_os = "linux"))]
+
+        #[cfg(target_os = "macos")]
         {
-            chrome_args.push("--headless=new".into());
+            // macOS: headful Chrome, window off-screen.
+            // No --headless flag. Real Metal GPU, real window.chrome.
+            chrome_args.push("--window-position=-32000,-32000".into());
             let _ = display;
         }
-        // ANGLE GPU backend: Vulkan on Linux (headless needs it);
-        // Windows/macOS use their native defaults (D3D11/Metal).
-        #[cfg(target_os = "linux")]
-        if display.is_none() {
-            chrome_args.push("--use-angle=vulkan".into());
+
+        #[cfg(target_os = "windows")]
+        {
+            // Windows: headful Chrome, window off-screen.
+            // No --headless flag. Real D3D11 GPU, real window.chrome.
+            chrome_args.push("--window-position=-32000,-32000".into());
+            let _ = display;
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        {
+            // Unknown platform: headless fallback.
+            chrome_args.push("--headless=new".into());
+            let _ = display;
         }
         // Modern Chrome (136+) sets navigator.webdriver
         // under --headless/--remote-debugging-port even
@@ -283,11 +311,11 @@ impl Ghost {
             .ok_or_else(|| FetchError::ghost("no sessionId"))?
             .to_string();
         cdp.call(Some(&session), "Page.enable", json!({})).await?;
-        // Headful Chrome on Xvfb has real screen geometry —
-        // no Emulation.setDeviceMetricsOverride needed.
-        // (Headless mode needs it to fix the 800x600 vs
-        // 1920x1080 mismatch; headful is honest by construction.)
-        #[cfg(not(target_os = "linux"))]
+        // Headful Chrome (Xvfb or off-screen) has real screen
+        // geometry — no Emulation.setDeviceMetricsOverride needed.
+        // (Only needed in true headless mode, which we no longer use
+        // on any supported platform.)
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             cdp.call(
                 Some(&session),

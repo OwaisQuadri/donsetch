@@ -77,7 +77,7 @@ impl GhostManager {
             }
         } else {
             if std::env::var_os("DONGHOST_DEBUG").is_some() {
-                eprintln!("[ghost] Xvfb not available, using headless mode");
+                eprintln!("[ghost] No Xvfb, using headful off-screen mode");
             }
             None
         };
