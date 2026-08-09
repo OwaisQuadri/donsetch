@@ -191,7 +191,9 @@ async fn main() {
             if walled && tier != "1" {
                 // SOLVE mode: beat the wall, hand cookies
                 // to tier 1, re-fetch at tier-1 speed.
-                let mut g = ghost::Ghost::launch(&profile, None).await.expect("ghost launch");
+                let mut g = ghost::Ghost::launch(&profile, None)
+                    .await
+                    .expect("ghost launch");
                 match ghost::ops::solve(&mut g, &url, std::time::Duration::from_secs(30))
                     .await
                     .expect("ghost solve")
@@ -281,7 +283,9 @@ async fn main() {
                 } else {
                     let g = match ghost {
                         Some(g) => g,
-                        None => ghost::Ghost::launch(&profile, None).await.expect("ghost launch"),
+                        None => ghost::Ghost::launch(&profile, None)
+                            .await
+                            .expect("ghost launch"),
                     };
                     let mut g = g;
                     match ghost::ops::render(&mut g, &final_url, std::time::Duration::from_secs(30))

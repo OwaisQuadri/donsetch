@@ -231,7 +231,10 @@ impl Encoder {
             }
             // Chrome marks sensitive headers as never-indexed to prevent
             // them from entering the dynamic table.
-            let sensitive = matches!(name_l.as_str(), "cookie" | "authorization" | "proxy-authorization");
+            let sensitive = matches!(
+                name_l.as_str(),
+                "cookie" | "authorization" | "proxy-authorization"
+            );
             let name_idx = STATIC_TABLE.iter().position(|(n, _)| *n == name_l);
             if sensitive {
                 // Never indexed (0x10 prefix, 4-bit integer).

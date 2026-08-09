@@ -127,7 +127,10 @@ pub fn parse(engine: &str, html: &str) -> Vec<Hit> {
     if hits.is_empty() && std::env::var_os("DONSEEK_DEBUG").is_some() {
         let dump = format!("/tmp/donseek_debug_{engine}.html");
         let _ = std::fs::write(&dump, html);
-        eprintln!("[donseek] {engine}: 0 hits, dumped {len} bytes to {dump}", len = html.len());
+        eprintln!(
+            "[donseek] {engine}: 0 hits, dumped {len} bytes to {dump}",
+            len = html.len()
+        );
     }
     hits
 }
@@ -162,7 +165,9 @@ fn parse_google(doc: &Html) -> Vec<Hit> {
     let snip_sel = sel("span.aCOpRe, div[data-sncf], span.st, div.VwiEFb, div.IsZrdc");
 
     for block in doc.select(&g_blocks) {
-        let Some(a) = block.select(&link_sel).next() else { continue };
+        let Some(a) = block.select(&link_sel).next() else {
+            continue;
+        };
         let raw_href = a.value().attr("href").unwrap_or("");
         let url = decode_google(raw_href);
         if !url.starts_with("http") || url.contains("google.com/") {
@@ -172,7 +177,11 @@ fn parse_google(doc: &Html) -> Vec<Hit> {
         if !seen.insert(key.clone()) {
             continue;
         }
-        let title = block.select(&h3).next().map(text).unwrap_or_else(|| text(a));
+        let title = block
+            .select(&h3)
+            .next()
+            .map(text)
+            .unwrap_or_else(|| text(a));
         if title.is_empty() {
             continue;
         }
@@ -193,7 +202,9 @@ fn parse_google(doc: &Html) -> Vec<Hit> {
     // Fallback: any div[data-ved] with a link + h3.
     let ved_blocks = sel("div[data-ved]");
     for block in doc.select(&ved_blocks) {
-        let Some(a) = block.select(&link_sel).next() else { continue };
+        let Some(a) = block.select(&link_sel).next() else {
+            continue;
+        };
         let raw_href = a.value().attr("href").unwrap_or("");
         let url = decode_google(raw_href);
         if !url.starts_with("http") || url.contains("google.com/") {
@@ -309,7 +320,11 @@ fn parse_bing(doc: &Html) -> Vec<Hit> {
     let h2 = sel("h2");
     let mut hits = Vec::new();
     for (rank, li) in doc.select(&items).enumerate() {
-        let Some(a) = li.select(&link).next().or_else(|| li.select(&sel("a[href]")).next()) else {
+        let Some(a) = li
+            .select(&link)
+            .next()
+            .or_else(|| li.select(&sel("a[href]")).next())
+        else {
             continue;
         };
         let url = decode_bing(a.value().attr("href").unwrap_or(""));
@@ -453,7 +468,11 @@ fn parse_yahoo(doc: &Html) -> Vec<Hit> {
     let a_gen = sel("a[href]");
     let mut hits = Vec::new();
     for (rank, item) in doc.select(&items).enumerate() {
-        let Some(a) = item.select(&link).next().or_else(|| item.select(&a_gen).next()) else {
+        let Some(a) = item
+            .select(&link)
+            .next()
+            .or_else(|| item.select(&a_gen).next())
+        else {
             continue;
         };
         let url = decode_yahoo(a.value().attr("href").unwrap_or(""));
@@ -484,7 +503,9 @@ fn parse_yahoo(doc: &Html) -> Vec<Hit> {
 pub fn serp_url(engine: &str, query: &str) -> Option<String> {
     let q = url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
     match engine {
-        "google" => Some(format!("https://www.google.com/search?q={q}&hl=en&gl=us&num=15&ie=utf-8&oe=utf-8")),
+        "google" => Some(format!(
+            "https://www.google.com/search?q={q}&hl=en&gl=us&num=15&ie=utf-8&oe=utf-8"
+        )),
         "brave" => Some(format!("https://search.brave.com/search?q={q}")),
         "bing" => Some(format!("https://www.bing.com/search?q={q}&count=15")),
         // DDG primary: lite endpoint (html endpoint serves CAPTCHA to proxy IPs).

@@ -202,13 +202,7 @@ const BAD_KEYS: &[&str] = &[
 
 /// Content-bearing key names treated as "title-like" (rendered as a
 /// heading when present).
-const TITLE_KEYS: &[&str] = &[
-    "title",
-    "name",
-    "headline",
-    "namewithowner",
-    "fullname",
-];
+const TITLE_KEYS: &[&str] = &["title", "name", "headline", "namewithowner", "fullname"];
 
 /// Layout-independent selectors for JSON globals / typed scripts.
 struct Blob {
@@ -335,7 +329,8 @@ fn find_blobs(html: &str) -> Vec<Blob> {
         // Frame is `[k]:"value"` — strip the key prefix so the
         // remainder is a standalone JSON array/object.
         let json = strip_frame_key(&frame);
-        if !json.is_empty() && json.starts_with(['[', '{'])
+        if !json.is_empty()
+            && json.starts_with(['[', '{'])
             && !out.iter().any(|b: &Blob| b.raw == json)
         {
             out.push(Blob { raw: json });
@@ -351,7 +346,9 @@ fn find_next_f(html: &str) -> Vec<String> {
     let needle = "self.__next_f.push([";
     let mut from = 0usize;
     while from < html.len() {
-        let Some(rel) = html[from..].find(needle) else { break };
+        let Some(rel) = html[from..].find(needle) else {
+            break;
+        };
         let body_start = from + rel + needle.len();
         let rest = &html[body_start..];
         // `[k,"` — skip to the opening quote.
@@ -376,7 +373,7 @@ fn find_next_f(html: &str) -> Vec<String> {
         };
         let inner = &rest[q + 1..end];
         let decoded = js_unescape(inner);
-            if decoded.len() > 8 {
+        if decoded.len() > 8 {
             out.push(decoded);
         }
         from = body_start + end + 1;
@@ -479,7 +476,9 @@ fn utf8_len(b0: u8) -> usize {
 /// Strip `[k]:` / `k:` key prefix when the rest is JSON.
 fn strip_frame_key(frame: &str) -> String {
     let t = frame.trim();
-    let Some(idx) = t.find(':') else { return t.to_string() };
+    let Some(idx) = t.find(':') else {
+        return t.to_string();
+    };
     let rest = t[idx + 1..].trim();
     if rest.starts_with(['[', '{']) {
         rest.to_string()
@@ -494,9 +493,13 @@ fn find_data_target<'a>(html: &'a str, suffix: &str) -> Vec<&'a str> {
     let needle = "data-target=\"";
     let mut from = 0usize;
     while from < html.len() {
-        let Some(lt) = html[from..].find("<script") else { break };
+        let Some(lt) = html[from..].find("<script") else {
+            break;
+        };
         let tag_start = from + lt;
-        let Some(tag_end_rel) = html[tag_start..].find('>') else { break };
+        let Some(tag_end_rel) = html[tag_start..].find('>') else {
+            break;
+        };
         let tag_end = tag_start + tag_end_rel;
         let tag = &html[tag_start..tag_end];
         if tag.contains(needle) && tag.contains(suffix) {
@@ -521,9 +524,13 @@ fn find_typed_bodies<'a>(html: &'a str, ty: &str) -> Vec<&'a str> {
     let needle = format!(r#"type="{ty}""#);
     let mut from = 0usize;
     while from < html.len() {
-        let Some(lt) = html[from..].find("<script") else { break };
+        let Some(lt) = html[from..].find("<script") else {
+            break;
+        };
         let tag_start = from + lt;
-        let Some(tag_end_rel) = html[tag_start..].find('>') else { break };
+        let Some(tag_end_rel) = html[tag_start..].find('>') else {
+            break;
+        };
         let tag_end = tag_start + tag_end_rel;
         if html[tag_start..tag_end].contains(&needle) {
             let body_start = tag_end + 1;
@@ -642,8 +649,13 @@ fn score_string(s: &str, path: &str) -> (f32, bool) {
     if t.contains(['{', '}']) {
         return (0.0, false);
     }
-    if t.contains("@media") || t.contains(":root") || t.contains("@font-face")
-        || t.contains("url(") || t.contains("px;") || t.contains("rgb(") || t.contains("var(--")
+    if t.contains("@media")
+        || t.contains(":root")
+        || t.contains("@font-face")
+        || t.contains("url(")
+        || t.contains("px;")
+        || t.contains("rgb(")
+        || t.contains("var(--")
     {
         return (0.0, false);
     }
@@ -735,9 +747,18 @@ fn score_string(s: &str, path: &str) -> (f32, bool) {
 /// charset) — no prose. Only fires when before the first space the
 /// token is a bare `key=value` pair.
 fn looks_like_attr(t: &str) -> bool {
-    let first = t.split(|c: char| c.is_ascii_whitespace()).next().unwrap_or("");
-    let Some(eq) = first.find('=') else { return false };
-    eq >= 2 && first[eq + 1..].len() >= 2 && first[..eq].chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    let first = t
+        .split(|c: char| c.is_ascii_whitespace())
+        .next()
+        .unwrap_or("");
+    let Some(eq) = first.find('=') else {
+        return false;
+    };
+    eq >= 2
+        && first[eq + 1..].len() >= 2
+        && first[..eq]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 fn dedupe(items: &mut Vec<Item>) {
@@ -828,11 +849,12 @@ fn strip_html(s: &str) -> String {
         return s.to_string();
     }
     let doc = Html::parse_fragment(s);
-    let text: String = doc.select(&scraper::Selector::parse("body").unwrap()).next().map(|b| b.text().collect()).unwrap_or_default();
-    let collapsed: String = text
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let text: String = doc
+        .select(&scraper::Selector::parse("body").unwrap())
+        .next()
+        .map(|b| b.text().collect())
+        .unwrap_or_default();
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed
 }
 
@@ -924,8 +946,16 @@ mod tests {
         let html = r#"<script>self.__next_f.push([1,"52:[\"$\",\"p\",null,{\"children\":\"Hello from the server\"}]"]);self.__next_f.push([2,"61:[\"$\",\"h2\",null,{\"children\":\"A second paragraph of text\"}]"]);</script>"#;
         let frames = find_next_f(html);
         assert_eq!(frames.len(), 2, "two push frames decoded");
-        assert!(frames[0].contains("Hello from the server"), "frame 0: {}", frames[0]);
-        assert!(frames[1].contains("A second paragraph"), "frame 1: {}", frames[1]);
+        assert!(
+            frames[0].contains("Hello from the server"),
+            "frame 0: {}",
+            frames[0]
+        );
+        assert!(
+            frames[1].contains("A second paragraph"),
+            "frame 1: {}",
+            frames[1]
+        );
     }
 
     #[test]
@@ -933,22 +963,34 @@ mod tests {
         // A Next.js SPA shell whose body is empty but whose RSC
         // flight frames carry the article prose (>= 400 chars so
         // the real threshold passes).
-        let para = |n: usize| format!("This is body paragraph number {} of the article -- containing enough substantial prose across several sentences that it reads as genuine written content rather than a short label or fragment.", n);
+        let para = |n: usize| {
+            format!(
+                "This is body paragraph number {} of the article -- containing enough substantial prose across several sentences that it reads as genuine written content rather than a short label or fragment.",
+                n
+            )
+        };
         let mut body = String::new();
         for i in 0..6 {
             body.push_str(&format!(
                 r#"self.__next_f.push([{},"{}:[\"$\",\"p\",null,{{\"children\":\"{}\"}}]"]);"#,
-                i + 1, i + 50, para(i)
+                i + 1,
+                i + 50,
+                para(i)
             ));
         }
-        let html = format!(r#"<html><head><title>My Next Page</title></head><body><div id="root"></div><script>{body}</script></body></html>"#);
+        let html = format!(
+            r#"<html><head><title>My Next Page</title></head><body><div id="root"></div><script>{body}</script></body></html>"#
+        );
         let res = extract(&html, "https://example.com/post/1", &opts());
         let e = res.expect("jsdata should extract RSC content");
         assert!(e.total_chars >= 400, "has body: {}", e.total_chars);
         let p0: String = para(0).chars().take(30).collect();
         let p5: String = para(5).chars().take(30).collect();
         assert!(e.markdown.contains(&p0), "first paragraph present");
-        assert!(e.markdown.contains(&p5), "later paragraph present (ordering/dedupe intact)");
+        assert!(
+            e.markdown.contains(&p5),
+            "later paragraph present (ordering/dedupe intact)"
+        );
     }
 
     #[test]
@@ -968,8 +1010,17 @@ mod tests {
 
     #[test]
     fn score_rejects_css_and_attrs() {
-        assert_eq!(score_string("@media (prefers-color-scheme:dark){body{color:#000}}", ".footer.style"), (0.0, false));
-        assert_eq!(score_string("width=device-width,initial-scale=1.0", ".viewport"), (0.0, false));
+        assert_eq!(
+            score_string(
+                "@media (prefers-color-scheme:dark){body{color:#000}}",
+                ".footer.style"
+            ),
+            (0.0, false)
+        );
+        assert_eq!(
+            score_string("width=device-width,initial-scale=1.0", ".viewport"),
+            (0.0, false)
+        );
         // A real title under a title path scores positive + title_like.
         let (score, titley) = score_string("Making Navigations Instant in v0", ".flattened.title");
         assert!(score > 2.0, "title scores: {score}");
@@ -979,9 +1030,24 @@ mod tests {
     #[test]
     fn dedupe_keeps_distinct_content() {
         let mut items = vec![
-            Item { text: "short description".into(), score: 4.0, order: 0, title_like: true },
-            Item { text: "a genuinely different long body of text that should survive".into(), score: 5.0, order: 1, title_like: false },
-            Item { text: "short description".into(), score: 4.0, order: 2, title_like: true },
+            Item {
+                text: "short description".into(),
+                score: 4.0,
+                order: 0,
+                title_like: true,
+            },
+            Item {
+                text: "a genuinely different long body of text that should survive".into(),
+                score: 5.0,
+                order: 1,
+                title_like: false,
+            },
+            Item {
+                text: "short description".into(),
+                score: 4.0,
+                order: 2,
+                title_like: true,
+            },
         ];
         dedupe(&mut items);
         assert_eq!(items.len(), 2, "exact dup removed, distinct kept");

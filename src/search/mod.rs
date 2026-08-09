@@ -324,8 +324,7 @@ impl Searcher {
         // is shared, not exclusive.
         let has_proxies = self.pool.has_proxies();
         for (engine, q) in assignments {
-            let Some(eg) = self.pool.pick(&engine, &used_egresses, true)
-            else {
+            let Some(eg) = self.pool.pick(&engine, &used_egresses, true) else {
                 break;
             };
             // Exclude proxy egresses (spread across proxies)
@@ -405,8 +404,7 @@ impl Searcher {
             }
             // ddg's html endpoint is the fallback when lite fails.
             let retry_engine = if engine == "ddg" { "ddg_html" } else { engine };
-            let Some(eg) = self.pool.pick(engine, &used_egresses, true)
-            else {
+            let Some(eg) = self.pool.pick(engine, &used_egresses, true) else {
                 continue;
             };
             retry_futures.push(Box::pin(engine_task(
@@ -624,9 +622,8 @@ impl Searcher {
                 }
                 _ => {
                     if let Some(t) = title {
-                        let bad = |t: &str| {
-                            t.contains(" › ") || t.starts_with("http") || t.len() < 3
-                        };
+                        let bad =
+                            |t: &str| t.contains(" › ") || t.starts_with("http") || t.len() < 3;
                         if !bad(&t) && (bad(&r.title) || t.len() > r.title.len()) {
                             r.title = t;
                         }
@@ -904,13 +901,7 @@ fn extract_title(html: &str) -> Option<String> {
     let sel = Selector::parse("title").ok()?;
     doc.select(&sel)
         .next()
-        .map(|e| {
-            e.text()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .trim()
-                .to_string()
-        })
+        .map(|e| e.text().collect::<Vec<_>>().join(" ").trim().to_string())
         .filter(|t| !t.is_empty())
 }
 
@@ -918,7 +909,8 @@ fn extract_title(html: &str) -> Option<String> {
 /// from raw HTML.
 fn extract_description(html: &str) -> Option<String> {
     let doc = scraper::Html::parse_document(html);
-    let sel = Selector::parse(r#"meta[name="description"], meta[property="og:description"]"#).ok()?;
+    let sel =
+        Selector::parse(r#"meta[name="description"], meta[property="og:description"]"#).ok()?;
     doc.select(&sel)
         .next()
         .and_then(|e| e.value().attr("content"))
