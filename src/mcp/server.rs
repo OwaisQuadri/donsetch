@@ -161,9 +161,9 @@ async fn call_tool(daemon: &Arc<Daemon>, params: &Value) -> Result<Value, (i64, 
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     match name {
-        "fetch" => Ok(fetch_tool(daemon, &args).await),
-        "search" => Ok(search_tool(daemon, &args).await),
-        "crawl" => Ok(crawl_tool(daemon, &args).await),
+        "web_fetch" => Ok(fetch_tool(daemon, &args).await),
+        "web_search" => Ok(search_tool(daemon, &args).await),
+        "web_crawl" => Ok(crawl_tool(daemon, &args).await),
         _ => Err((-32602, format!("unknown tool: {name}"))),
     }
 }
