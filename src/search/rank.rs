@@ -239,6 +239,27 @@ pub fn merge(
         r.score += PRIOR_WEIGHT * prior;
     }
 
+    // Vertical-only penalty: a result from ONLY a vertical
+    // (github, hn, wikipedia) with no general web engine
+    // corroboration is a weaker signal. The vertical found it
+    // by keyword match; general engines not surfacing it means
+    // it's probably tangential. Applied after BM25+prior so
+    // it affects the pre-rerank score that feeds the rerank
+    // blend — the 60% RRF weight keeps it below consensus
+    // results even when the cross-encoder scores it high.
+    // The `authoritative` flag already gives full RRF weight
+    // (no VERTICAL_WEIGHT reduction) — that's enough of a
+    // boost. The penalty for zero general-engine corroboration
+    // applies equally: if no SERP found the Wikipedia article,
+    // it's probably the wrong one (e.g. Linearizability for
+    // a CRDT query).
+    for r in &mut results {
+        let has_general = r.sources.iter().any(|(e, _)| !is_vertical(e));
+        if !has_general {
+            r.score *= 0.4;
+        }
+    }
+
     // Cross-encoder semantic reranking: re-score by semantic
     // relevance (query ↔ title+snippet through full attention).
     // Skipped gracefully if model unavailable or feature disabled.
@@ -360,6 +381,41 @@ mod tests {
         let trust = std::collections::HashMap::new();
         let out = merge(&per, "rust async runtime", Intent::Code, &trust, 10);
         assert_eq!(out[0].url, "https://a.com/x", "consensus must win");
+    }
+
+    #[test]
+    fn general_engine_beats_vertical_only_same_consensus() {
+        // The real-world bug: both results have consensus=1
+        // (ddg only = 1 family, github only = 1 vertical),
+        // so the consensus multiplier doesn't differentiate.
+        // The vertical-only penalty must ensure the general
+        // engine result wins despite the vertical having
+        // higher BM25 (all query terms in its snippet).
+        let mut gh_hit = hit("https://github.com/zigsafe", 0);
+        gh_hit.title = "zigsafe: ownership checker for Zig, Rust-style borrow-check".into();
+        gh_hit.snippet =
+            "Optional static ownership checker for Zig with Rust-style borrow-check diagnostics"
+                .into();
+        let mut docs_hit = hit("https://doc.rust-lang.org/borrow", 3);
+        docs_hit.title = "Borrowing - Rust By Example".into();
+        docs_hit.snippet =
+            "Rust uses a borrowing mechanism to access data without taking ownership".into();
+        let per = vec![
+            ("ddg".to_string(), vec![docs_hit]),
+            ("github".to_string(), vec![gh_hit]),
+        ];
+        let trust = std::collections::HashMap::new();
+        let out = merge(
+            &per,
+            "rust ownership borrow checker",
+            Intent::Code,
+            &trust,
+            10,
+        );
+        assert_eq!(
+            out[0].url, "https://doc.rust-lang.org/borrow",
+            "general engine result must beat vertical-only even with same consensus"
+        );
     }
 
     #[test]
