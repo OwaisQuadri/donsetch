@@ -31,7 +31,7 @@ pub async fn search(
     let body = json!({
         "query": query,
         "max_results": max.min(10),
-        "search_depth": "basic",
+        "search_depth": "fast",
         "topic": topic,
         "include_answer": false,
         "include_raw_content": false,

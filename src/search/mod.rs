@@ -871,10 +871,12 @@ pub fn render_markdown(out: &SearchOutcome, query: &str) -> String {
     if out.weak {
         md.push_str("\n*weak results: low cross-engine consensus — treat with care*\n");
     }
+    let source = out.provider.as_deref().unwrap_or("local engine");
     md.push_str(&format!(
-        "\n*{} results in {}ms*\n",
+        "\n*{} results in {}ms via {}*\n",
         out.results.len(),
-        out.elapsed.as_millis()
+        out.elapsed.as_millis(),
+        source
     ));
     md
 }

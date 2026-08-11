@@ -34,6 +34,11 @@ pub async fn search(
         "query": query,
         "numResults": max.min(10),
         "type": "auto",
+        "contents": {
+            "text": {
+                "maxCharacters": 300
+            }
+        }
     });
     if let Some(cat) = category {
         body["category"] = json!(cat);

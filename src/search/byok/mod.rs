@@ -140,6 +140,12 @@ impl ByokSearcher {
 
         let mut attempts = 0;
         let mut last_error = String::new();
+        // Track keys we've already tried this call. Transient
+        // errors (5xx, network) don't change key state, so
+        // pick_key() would return the same key again — infinite
+        // loop without this set.
+        let mut tried: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
 
         loop {
             attempts += 1;
@@ -150,18 +156,38 @@ impl ByokSearcher {
             }
 
             // Pick the next usable (provider, key) pair.
-            let (provider, key) = match self.store.pick_key() {
-                Some(pk) => pk,
-                None => {
-                    return Err(format!("all keys exhausted: {last_error}"));
+            // Skip pairs we've already tried this call.
+            let (provider, key) = loop {
+                match self.store.pick_key() {
+                    Some(pk) => {
+                        if tried.contains(&pk) {
+                            continue;
+                        }
+                        break pk;
+                    }
+                    None => {
+                        return Err(format!("all keys exhausted: {last_error}"));
+                    }
                 }
             };
+            tried.insert((provider.clone(), key.clone()));
 
             // Dispatch to the provider adapter.
             let result = dispatch(&self.client, &provider, &key, query, max, &intent).await;
 
             match result {
                 Ok((hits, ms)) => {
+                    if hits.is_empty() {
+                        // Provider returned 0 results — don't
+                        // return an empty list to the agent.
+                        // Try the next provider, and if all are
+                        // empty, fall back to local search.
+                        last_error = format!("{provider}: empty results");
+                        if std::env::var_os("DONSEEK_DEBUG").is_some() {
+                            eprintln!("[byok] {provider} returned 0 results, trying next");
+                        }
+                        continue;
+                    }
                     let results = to_merged(hits, &provider, max);
                     let report = vec![EngineReport {
                         engine: provider.clone(),

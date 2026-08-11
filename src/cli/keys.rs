@@ -43,7 +43,7 @@ fn cmd_add(args: &[String]) {
         }
     };
     let key = match args.get(4) {
-        Some(k) if !k.is_empty() => k,
+        Some(k) if !k.trim().is_empty() => k.trim().to_string(),
         _ => {
             eprintln!(
                 "{} usage: donsetch keys add <provider> <key>",
@@ -52,6 +52,8 @@ fn cmd_add(args: &[String]) {
             std::process::exit(1);
         }
     };
+
+    let provider = provider.to_lowercase();
 
     if !PROVIDERS.contains(&provider.as_str()) {
         eprintln!(
@@ -66,27 +68,27 @@ fn cmd_add(args: &[String]) {
     let is_new = !cfg.providers.iter().any(|p| p.name == *provider);
     let was_first = cfg.providers.is_empty();
 
-    cfg.add_key(provider, key);
+    cfg.add_key(&provider, &key);
     cfg.save();
 
     if was_first {
         println!(
             "  {} added key to {} (set as default)",
             green("\u{2713}"),
-            bold(provider)
+            bold(&provider)
         );
     } else if is_new {
         println!(
             "  {} added key to {} (stacked — {} providers now configured)",
             green("\u{2713}"),
-            bold(provider),
+            bold(&provider),
             cfg.providers.len()
         );
     } else {
         println!(
             "  {} stacked key onto {} ({} keys total)",
             green("\u{2713}"),
-            bold(provider),
+            bold(&provider),
             cfg.providers
                 .iter()
                 .find(|p| p.name == *provider)
@@ -107,7 +109,7 @@ fn cmd_add(args: &[String]) {
 
 fn cmd_remove(args: &[String]) {
     let provider = match args.get(3) {
-        Some(p) => p,
+        Some(p) => p.to_lowercase(),
         None => {
             eprintln!(
                 "{} usage: donsetch keys remove <provider> [key]",
@@ -119,9 +121,9 @@ fn cmd_remove(args: &[String]) {
     };
 
     let mut cfg = ByokConfig::load();
-    let key = args.get(4).map(|s| s.as_str());
+    let key = args.get(4).map(|s| s.trim());
 
-    let removed = cfg.remove_keys(provider, key);
+    let removed = cfg.remove_keys(&provider, key);
     if !removed {
         eprintln!("  {} no matching key found for {provider}", red("\u{2717}"));
         std::process::exit(1);
@@ -141,14 +143,14 @@ fn cmd_remove(args: &[String]) {
             println!(
                 "  {} removed all keys for {} (provider removed, default={})",
                 green("\u{2713}"),
-                bold(provider),
+                bold(&provider),
                 green(&cfg.default)
             );
         } else {
             println!(
                 "  {} removed all keys for {} — no providers remaining",
                 green("\u{2713}"),
-                bold(provider)
+                bold(&provider)
             );
             println!(
                 "  {} BYOK search disabled — local search is active.",
@@ -159,7 +161,7 @@ fn cmd_remove(args: &[String]) {
         println!(
             "  {} removed key from {} ({} keys remaining)",
             green("\u{2713}"),
-            bold(provider),
+            bold(&provider),
             remaining
         );
     }
@@ -172,7 +174,7 @@ fn cmd_list() {
 
 fn cmd_default(args: &[String]) {
     let provider = match args.get(3) {
-        Some(p) => p,
+        Some(p) => p.to_lowercase(),
         None => {
             eprintln!(
                 "{} usage: donsetch keys default <provider>",
@@ -189,12 +191,12 @@ fn cmd_default(args: &[String]) {
         std::process::exit(1);
     }
 
-    if cfg.set_default(provider) {
+    if cfg.set_default(&provider) {
         cfg.save();
         println!(
             "  {} default provider set to {}",
             green("\u{2713}"),
-            bold(provider)
+            bold(&provider)
         );
     } else {
         eprintln!(
@@ -206,7 +208,7 @@ fn cmd_default(args: &[String]) {
 }
 
 fn cmd_reset(args: &[String]) {
-    let provider = args.get(3).map(|s| s.as_str());
+    let provider = args.get(3).map(|s| s.to_lowercase());
 
     let mut cfg = ByokConfig::load();
     if !cfg.is_configured() {
@@ -215,17 +217,17 @@ fn cmd_reset(args: &[String]) {
     }
 
     // Check provider has keys if specified.
-    if let Some(p) = provider
-        && !cfg.providers.iter().any(|pc| pc.name == p)
+    if let Some(p) = &provider
+        && !cfg.providers.iter().any(|pc| &pc.name == p)
     {
         eprintln!("  {} provider {p} has no keys configured", red("\u{2717}"));
         std::process::exit(1);
     }
 
-    cfg.reset_states(provider);
+    cfg.reset_states(provider.as_deref());
     cfg.save();
 
-    match provider {
+    match &provider {
         Some(p) => println!(
             "  {} reset all key states for {} to active",
             green("\u{2713}"),
