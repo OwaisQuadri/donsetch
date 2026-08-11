@@ -4,6 +4,7 @@
 //! direct) → weighted RRF merge → ranked results with
 //! honest engine reporting.
 
+pub mod byok;
 pub mod egress;
 pub mod engines;
 pub mod intent;
@@ -122,6 +123,8 @@ pub struct SearchOutcome {
     pub report: Vec<EngineReport>,
     pub cached: bool,
     pub elapsed: Duration,
+    /// BYOK provider name (None = local search).
+    pub provider: Option<String>,
 }
 
 impl Searcher {
@@ -225,6 +228,7 @@ impl Searcher {
                         report: Vec::new(),
                         cached: true,
                         elapsed: started.elapsed(),
+                        provider: None,
                     });
                 }
             }
@@ -262,6 +266,7 @@ impl Searcher {
                 report: Vec::new(),
                 cached: true,
                 elapsed: started.elapsed(),
+                provider: None,
             });
         }
 
@@ -534,6 +539,7 @@ impl Searcher {
             report,
             cached: false,
             elapsed: started.elapsed(),
+            provider: None,
         })
     }
 
@@ -880,6 +886,7 @@ pub fn render_meta(out: &SearchOutcome) -> Value {
         "weak": out.weak,
         "cached": out.cached,
         "elapsed_ms": out.elapsed.as_millis() as u64,
+        "provider": out.provider,
         "results": out.results.iter().map(|r| json!({
             "title": r.title,
             "url": r.url,
@@ -890,7 +897,7 @@ pub fn render_meta(out: &SearchOutcome) -> Value {
         })).collect::<Vec<_>>(),
         "engines": out.report.iter().map(|r| json!({
             "engine": r.engine, "status": r.status, "hits": r.hits, "ms": r.ms,
-            "egress": if r.egress == "direct" { "direct".to_string() } else { "proxy".to_string() },
+            "egress": if r.egress == "direct" { "direct".to_string() } else if r.egress == "byok" { "byok".to_string() } else { "proxy".to_string() },
         })).collect::<Vec<_>>(),
     })
 }

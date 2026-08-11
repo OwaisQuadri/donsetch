@@ -16,6 +16,7 @@ use crate::ghost::cache::{CookieRecord, GhostState, RouteDecision};
 use crate::ghost::manager::GhostManager;
 use crate::ghost::ops;
 use crate::profile::BrowserProfile;
+use crate::search::byok::ByokSearcher;
 use crate::search::egress::EgressPool;
 use crate::search::intent::Intent;
 use crate::search::{self, Searcher};
@@ -29,6 +30,7 @@ pub struct Daemon {
     ghost_mgr: Arc<GhostManager>,
     state: Mutex<GhostState>,
     searcher: Arc<Searcher>,
+    byok: ByokSearcher,
     crawler: Crawler,
 }
 
@@ -49,6 +51,7 @@ impl Daemon {
             ghost_mgr: GhostManager::new().await,
             state: Mutex::new(GhostState::load()),
             searcher,
+            byok: ByokSearcher::new(),
             crawler,
         })
     }
@@ -851,6 +854,31 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         Some("entity") => Some(Intent::Entity),
         _ => None,
     };
+
+    // BYOK: if external search providers are configured,
+    // try them first. The provider handles everything (IP,
+    // rate limits, search). Falls back to local search if
+    // all providers are exhausted (rate-limited, credits
+    // depleted, invalid keys).
+    if daemon.byok.is_configured() {
+        match daemon.byok.search(&query, max, intent).await {
+            Ok(out) => {
+                let md = search::render_markdown(&out, &query);
+                let meta = search::render_meta(&out);
+                return json!({
+                    "content": [{ "type": "text", "text": md }],
+                    "structuredContent": meta,
+                });
+            }
+            Err(e) => {
+                if std::env::var_os("DONSEEK_DEBUG").is_some() {
+                    eprintln!("[byok] all providers exhausted, falling back to local: {e}");
+                }
+                // Fall through to local search.
+            }
+        }
+    }
+
     match daemon.searcher.search(&query, max, intent).await {
         Ok(out) => {
             let md = search::render_markdown(&out, &query);

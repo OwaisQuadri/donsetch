@@ -343,6 +343,41 @@ async fn main() {
                 i += 1;
             }
             let query = terms.join(" ");
+
+            // BYOK: try external providers first, fall back to local.
+            let byok = search::byok::ByokSearcher::new();
+            if byok.is_configured() {
+                match byok.search(&query, max, None).await {
+                    Ok(out) => {
+                        print!("{}", search::render_markdown(&out, &query));
+                        eprintln!(
+                            "\u{2500}\u{2500} provider={} engines: {}",
+                            out.provider.as_deref().unwrap_or("local"),
+                            out.report
+                                .iter()
+                                .map(|r| format!(
+                                    "{}:{}({} hits, {}ms)",
+                                    r.engine, r.status, r.hits, r.ms
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                        eprintln!(
+                            "\u{2500}\u{2500} intent={:?} weak={} cached={} t={:.1}s",
+                            out.intent,
+                            out.weak,
+                            out.cached,
+                            out.elapsed.as_secs_f64()
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        eprintln!("[byok] all providers exhausted: {e}");
+                        eprintln!("[byok] falling back to local search...");
+                    }
+                }
+            }
+
             let f = Fetcher::new(BrowserProfile::host_default()).expect("fetcher");
             let searcher = search::Searcher::new(f, search::egress::EgressPool::from_env());
             match searcher.search(&query, max, None).await {
@@ -512,6 +547,9 @@ async fn main() {
         }
         "proxy" => {
             cli::proxy::run(&args).await;
+        }
+        "keys" => {
+            cli::keys::run(&args);
         }
         "mcp" => {
             if let Err(e) = mcp::server::run().await {
@@ -694,6 +732,7 @@ async fn main() {
             eprintln!("  -u, --update     Self-update from GitHub Releases");
             eprintln!("      --doctor     Health check with auto-fix");
             eprintln!("      --rollback   Revert to previous version");
+            eprintln!("      keys         BYOK search provider key management");
             eprintln!("      mcp          Start MCP server (JSON-RPC on stdio)");
         }
     }

@@ -28,7 +28,7 @@ unicode-bidi = "0.3"
 # OCR tier (Tier B) — PP-OCR via ONNX Runtime, lazy model cache.
 oar-ocr = { version = "0.9", default-features = false, features = ["download-binaries", "simd"], optional = true }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 sha2 = "0.10"
 # CLI subcommands: self-update, doctor.
 tar = "0.4"
@@ -40,8 +40,8 @@ ndarray = { version = "0.17", optional = true }
 
 [features]
 default = ["ocr", "rerank"]
-ocr = ["dep:oar-ocr", "dep:image", "dep:reqwest"]
-rerank = ["dep:ort", "dep:tokenizers", "dep:ndarray", "dep:reqwest"]
+ocr = ["dep:oar-ocr", "dep:image", "reqwest/blocking"]
+rerank = ["dep:ort", "dep:tokenizers", "dep:ndarray", "reqwest/blocking"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_Foundation", "Win32_System_Console"] }
