@@ -1475,3 +1475,205 @@ fn jsonld_unicode_escape_decoded() {
     // Should decode to actual Chinese characters, not escape sequences.
     assert_eq!(meta.byline.as_deref(), Some("维基媒体"));
 }
+
+// ════════════════════════════════════════════════════════════
+// 24. TABLE WITHOUT <th> — FIRST ROW PROMOTED TO HEADERS
+// ════════════════════════════════════════════════════════════
+
+#[test]
+fn table_without_th_promotes_first_row() {
+    let html = r#"<html><body><article>
+<table>
+<tr><td>Name</td><td>Value</td><td>Description</td></tr>
+<tr><td>Rust</td><td>1.75</td><td>Systems language</td></tr>
+<tr><td>Go</td><td>1.22</td><td>Simple concurrency</td></tr>
+</table>
+</article></body></html>"#;
+    let r = extract_html(html);
+    // First row should be headers, not empty | | |.
+    assert!(r.markdown.contains("| Name | Value |"));
+    assert!(r.markdown.contains("| Rust | 1.75 |"));
+    // Should NOT have empty header row.
+    assert!(!r.markdown.contains("|  |  |"));
+}
+
+// ════════════════════════════════════════════════════════════
+// 25. TABLE CELL TRUNCATION — CHAR-BASED (CJK)
+// ════════════════════════════════════════════════════════════
+
+#[test]
+fn table_cjk_cell_not_over_truncated() {
+    let long_cjk: String = "测试".repeat(80);
+    let html = format!(
+        r#"<html><body><article>
+<table>
+<tr><th>Column</th></tr>
+<tr><td>{long_cjk}</td></tr>
+</table>
+</article></body></html>"#
+    );
+    let r = extract_html(&html);
+    let cjk_count = r
+        .markdown
+        .chars()
+        .filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c))
+        .count();
+    assert!(
+        cjk_count >= 100,
+        "CJK chars in table: {cjk_count}, expected >= 100"
+    );
+}
+
+// ════════════════════════════════════════════════════════════
+// 26. CODE BLOCK BLANK LINE COLLAPSE
+// ════════════════════════════════════════════════════════════
+
+#[test]
+fn code_block_blank_lines_collapsed() {
+    let html = r#"<html><body><article>
+<pre><code class="language-rust">fn main() {
+    println!("Hello");
+
+
+
+    println!("World");
+}</code></pre>
+</article></body></html>"#;
+    let r = extract_html(html);
+    let max_consecutive = r
+        .markdown
+        .lines()
+        .fold((0, 0), |(max, current), line| {
+            if line.trim().is_empty() {
+                (max.max(current + 1), current + 1)
+            } else {
+                (max, 0)
+            }
+        })
+        .0;
+    assert!(
+        max_consecutive <= 1,
+        "Found {max_consecutive} consecutive blank lines, expected <= 1"
+    );
+}
+
+// ════════════════════════════════════════════════════════════
+// 27. <details>/<summary> HANDLING
+// ════════════════════════════════════════════════════════════
+
+#[test]
+fn details_summary_as_heading() {
+    let html = r#"<html><body><article>
+<h1>API Reference</h1>
+<p>Introduction to the API.</p>
+<details>
+<summary>Advanced Configuration</summary>
+<p>Set the timeout to 30 seconds for production use.</p>
+</details>
+</article></body></html>"#;
+    let r = extract_html(html);
+    assert!(
+        r.markdown.contains("### Advanced Configuration"),
+        "Expected ### Advanced Configuration, got: {}",
+        r.markdown
+    );
+    assert!(r.markdown.contains("timeout to 30 seconds"));
+}
+
+// ════════════════════════════════════════════════════════════
+// 28. CODE BLOCK LANGUAGE DETECTION — MULTIPLE PATTERNS
+// ════════════════════════════════════════════════════════════
+
+#[test]
+fn code_lang_detection_patterns() {
+    let html1 = r#"<html><body><article>
+<pre><code class="language-python">print(1)</code></pre>
+</article></body></html>"#;
+    assert!(extract_html(html1).markdown.contains("```python"));
+
+    let html2 = r#"<html><body><article>
+<pre><code class="lang-go">fmt.Println(1)</code></pre>
+</article></body></html>"#;
+    assert!(extract_html(html2).markdown.contains("```go"));
+
+    let html3 = r#"<html><body><article>
+<pre><code class="javascript">console.log(1)</code></pre>
+</article></body></html>"#;
+    assert!(extract_html(html3).markdown.contains("```javascript"));
+}
+
+// ════════════════════════════════════════════════════════════
+// 29. PAGINATE START — RESUMES AT BLOCK BOUNDARY
+// ════════════════════════════════════════════════════════════
+
+#[test]
+fn paginate_resume_starts_at_block_boundary() {
+    let mut html = String::from("<html><body><article><h1>Page</h1>");
+    for i in 0..50 {
+        html.push_str(&format!(
+            "<p>Paragraph {i}: Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod.</p>"
+        ));
+    }
+    html.push_str("</article></body></html>");
+    let r1 = extract_html_opts(
+        &html,
+        &ExtractOptions {
+            max_chars: Some(800),
+            ..Default::default()
+        },
+    );
+    let offset = r1.next_offset.expect("should have next offset");
+    let r2 = extract_html_opts(
+        &html,
+        &ExtractOptions {
+            max_chars: Some(800),
+            offset,
+            ..Default::default()
+        },
+    );
+    let first_content = r2
+        .markdown
+        .lines()
+        .find(|l| !l.trim().is_empty() && !l.starts_with("https://") && !l.starts_with("*["))
+        .unwrap_or("");
+    assert!(
+        first_content.is_empty()
+            || first_content.starts_with('#')
+            || first_content.starts_with("Paragraph")
+            || first_content.starts_with("Lorem")
+            || first_content
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_uppercase()),
+        "Page 2 starts with: '{first_content}'"
+    );
+}
+
+// ════════════════════════════════════════════════════════════
+// 30. DESCRIPTION CAP — 500 CHARS MAX
+// ════════════════════════════════════════════════════════════
+
+#[test]
+fn description_capped_at_500() {
+    let long_desc = "A".repeat(1000);
+    let html = format!(
+        r#"<html><head>
+<meta name="description" content="{long_desc}">
+</head><body><article>
+<h1>Test</h1>
+<p>Content paragraph with sufficient text for extraction.</p>
+</article></body></html>"#
+    );
+    let r = extract_html(&html);
+    let desc_line = r
+        .markdown
+        .lines()
+        .find(|l| l.starts_with("> "))
+        .unwrap_or("");
+    let desc = desc_line.strip_prefix("> ").unwrap_or("");
+    assert!(
+        desc.len() <= 500,
+        "Description is {} chars, expected <= 500",
+        desc.len()
+    );
+}
