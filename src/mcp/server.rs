@@ -860,6 +860,10 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // rate limits, search). Falls back to local search if
     // all providers are exhausted (rate-limited, credits
     // depleted, invalid keys).
+    //
+    // Reload from disk first — picks up keys added/removed
+    // via CLI while the daemon was running.
+    daemon.byok.reload();
     if daemon.byok.is_configured() {
         match daemon.byok.search(&query, max, intent).await {
             Ok(out) => {

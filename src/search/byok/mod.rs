@@ -155,19 +155,12 @@ impl ByokSearcher {
                 ));
             }
 
-            // Pick the next usable (provider, key) pair.
-            // Skip pairs we've already tried this call.
-            let (provider, key) = loop {
-                match self.store.pick_key() {
-                    Some(pk) => {
-                        if tried.contains(&pk) {
-                            continue;
-                        }
-                        break pk;
-                    }
-                    None => {
-                        return Err(format!("all keys exhausted: {last_error}"));
-                    }
+            // Pick the next usable (provider, key) pair,
+            // skipping any we've already tried this call.
+            let (provider, key) = match self.store.pick_key_skipping(&tried) {
+                Some(pk) => pk,
+                None => {
+                    return Err(format!("all keys exhausted: {last_error}"));
                 }
             };
             tried.insert((provider.clone(), key.clone()));
@@ -255,9 +248,14 @@ async fn dispatch(
 
 /// Convert provider hits to the Merged format used by the
 /// local search pipeline. Each hit gets a single source
-/// (the provider name) with its score.
+/// (the provider name) with its score. Deduplicates by
+/// normalized URL and filters empty titles/URLs.
 fn to_merged(hits: Vec<SearchHit>, provider: &str, max: usize) -> Vec<Merged> {
+    use crate::search::rank::norm_key;
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     hits.into_iter()
+        .filter(|h| !h.url.is_empty() && !h.title.trim().is_empty())
+        .filter(|h| seen.insert(norm_key(&h.url)))
         .take(max)
         .enumerate()
         .map(|(i, h)| Merged {
@@ -310,6 +308,62 @@ mod tests {
         assert!((merged[0].score - 0.9).abs() < 0.01);
         assert_eq!(merged[0].sources.len(), 1);
         assert_eq!(merged[0].sources[0].0, "tavily");
+    }
+
+    #[test]
+    fn to_merged_deduplicates_urls() {
+        let hits = vec![
+            SearchHit {
+                title: "A".into(),
+                url: "https://a.com".into(),
+                snippet: "s".into(),
+                score: 0.9,
+            },
+            SearchHit {
+                title: "A2".into(),
+                url: "https://www.a.com/".into(),
+                snippet: "s".into(),
+                score: 0.8,
+            },
+            SearchHit {
+                title: "B".into(),
+                url: "https://b.com".into(),
+                snippet: "s".into(),
+                score: 0.5,
+            },
+        ];
+        // a.com and www.a.com/ normalize to the same key
+        let merged = to_merged(hits, "tavily", 10);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].title, "A");
+        assert_eq!(merged[1].title, "B");
+    }
+
+    #[test]
+    fn to_merged_filters_empty_titles() {
+        let hits = vec![
+            SearchHit {
+                title: "".into(),
+                url: "https://a.com".into(),
+                snippet: "s".into(),
+                score: 0.9,
+            },
+            SearchHit {
+                title: "  \n".into(),
+                url: "https://b.com".into(),
+                snippet: "s".into(),
+                score: 0.8,
+            },
+            SearchHit {
+                title: "Real".into(),
+                url: "https://c.com".into(),
+                snippet: "s".into(),
+                score: 0.5,
+            },
+        ];
+        let merged = to_merged(hits, "exa", 10);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].title, "Real");
     }
 
     #[test]

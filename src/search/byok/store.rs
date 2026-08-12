@@ -210,11 +210,65 @@ impl ByokConfig {
         }
     }
 
+    /// Pick the next usable (provider, key) pair, skipping
+    /// any pairs in the `skip` set. This is used to avoid
+    /// retrying keys that had transient errors (5xx, network)
+    /// in the same search call — without it, pick_key() would
+    /// return the same active key again, infinite loop.
+    pub fn pick_key_skipping(
+        &mut self,
+        skip: &std::collections::HashSet<(String, String)>,
+    ) -> Option<(String, String)> {
+        // Build the priority order: default first, then rest.
+        let mut order: Vec<String> = Vec::with_capacity(self.providers.len());
+        if !self.default.is_empty() {
+            order.push(self.default.clone());
+        }
+        for p in &self.providers {
+            if p.name != self.default {
+                order.push(p.name.clone());
+            }
+        }
+
+        for name in &order {
+            let Some(p) = self.providers.iter_mut().find(|p| &p.name == name) else {
+                continue;
+            };
+            for k in &mut p.keys {
+                match k.state {
+                    KeyState::Active => {
+                        let pair = (p.name.clone(), k.key.clone());
+                        if skip.contains(&pair) {
+                            continue;
+                        }
+                        return Some(pair);
+                    }
+                    KeyState::RateLimited => {
+                        // Auto-recover if cooldown passed.
+                        let elapsed = now_ts().saturating_sub(k.ts);
+                        if Duration::from_secs(elapsed) >= RATE_LIMIT_COOLDOWN {
+                            k.state = KeyState::Active;
+                            k.ts = now_ts();
+                            let pair = (p.name.clone(), k.key.clone());
+                            if skip.contains(&pair) {
+                                continue;
+                            }
+                            return Some(pair);
+                        }
+                    }
+                    KeyState::CreditDepleted | KeyState::Invalid => {}
+                }
+            }
+        }
+        None
+    }
+
     /// Pick the next usable (provider, key) pair.
     /// Tries the default provider first, then others in order.
     /// of configuration. Within a provider, tries keys in order.
     /// Auto-recovers rate-limited keys whose cooldown has passed.
     /// Returns None if no usable key exists.
+    #[allow(dead_code)]
     pub fn pick_key(&mut self) -> Option<(String, String)> {
         // Build the priority order: default first, then rest.
         let mut order: Vec<String> = Vec::with_capacity(self.providers.len());
@@ -283,8 +337,11 @@ impl ByokStore {
         self.config.lock().unwrap().is_configured()
     }
 
-    pub fn pick_key(&self) -> Option<(String, String)> {
-        self.config.lock().unwrap().pick_key()
+    pub fn pick_key_skipping(
+        &self,
+        skip: &std::collections::HashSet<(String, String)>,
+    ) -> Option<(String, String)> {
+        self.config.lock().unwrap().pick_key_skipping(skip)
     }
 
     pub fn update_key_state(&self, provider: &str, key: &str, state: KeyState) {
@@ -376,6 +433,26 @@ pub fn render_list(cfg: &ByokConfig) {
         cli::red("\u{2717}"),
     );
     println!("  {}  {}", cli::dim("default:"), cli::green(&cfg.default));
+
+    // Warn if no usable keys remain — search will fall back
+    // to the local keyless engine.
+    let any_active = cfg
+        .providers
+        .iter()
+        .flat_map(|p| &p.keys)
+        .any(|k| matches!(k.state, KeyState::Active | KeyState::RateLimited));
+    if !any_active {
+        println!();
+        println!(
+            "  {} all keys are dead — search falls back to local engine",
+            cli::yellow("\u{26A0}")
+        );
+        println!(
+            "     run {} to revive them",
+            cli::bold("donsetch keys reset")
+        );
+    }
+
     cli::print_footer();
 }
 
