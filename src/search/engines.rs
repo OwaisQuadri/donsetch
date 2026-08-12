@@ -78,6 +78,12 @@ fn decode_bing(href: &str) -> String {
             return decoded;
         }
     }
+    // If this is a bing.com/ck/a stub we couldn't decode,
+    // return empty — the is_serp_url filter and the
+    // starts_with("http") check will drop it.
+    if href.contains("bing.com/ck/a") {
+        return String::new();
+    }
     href.to_string()
 }
 
@@ -108,9 +114,40 @@ fn base64url_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
+/// Check if a URL is a search engine results page (SERP).
+/// These should never appear as search results — they leak
+/// through parsers when redirect decoding fails or when
+/// broad selectors match pagination/header links.
+fn is_serp_url(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    let serp_patterns = [
+        // General SERPs
+        "search.yahoo.com/search",
+        "r.search.yahoo.com/",
+        "search.yahoo.com/yhs/search",
+        "www.google.com/search",
+        "google.com/search",
+        "www.bing.com/search",
+        "bing.com/search",
+        "www.bing.com/ck/a",
+        "bing.com/ck/a",
+        "search.brave.com/search",
+        "lite.duckduckgo.com/",
+        "html.duckduckgo.com/",
+        "duckduckgo.com/",
+        "www.mojeek.com/search",
+        "mojeek.com/search",
+        // Vertical SERPs
+        "www.google.com/scholar",
+        "scholar.google.com/",
+        "news.google.com/search",
+    ];
+    serp_patterns.iter().any(|p| lower.contains(p))
+}
+
 pub fn parse(engine: &str, html: &str) -> Vec<Hit> {
     let doc = Html::parse_document(html);
-    let hits = match engine {
+    let mut hits = match engine {
         "brave" => parse_brave(&doc),
         "google" => parse_google(&doc),
         "bing" => parse_bing(&doc),
@@ -124,6 +161,10 @@ pub fn parse(engine: &str, html: &str) -> Vec<Hit> {
         "yahoo" => parse_yahoo(&doc),
         _ => Vec::new(),
     };
+    // Filter out SERP URLs that leaked through parsers (e.g.
+    // search.yahoo.com/search pagination links, undecoded
+    // r.search.yahoo.com redirects, bing.com/ck/a stubs).
+    hits.retain(|h| !is_serp_url(&h.url));
     if hits.is_empty() && std::env::var_os("DONSEEK_DEBUG").is_some() {
         let dump = format!("/tmp/donseek_debug_{engine}.html");
         let _ = std::fs::write(&dump, html);
@@ -432,31 +473,49 @@ fn parse_mojeek(doc: &Html) -> Vec<Hit> {
 /// or r.search.yahoo.com/..._url=REAL_URL. Decode to the
 /// real URL — consensus matching depends on every engine
 /// reporting the SAME url.
+///
+/// Yahoo embeds tracking parameters (/RK=, /RS=, /RV=) inside
+/// the URL-encoded RU= value, so they survive urlencoding_decode
+/// as path suffixes on the real URL. We strip them.
 fn decode_yahoo(href: &str) -> String {
     if !href.contains("r.search.yahoo.com") && !href.contains("search.yahoo.com/search") {
         return href.to_string();
     }
-    // Try RU= parameter (most common).
+    // Try RU= parameter (most common). Yahoo uses ; as a
+    // separator in redirect URLs, so strip at ; or &.
     if let Some((_, ru)) = href.split_once("RU=") {
-        let raw = ru.split('&').next().unwrap_or(ru);
-        // Strip trailing /RV= or similar path components.
-        let raw = raw.split('/').next().unwrap_or(raw);
+        let raw = ru.split(['&', ';']).next().unwrap_or(ru);
         if let Ok(decoded) = urlencoding_decode(raw)
             && decoded.starts_with("http")
         {
-            return decoded;
+            return strip_yahoo_tracking(&decoded);
         }
     }
     // Try _url= parameter.
     if let Some((_, url)) = href.split_once("_url=") {
-        let raw = url.split('&').next().unwrap_or(url);
+        let raw = url.split(['&', ';']).next().unwrap_or(url);
         if let Ok(decoded) = urlencoding_decode(raw)
             && decoded.starts_with("http")
         {
-            return decoded;
+            return strip_yahoo_tracking(&decoded);
         }
     }
-    href.to_string()
+    // Can't decode — return empty so the parser's `starts_with("http")`
+    // check filters it out. Previously this returned the raw Yahoo
+    // SERP URL, which leaked search.yahoo.com/search?p=... as a result.
+    String::new()
+}
+
+/// Strip Yahoo tracking suffixes (/RK=, /RS=, /RV=) that
+/// Yahoo embeds inside the URL-encoded RU= value. These are
+/// not part of the real URL and would break consensus matching.
+fn strip_yahoo_tracking(url: &str) -> String {
+    for marker in ["/RK=", "/RS=", "/RV="] {
+        if let Some(idx) = url.find(marker) {
+            return url[..idx].to_string();
+        }
+    }
+    url.to_string()
 }
 
 fn parse_yahoo(doc: &Html) -> Vec<Hit> {
@@ -515,5 +574,96 @@ pub fn serp_url(engine: &str, query: &str) -> Option<String> {
         "mojeek" => Some(format!("https://www.mojeek.com/search?q={q}")),
         "yahoo" => Some(format!("https://search.yahoo.com/search?p={q}")),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serp_url_detection() {
+        assert!(is_serp_url(
+            "https://search.yahoo.com/search?p=rust+programming"
+        ));
+        assert!(is_serp_url("https://r.search.yahoo.com/RY=abc/RV=def"));
+        assert!(is_serp_url("https://www.google.com/search?q=rust&hl=en"));
+        assert!(is_serp_url("https://www.bing.com/search?q=rust"));
+        assert!(is_serp_url("https://search.brave.com/search?q=rust"));
+        assert!(is_serp_url("https://lite.duckduckgo.com/lite/?q=rust"));
+        assert!(is_serp_url("https://www.mojeek.com/search?q=rust"));
+    }
+
+    #[test]
+    fn real_urls_are_not_serp() {
+        assert!(!is_serp_url(
+            "https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html"
+        ));
+        assert!(!is_serp_url(
+            "https://developer.mozilla.org/en-US/docs/Web/JavaScript"
+        ));
+        assert!(!is_serp_url("https://github.com/rust-lang/rust"));
+        assert!(!is_serp_url(
+            "https://stackoverflow.com/questions/2899/what-is-ownership"
+        ));
+        assert!(!is_serp_url(
+            "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+        ));
+    }
+
+    #[test]
+    fn yahoo_decode_failure_returns_empty() {
+        // A Yahoo SERP URL with no decodable redirect → empty,
+        // not the raw SERP URL.
+        assert_eq!(decode_yahoo("https://search.yahoo.com/search?p=rust"), "");
+        // A real Yahoo redirect with RU= parameter → decoded.
+        let decoded =
+            decode_yahoo("https://r.search.yahoo.com/;_ylt=Awr;RU=https://example.com/page;RV=abc");
+        assert_eq!(decoded, "https://example.com/page");
+    }
+
+    #[test]
+    fn yahoo_tracking_stripped() {
+        // Yahoo embeds /RK=2/RS=... inside the URL-encoded RU= value.
+        // These tracking suffixes must be stripped for clean URLs.
+        let decoded = decode_yahoo(
+            "https://r.search.yahoo.com/;RU=https%3A%2F%2Fexample.com%2Fpage%2FRK%3D2%2FRS%3Dabc",
+        );
+        assert_eq!(decoded, "https://example.com/page");
+    }
+
+    #[test]
+    fn bing_decode_failure_returns_empty() {
+        // A Bing ck/a stub we can't decode → empty.
+        assert_eq!(
+            decode_bing("https://www.bing.com/ck/a?abcdef&u=a1invalid"),
+            ""
+        );
+        // A non-Bing URL passes through unchanged.
+        assert_eq!(
+            decode_bing("https://example.com/page"),
+            "https://example.com/page"
+        );
+    }
+
+    #[test]
+    fn parse_filters_serp_urls() {
+        // Yahoo HTML with a SERP self-link mixed in with real results.
+        let html = r#"
+        <html><body>
+        <div class="algo">
+          <h3 class="title"><a href="https://r.search.yahoo.com/;RU=https://doc.rust-lang.org/book;RV=1">The Rust Book</a></h3>
+          <div class="compText">A guide to Rust programming</div>
+        </div>
+        <div class="algo">
+          <h3 class="title"><a href="https://search.yahoo.com/search?p=rust+ownership">More results for rust ownership</a></h3>
+          <div class="compText">Search Yahoo</div>
+        </div>
+        </body></html>
+        "#;
+        let hits = parse("yahoo", html);
+        assert_eq!(hits.len(), 1, "SERP URL should be filtered, got {hits:?}");
+        assert_eq!(hits[0].url, "https://doc.rust-lang.org/book");
+        assert_eq!(hits[0].title, "The Rust Book");
     }
 }

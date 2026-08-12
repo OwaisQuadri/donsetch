@@ -74,6 +74,47 @@ fn web_scheme(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
 }
 
+/// Known locale codes that appear as the first path segment on
+/// multi-language sites (MDN, Wikipedia, React docs, etc.).
+/// When two URLs differ ONLY in this prefix, they are translations
+/// of the same content — fetching both wastes crawl budget.
+const LOCALE_PREFIXES: &[&str] = &[
+    // ISO 639-1 two-letter codes
+    "en", "de", "es", "fr", "ja", "ko", "ru", "it", "nl", "pl", "tr", "ar", "hi", "th", "vi", "id",
+    "pt", "zh", "cs", "el", "he", "fa", "sv", "da", "fi", "no", "hu", "uk", "ro", "sk", "sl", "bg",
+    "hr", "sr", "lt", "lv", "et", "ms", "bn", "ta", "te", "mr", "gu", "kn", "ml", "pa",
+    // Common regional variants (BCP-47)
+    "en-us", "en-gb", "en-au", "en-ca", "en-in", "en-nz", "en-za", "en-sg", "zh-cn", "zh-tw",
+    "zh-hk", "zh-sg", "pt-br", "pt-pt", "fr-ca", "fr-fr", "es-es", "es-mx", "es-ar", "es-co",
+    "es-cl", "de-at", "de-ch", "nl-be", "nl-nl", "sv-se", "da-dk", "nn-no", "nb-no", "fi-fi",
+    "ru-ru", "pl-pl", "it-it", "tr-tr", "ar-sa", "ar-eg", "ko-kr", "ja-jp", "hi-in", "id-id",
+    "vi-vn", "th-th", "ms-my",
+];
+
+/// Extract the locale prefix (if any) from a URL path and return
+/// the locale-stripped canonical path. Returns (locale, rest).
+///   `/en-US/docs/Web/JS`  → ("en-US", "/docs/Web/JS")
+///   `/docs/Web/JS`         → (None,     "/docs/Web/JS")
+///   `/api/v1`              → (None,     "/api/v1")
+pub fn locale_split(path: &str) -> (Option<&str>, &str) {
+    let trimmed = path.strip_prefix('/').unwrap_or(path);
+    let first = trimmed.split('/').next().unwrap_or("");
+    if LOCALE_PREFIXES.contains(&first.to_lowercase().as_str()) {
+        let rest = &trimmed[first.len()..];
+        (Some(first), rest)
+    } else {
+        (None, path)
+    }
+}
+
+/// Locale-canonical key for cross-locale dedup. Two URLs with
+/// different locale prefixes but the same remainder are
+/// translations of the same page.
+pub fn locale_canonical(path: &str) -> String {
+    let (_, rest) = locale_split(path);
+    rest.to_lowercase()
+}
+
 /// Normalize a URL for frontier dedup.
 ///
 /// - lowercase host, strip default ports
@@ -355,5 +396,45 @@ mod tests {
         q.push(u1, 1.0, 0);
         q.push(u2, 5.0, 0);
         assert!(q.pop().unwrap().url.ends_with("/b"));
+    }
+
+    #[test]
+    fn locale_split_detects_known_locale() {
+        assert_eq!(
+            locale_split("/en-US/docs/Web/JS"),
+            (Some("en-US"), "/docs/Web/JS")
+        );
+        assert_eq!(
+            locale_split("/de/docs/Web/JS"),
+            (Some("de"), "/docs/Web/JS")
+        );
+        assert_eq!(
+            locale_split("/zh-CN/docs/Web/JS"),
+            (Some("zh-CN"), "/docs/Web/JS")
+        );
+    }
+
+    #[test]
+    fn locale_split_none_for_non_locale() {
+        assert_eq!(locale_split("/api/v1/users"), (None, "/api/v1/users"));
+        assert_eq!(locale_split("/docs/guide"), (None, "/docs/guide"));
+        assert_eq!(locale_split("/"), (None, "/"));
+    }
+
+    #[test]
+    fn locale_canonical_strips_locale_prefix() {
+        assert_eq!(locale_canonical("/en-US/docs/Web/JS"), "/docs/web/js");
+        assert_eq!(locale_canonical("/de/docs/Web/JS"), "/docs/web/js");
+        assert_eq!(locale_canonical("/docs/Web/JS"), "/docs/web/js");
+        assert_eq!(locale_canonical("/api/v1"), "/api/v1");
+    }
+
+    #[test]
+    fn locale_canonical_makes_translations_dedup() {
+        let en = locale_canonical("/en-US/docs/Web/JavaScript/Array/map");
+        let de = locale_canonical("/de/docs/Web/JavaScript/Array/map");
+        let fr = locale_canonical("/fr/docs/Web/JavaScript/Array/map");
+        assert_eq!(en, de);
+        assert_eq!(en, fr);
     }
 }

@@ -273,6 +273,8 @@ impl Crawler {
             // content at the front of the crawl budget.
             entries.sort_by(|a, b| b.lastmod.cmp(&a.lastmod));
             sitemap_entries = entries;
+            let mut map_locales: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             for e in &sitemap_entries {
                 if map.len() >= opts.map_cap {
                     break;
@@ -289,6 +291,11 @@ impl Crawler {
                         if s <= 0.0 {
                             continue;
                         }
+                    }
+                    // Dedup translated variants in the map.
+                    let lcanon = frontier::locale_canonical(u.path());
+                    if !map_locales.insert(lcanon) {
+                        continue;
                     }
                     map.push(e.loc.clone());
                 }
@@ -343,12 +350,21 @@ impl Crawler {
         } else {
             let _ = queue.push(seed_url.clone(), 10.0, 0);
             // Sitemap entries seed frontier at depth 1.
+            // Dedup by locale-canonical path: don't queue
+            // multiple language variants of the same page
+            // (de/, es/, fr/ copies waste crawl budget).
+            let mut seeded_locales: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             for e in &sitemap_entries {
                 if let Ok(u) = Url::parse(&e.loc)
                     && host_ok(&u)
                     && scope_allowed(u.path(), &opts.include_paths, &opts.exclude_paths)
                     && (!opts.respect_robots || robots.allowed(u.path()))
                 {
+                    let lcanon = frontier::locale_canonical(u.path());
+                    if !seeded_locales.insert(lcanon) {
+                        continue; // Another variant already queued
+                    }
                     let s = score::score_candidate("", u.path(), opts.focus.as_deref());
                     queue.push(u, s, 1);
                 }
@@ -375,8 +391,16 @@ impl Crawler {
         let skipped: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let filtered_out = Arc::new(AtomicUsize::new(0));
         let dup_sigs: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
+        // Locale-canonical paths of fetched pages — prevents
+        // crawling translated variants (de/, es/, fr/ copies).
+        let locale_seen: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let chars_total = Arc::new(AtomicUsize::new(total_chars));
         let pages_done = Arc::new(AtomicUsize::new(fetched_pages));
+        // Safety valve: counts ALL fetches (incl low-quality,
+        // duplicates, out-of-scope). Prevents infinite loops on
+        // sites full of junk when low-quality pages don't count
+        // against the quality budget.
+        let total_fetched = Arc::new(AtomicUsize::new(0));
         let stop_flag: Arc<Mutex<Option<StopReason>>> = Arc::new(Mutex::new(None));
         let deadline_at = started + opts.deadline;
         let focus = Arc::new(opts.focus.clone());
@@ -389,8 +413,10 @@ impl Crawler {
             let skipped = Arc::clone(&skipped);
             let filtered_out = Arc::clone(&filtered_out);
             let dup_sigs = Arc::clone(&dup_sigs);
+            let locale_seen = Arc::clone(&locale_seen);
             let chars_total = Arc::clone(&chars_total);
             let pages_done = Arc::clone(&pages_done);
+            let total_fetched = Arc::clone(&total_fetched);
             let stop_flag = Arc::clone(&stop_flag);
             let focus = Arc::clone(&focus);
             let fetch = self.fetch.clone();
@@ -429,6 +455,16 @@ impl Crawler {
                         let mut s = stop_flag.lock().unwrap();
                         if s.is_none() {
                             *s = Some(StopReason::CharBudget);
+                        }
+                        break 'work;
+                    }
+                    // Safety valve: stop if we've fetched 3x max_pages
+                    // without finding enough quality content. Prevents
+                    // infinite loops on sites full of low-quality pages.
+                    if total_fetched.load(Ordering::SeqCst) >= max_pages * 3 {
+                        let mut s = stop_flag.lock().unwrap();
+                        if s.is_none() {
+                            *s = Some(StopReason::MaxPages);
                         }
                         break 'work;
                     }
@@ -489,6 +525,19 @@ impl Crawler {
                         filtered_out.fetch_add(1, Ordering::Relaxed);
                         continue 'work;
                     }
+                    // Locale dedup: skip translated variants of
+                    // already-fetched pages. The first variant
+                    // fetched claims the canonical path; all other
+                    // language versions (de/, es/, fr/, zh-CN/...)
+                    // are blocked. The seed is exempt — it's the
+                    // entry point and always fetched.
+                    if !is_seed {
+                        let lcanon = frontier::locale_canonical(parsed.path());
+                        if locale_seen.lock().unwrap().contains(&lcanon) {
+                            filtered_out.fetch_add(1, Ordering::Relaxed);
+                            continue 'work;
+                        }
+                    }
 
                     // ── Governor-paced fetch ──
                     // Workers aren't lane-pinned: whoever's
@@ -548,6 +597,9 @@ impl Crawler {
                         skipped.lock().unwrap().push((item.url.clone(), why));
                         continue 'work;
                     }
+                    // Count every successful fetch (safety valve
+                    // against sites full of low-quality pages).
+                    total_fetched.fetch_add(1, Ordering::SeqCst);
 
                     // ── Extract with DonSift ──
                     let mut eo = ExtractOptions::default();
@@ -570,6 +622,14 @@ impl Crawler {
                         }
                     };
                     let md = r.markdown;
+
+                    // Claim the locale-canonical path: translated
+                    // variants of this page (de/, es/, fr/, ...) are
+                    // now blocked from the crawl budget.
+                    {
+                        let lcanon = frontier::locale_canonical(parsed.path());
+                        locale_seen.lock().unwrap().insert(lcanon);
+                    }
 
                     // Near-dup signature: title + first 200 normalized
                     // chars of the CONTENT (frontmatter carries the
@@ -595,13 +655,15 @@ impl Crawler {
                     let duplicate = !dup_sigs.lock().unwrap().insert(sig);
 
                     // Quality gate: skip near-empty pages (boilerplate,
-                    // redirects, error pages). Still counts against budget.
+                    // redirects, error pages). Does NOT count against
+                    // the page budget — low-quality pages should not
+                    // steal slots from real content. The total_fetched
+                    // safety valve (3x cap) prevents infinite loops.
                     if !duplicate && r.quality < opts_worker.min_quality {
                         skipped
                             .lock()
                             .unwrap()
                             .push((page.url.clone(), format!("low quality ({:.2})", r.quality)));
-                        pages_done.fetch_add(1, Ordering::SeqCst);
                         continue 'work;
                     }
 
@@ -653,28 +715,46 @@ impl Crawler {
                         let html = String::from_utf8_lossy(&page.body).into_owned();
                         let base = Url::parse(&page.url).unwrap_or_else(|_| parsed.clone());
                         let links = self_harvest_static(&html, &base);
+                        // Pre-filter: compute locale-canonical paths and
+                        // check against locale_seen BEFORE acquiring
+                        // the queue lock (avoids lock-within-lock).
+                        let ls = locale_seen.lock().unwrap();
+                        let filtered: Vec<(url::Url, String, f64)> = links
+                            .into_iter()
+                            .filter_map(|(child, anchor)| {
+                                let cu = frontier::resolve(&base, &child)?;
+                                if opts_worker.same_host
+                                    && cu.host_str() != Some(seed_host2.as_str())
+                                {
+                                    filtered_out.fetch_add(1, Ordering::Relaxed);
+                                    return None;
+                                }
+                                if !scope_allowed(
+                                    cu.path(),
+                                    &opts_worker.include_paths,
+                                    &opts_worker.exclude_paths,
+                                ) {
+                                    filtered_out.fetch_add(1, Ordering::Relaxed);
+                                    return None;
+                                }
+                                if opts_worker.respect_robots && !robots.allowed(cu.path()) {
+                                    filtered_out.fetch_add(1, Ordering::Relaxed);
+                                    return None;
+                                }
+                                // Skip translated variants of already-fetched pages.
+                                let lcanon = frontier::locale_canonical(cu.path());
+                                if ls.contains(&lcanon) {
+                                    filtered_out.fetch_add(1, Ordering::Relaxed);
+                                    return None;
+                                }
+                                let s =
+                                    score::score_candidate(&anchor, cu.path(), focus.as_deref());
+                                Some((cu, anchor, s))
+                            })
+                            .collect();
+                        drop(ls);
                         let mut q = queue.lock().unwrap();
-                        for (child, anchor) in links {
-                            let Some(cu) = frontier::resolve(&base, &child) else {
-                                continue;
-                            };
-                            if opts_worker.same_host && cu.host_str() != Some(seed_host2.as_str()) {
-                                filtered_out.fetch_add(1, Ordering::Relaxed);
-                                continue;
-                            }
-                            if !scope_allowed(
-                                cu.path(),
-                                &opts_worker.include_paths,
-                                &opts_worker.exclude_paths,
-                            ) {
-                                filtered_out.fetch_add(1, Ordering::Relaxed);
-                                continue;
-                            }
-                            if opts_worker.respect_robots && !robots.allowed(cu.path()) {
-                                filtered_out.fetch_add(1, Ordering::Relaxed);
-                                continue;
-                            }
-                            let s = score::score_candidate(&anchor, cu.path(), focus.as_deref());
+                        for (cu, _anchor, s) in filtered {
                             q.push(cu, s, item.depth + 1);
                         }
                     }
