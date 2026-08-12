@@ -38,7 +38,7 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
     // (capped): for JS-rendered SPAs the meta description is often
     // the only real content in the initial HTML.
     if let Some(d) = &meta.description {
-        let trimmed: String = d.chars().take(2000).collect();
+        let trimmed: String = d.chars().take(500).collect();
         out.push_str(&format!("> {}\n", trimmed));
     }
     out.push('\n');

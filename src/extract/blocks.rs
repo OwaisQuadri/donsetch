@@ -187,16 +187,11 @@ fn walk<'a>(
             // Raw text, whitespace PRESERVED (code must keep newlines).
             let code: String = el.text().collect::<Vec<_>>().join("");
             let code = code.trim_matches('\n').to_string();
+            // Collapse 3+ consecutive newlines to 2: common in
+            // source code, each blank line pair wastes tokens.
+            let code = collapse_blank_lines(&code);
             if !code.is_empty() {
-                let lang = el
-                    .select(&scraper::Selector::parse("code").unwrap())
-                    .next()
-                    .and_then(|c| c.value().attr("class"))
-                    .and_then(|c| {
-                        c.split_whitespace()
-                            .find_map(|t| t.strip_prefix("language-"))
-                    })
-                    .map(|s| s.to_string());
+                let lang = detect_code_lang(el);
                 push_block(
                     Block::Code {
                         lang,
@@ -213,6 +208,29 @@ fn walk<'a>(
                 push_block(
                     Block::Quote {
                         md,
+                        path: current_path(headings),
+                    },
+                    out,
+                );
+            }
+        }
+        "summary" => {
+            // <summary> is the clickable label of a <details>
+            // element. Render as a heading so agents see the
+            // collapsible section's title.
+            let text = inline::plain(el);
+            if !text.is_empty() {
+                // Use level 3: details/summary is usually a
+                // sub-section, not a top-level heading.
+                let level = 3u8;
+                while headings.last().is_some_and(|(l, _)| *l >= level) {
+                    headings.pop();
+                }
+                headings.push((level, text.clone()));
+                push_block(
+                    Block::Heading {
+                        level,
+                        text,
                         path: current_path(headings),
                     },
                     out,
@@ -465,8 +483,11 @@ fn table_block(el: ElementRef<'_>, headings: &[(u8, String)]) -> Option<Block> {
             .select(&scraper::Selector::parse("td").unwrap())
             .map(|c| {
                 let t = inline::plain(c).replace('|', "\\|"); // unescaped pipes break md tables
-                if t.len() > 120 {
-                    format!("{}…", &t[..floor_boundary(&t, 120)])
+                // Char-based truncation: byte-based cuts CJK at ~40
+                // chars (3 bytes/char). 120 chars is the real limit.
+                if t.chars().count() > 120 {
+                    let truncated: String = t.chars().take(120).collect();
+                    format!("{truncated}…")
                 } else {
                     t
                 }
@@ -478,6 +499,12 @@ fn table_block(el: ElementRef<'_>, headings: &[(u8, String)]) -> Option<Block> {
     }
     if rows.is_empty() && headers.is_empty() {
         return None;
+    }
+    // No <th> found: promote the first data row to headers.
+    // Without this, tables without <th> render with empty header
+    // cells (| | | |) which is useless to agents.
+    if headers.is_empty() && !rows.is_empty() {
+        headers = rows.remove(0);
     }
     // Tab-nav junk: tiny tables that are just links.
     let total_text: usize = headers.iter().map(|h| h.len()).sum::<usize>()
@@ -546,9 +573,102 @@ fn media_block(el: ElementRef<'_>, base: &str, headings: &[(u8, String)], out: &
     }
 }
 
+#[allow(dead_code)]
 pub fn floor_boundary(s: &str, mut i: usize) -> usize {
     while i > 0 && !s.is_char_boundary(i) {
         i -= 1;
     }
     i
+}
+
+/// Collapse 3+ consecutive newlines to 2. Source code often
+/// has runs of blank lines between functions — each extra
+/// blank line wastes a token for zero content value.
+fn collapse_blank_lines(code: &str) -> String {
+    let mut out = String::with_capacity(code.len());
+    let mut blank_count = 0;
+    for line in code.lines() {
+        if line.trim().is_empty() {
+            blank_count += 1;
+            if blank_count <= 1 {
+                out.push('\n');
+            }
+        } else {
+            blank_count = 0;
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out.trim_matches('\n').to_string()
+}
+
+/// Detect code block language from <pre><code> class attributes.
+/// Checks common patterns: language-*, highlight-*, lang-*,
+/// brush:*, and bare language names.
+fn detect_code_lang(el: ElementRef<'_>) -> Option<String> {
+    let code_el = el
+        .select(&scraper::Selector::parse("code").unwrap())
+        .next()?;
+    let class = code_el.value().attr("class")?;
+    for token in class.split_whitespace() {
+        // language-python, language-rust (highlight.js, Prism)
+        if let Some(lang) = token.strip_prefix("language-") {
+            return Some(lang.to_string());
+        }
+        // highlight-python (some highlighters)
+        if let Some(lang) = token.strip_prefix("highlight-") {
+            return Some(lang.to_string());
+        }
+        // lang-python (GitHub-style)
+        if let Some(lang) = token.strip_prefix("lang-") {
+            return Some(lang.to_string());
+        }
+        // brush: python (SyntaxHighlighter)
+        if let Some(lang) = token.strip_prefix("brush:") {
+            return Some(lang.trim().to_string());
+        }
+    }
+    // Bare language name as class: <code class="python">
+    // Only accept well-known language names to avoid false positives.
+    let known = [
+        "python",
+        "rust",
+        "javascript",
+        "js",
+        "typescript",
+        "ts",
+        "java",
+        "go",
+        "c",
+        "cpp",
+        "csharp",
+        "ruby",
+        "php",
+        "swift",
+        "kotlin",
+        "scala",
+        "sql",
+        "bash",
+        "shell",
+        "sh",
+        "html",
+        "css",
+        "json",
+        "yaml",
+        "xml",
+        "toml",
+        "markdown",
+        "md",
+        "dockerfile",
+        "makefile",
+        "lua",
+        "perl",
+        "r",
+    ];
+    for token in class.split_whitespace() {
+        if known.contains(&token.to_lowercase().as_str()) {
+            return Some(token.to_lowercase());
+        }
+    }
+    None
 }

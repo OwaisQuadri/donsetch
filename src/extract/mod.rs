@@ -589,7 +589,16 @@ fn paginate(text: &str, offset: usize, max_chars: usize) -> (String, Option<usiz
     if offset >= text.len() {
         return (String::new(), None);
     }
-    let start = ceil_char_boundary(text, offset);
+    let mut start = ceil_char_boundary(text, offset);
+    // Seek forward to the next block boundary ("\n\n") when
+    // resuming. Agents who resume at offset=N should start at a
+    // clean paragraph/heading boundary, not mid-sentence.
+    if offset > 0 {
+        let search_end = (start + 500).min(text.len());
+        if let Some(pos) = text[start..search_end].find("\n\n") {
+            start = start + pos + 2; // skip past the "\n\n"
+        }
+    }
     let mut end = (start + max_chars).min(text.len());
     while !text.is_char_boundary(end) {
         end -= 1;
