@@ -251,6 +251,30 @@ fn stats_line(cmd: &str, sc: &Value, content_len: usize) -> String {
             if sc.get("weak").and_then(|v| v.as_bool()).unwrap_or(false) {
                 parts.push("weak consensus".into());
             }
+            // Surface degraded engine health in plain mode so agents
+            // can tell coverage dropped without parsing --json.
+            if let Some(engines) = sc.get("engines").and_then(|e| e.as_array()) {
+                let degraded: Vec<String> = engines
+                    .iter()
+                    .filter_map(|e| {
+                        let status = e.get("status").and_then(|s| s.as_str())?;
+                        let name = e.get("engine").and_then(|n| n.as_str())?;
+                        if status == "ok" {
+                            return None;
+                        }
+                        // Shorten status for compactness.
+                        let short = if status.starts_with("blocked:") {
+                            format!("{name} blocked")
+                        } else {
+                            format!("{name} {status}")
+                        };
+                        Some(short)
+                    })
+                    .collect();
+                if !degraded.is_empty() {
+                    parts.push(format!("degraded: {}", degraded.join(", ")));
+                }
+            }
             format!("[{cmd}] ok · {}", parts.join(" · "))
         }
         "crawl" => {
@@ -464,6 +488,42 @@ mod tests {
         let s = stats_line("search", &sc, 0);
         assert!(s.contains("2 results"));
         assert!(s.contains("weak consensus"));
+    }
+
+    #[test]
+    fn stats_line_search_degraded_engines() {
+        let sc = json!({
+            "results": [{"title": "a"}],
+            "elapsed_ms": 5000,
+            "provider": null,
+            "weak": false,
+            "engines": [
+                {"engine": "bing", "status": "ok", "hits": 5, "ms": 800},
+                {"engine": "mojeek", "status": "blocked:429", "hits": 0, "ms": 100},
+                {"engine": "brave", "status": "timeout", "hits": 0, "ms": 5000}
+            ]
+        });
+        let s = stats_line("search", &sc, 0);
+        assert!(s.contains("degraded"));
+        assert!(s.contains("mojeek blocked"));
+        assert!(s.contains("brave timeout"));
+        assert!(!s.contains("bing")); // healthy engine not mentioned
+    }
+
+    #[test]
+    fn stats_line_search_all_engines_ok() {
+        let sc = json!({
+            "results": [{"title": "a"}],
+            "elapsed_ms": 2000,
+            "provider": null,
+            "weak": false,
+            "engines": [
+                {"engine": "bing", "status": "ok", "hits": 5, "ms": 800},
+                {"engine": "ddg", "status": "ok", "hits": 3, "ms": 600}
+            ]
+        });
+        let s = stats_line("search", &sc, 0);
+        assert!(!s.contains("degraded"));
     }
 
     #[test]

@@ -227,7 +227,7 @@ const CRAWL_PARAMS: &[ParamSpec] = &[
     },
     ParamSpec {
         name: "focus",
-        flag: "focus",
+        flag: "topic",
         kind: ParamKind::Str,
         cli: CliKind::Flag,
         required: false,
@@ -251,7 +251,7 @@ const CRAWL_PARAMS: &[ParamSpec] = &[
     },
     ParamSpec {
         name: "max_total_chars",
-        flag: "max-total-chars",
+        flag: "max-chars",
         kind: ParamKind::Usize,
         cli: CliKind::Flag,
         required: false,
@@ -350,7 +350,7 @@ pub static TOOLS: &[ToolSpec] = &[
         description: "Crawl an entire site from a seed URL — for multi-page extraction (docs, API refs, wikis). For a single page, use web_fetch; for finding pages across the web, use web_search.\n\nTwo-phase: sitemap discovery first (cheap URL inventory), then fetch focus-ranked pages as markdown. Adaptive pacing per host prevents rate-limit triggers.\n\nModes: full (default) = sitemap map + content. map = URL inventory only (very cheap, no content — use to see what a site has before committing). content = skip sitemap, BFS from seed (use when sitemap is missing).\n\nBudget control: focus ranks pages by relevance and crawls only matching ones — essential for large sites. max_pages, max_total_chars, deadline_s cap the crawl. Resume tokens let you continue large crawls across calls.\n\nResponse: content[0].text = map (if any) + pages as markdown. structuredContent = {seed, pages: [{url, title, kind, chars, quality}], map, queued, filtered_out, skipped: [{url, reason}], stop, elapsed_s, resume}.\n\nstop = why crawl stopped: FrontierEmpty (done), MaxPages|CharBudget|DepthLimit|Deadline (budget — use resume to continue), ThrottledOut (site blocked you — wait and resume). resume = token to continue when stopped by budget/deadline. quality = 0.0-1.0 content trust per page.",
         params: CRAWL_PARAMS,
         examples: &[
-            "donsetch crawl https://docs.site.com --focus \"authentication\"",
+            "donsetch crawl https://docs.site.com --topic \"authentication\"",
             "donsetch crawl https://docs.site.com --mode map",
             "donsetch crawl https://docs.site.com --max-pages 25 --deadline 300",
         ],
