@@ -69,14 +69,21 @@ impl GhostManager {
                     Some(xvfb)
                 }
                 Err(e) => {
-                    eprintln!("[ghost] Xvfb start failed: {e}, falling back to headless");
+                    eprintln!(
+                        "[ghost] Xvfb start failed: {e}, falling back to headful off-screen mode"
+                    );
                     None
                 }
             }
         } else {
-            if std::env::var_os("DONGHOST_DEBUG").is_some() {
-                eprintln!("[ghost] No Xvfb, using headful off-screen mode");
-            }
+            // Xvfb not installed: warn the user. Chrome will run
+            // headful off-screen (--window-position=-32000,-32000 +
+            // CDP minimize), but on Linux a minimized window may
+            // still flash on screen briefly. Xvfb is the clean
+            // solution for invisible headful Chrome on Linux.
+            eprintln!(
+                "[ghost] Xvfb not found — install with `pacman -S xorg-server-xvfb` (or your distro's equivalent) for invisible headful Chrome on Linux"
+            );
             None
         };
 

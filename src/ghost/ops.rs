@@ -427,6 +427,30 @@ pub async fn ghost_fetch(
 
     // Timeout: return whatever rendered — partial beats none,
     // the caller's extraction yield decides success.
+    // Timeout: return whatever rendered — partial beats none,
+    // the caller's extraction yield decides success.
+    //
+    // BUT: if the final DOM is still a challenge/wall page, flag it
+    // as captcha so ghost_escalate doesn't extract and cache the
+    // interstitial as content (the Indeed false-positive bug).
+    let final_verdict = walls::detect(200, &[], html.as_bytes());
+    let still_challenged =
+        html.len() < 30_000 && matches!(final_verdict, Verdict::Challenge(_) | Verdict::Blocked);
+    if still_challenged {
+        if std::env::var_os("DONGHOST_DEBUG").is_some() {
+            eprintln!(
+                "[ghost_fetch] timeout on challenge page ({:?}), flagging as captcha",
+                final_verdict
+            );
+        }
+        return Ok(GhostPage {
+            html,
+            cookies: Vec::new(),
+            vendor,
+            captcha: true,
+            took: start.elapsed(),
+        });
+    }
     let cookies = ghost.cookies().await.unwrap_or_default();
     ghost.touch();
     Ok(GhostPage {

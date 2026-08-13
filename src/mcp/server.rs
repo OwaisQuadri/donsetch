@@ -554,7 +554,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     let mut final_tier: &str = tier_used;
     let mut final_status: u16 = out.as_ref().map(|o| o.status).unwrap_or(0);
     let mut final_url: String = url.clone();
-    let final_verdict: String = out
+    let mut final_verdict: String = out
         .as_ref()
         .map(|o| format!("{:?}", o.verdict))
         .unwrap_or_else(|| "ContentOk".to_string());
@@ -633,23 +633,24 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
 
     if need_ghost {
         // Render-cache shortcut: a previously recovered DOM.
-        // Verified non-thin before serving — the cache used to
-        // store shells and re-serve them forever.
+        // Verified non-thin AND non-challenge before serving — the
+        // cache used to store shells and challenge interstitials,
+        // re-serving them forever as ContentOk.
         if ex_thin
             && tier == "auto"
             && let Some(rc) = daemon.state.lock().await.render_for(&final_url).cloned()
             && let Ok(e2) = extract::extract(rc.html.as_bytes(), "text/html", &final_url, &opts)
             && !e2.thin
         {
-            let mut res = finish_result(
-                &e2,
-                "render-cache",
-                final_status,
-                &final_verdict,
-                &final_url,
-            );
-            res["_meta"] = json!({ "ttlMs": 300_000, "cacheScope": "session" });
-            return res;
+            // Defense in depth: even if a challenge page slipped into
+            // the cache (pre-fix), don't serve it as ContentOk.
+            let cached_verdict = crate::detect::walls::detect(200, &[], rc.html.as_bytes());
+            if !matches!(cached_verdict, crate::detect::walls::Verdict::Challenge(_)) {
+                let vstr = format!("{:?}", cached_verdict);
+                let mut res = finish_result(&e2, "render-cache", final_status, &vstr, &final_url);
+                res["_meta"] = json!({ "ttlMs": 300_000, "cacheScope": "session" });
+                return res;
+            }
         }
 
         match ghost_escalate(daemon, &url, &host, &opts, challenge || shell_warm, shot).await {
@@ -658,6 +659,11 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 final_tier = tier2;
                 final_status = status;
                 final_url = furl;
+                // Ghost beat the challenge — the verdict should reflect
+                // the actual content, not the tier-1 wall that was
+                // bypassed. Without this, a successfully rendered page
+                // shows "Challenge(DataDome)" in the verdict field.
+                final_verdict = "ContentOk".to_string();
             }
             Err((msg, kind)) => {
                 return tool_error_kind(msg, kind);
@@ -712,7 +718,7 @@ async fn ghost_escalate(
         }
         return Err((
             format!(
-                "interactive captcha required at {url} — no automated solving service by design"
+                "blocked at {url} — interactive captcha or challenge could not be solved automatically. Use an Agent browser to browse sites like these"
             ),
             "walled",
         ));
@@ -816,16 +822,23 @@ async fn ghost_escalate(
                 .await
                 .record_solved(host, &page.cookies, page.vendor.as_deref());
         }
-        daemon.state.lock().await.record_render(&u, &page.html);
+        // Don't cache challenge/wall DOMs — defense in depth alongside
+        // the ghost_fetch timeout check. A challenge page that has
+        // enough block structure to pass !thin would otherwise be
+        // cached and re-served as ContentOk forever.
+        let dom_verdict = crate::detect::walls::detect(200, &[], page.html.as_bytes());
+        if !matches!(dom_verdict, crate::detect::walls::Verdict::Challenge(_)) {
+            daemon.state.lock().await.record_render(&u, &page.html);
+        }
         return Ok((e, t, s, u));
     }
 
     Err((
         format!(
-            "extraction failed: {url} — tier 2 rendered a {}KB DOM but no real content was extractable",
+            "blocked at {url} — tier 2 rendered a {}KB DOM but no real content was extractable. Use an Agent browser to browse sites like these",
             page.html.len() / 1024
         ),
-        "permanent",
+        "walled",
     ))
 }
 
