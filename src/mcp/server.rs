@@ -56,6 +56,12 @@ impl Daemon {
             crawler,
         })
     }
+
+    /// Shutdown: kill ghost browser + Xvfb (if owned).
+    /// Called by the CLI before exit; by the MCP daemon on close.
+    pub async fn shutdown(&self) {
+        self.ghost_mgr.shutdown().await;
+    }
 }
 
 /// Run the daemon until stdin closes. Never returns Err

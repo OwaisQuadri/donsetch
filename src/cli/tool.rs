@@ -66,7 +66,9 @@ pub async fn run(cmd: &str, args: &[String]) -> u8 {
             .map(|u| u.cloned().collect())
             .unwrap_or_default();
         if urls.len() > 1 {
-            return run_bulk_fetch(&daemon, tool, &base_args, &urls, json_mode, quiet).await;
+            let code = run_bulk_fetch(&daemon, tool, &base_args, &urls, json_mode, quiet).await;
+            daemon.shutdown().await;
+            return code;
         }
     }
 
@@ -76,10 +78,13 @@ pub async fn run(cmd: &str, args: &[String]) -> u8 {
         Ok(v) => v,
         Err((code, msg)) => {
             eprintln!("[{cmd}] error (code {code}): {msg}");
+            daemon.shutdown().await;
             return EXIT_PERMANENT;
         }
     };
-    render_result(&result, json_mode, quiet, cmd)
+    let code = render_result(&result, json_mode, quiet, cmd);
+    daemon.shutdown().await;
+    code
 }
 
 /// Parallel bulk fetch: one call_tool per URL, results in order.

@@ -27,14 +27,29 @@ mod linux {
     const DISPLAY_NUM: u8 = 99;
 
     pub struct Xvfb {
-        child: Child,
+        /// None if we reused an existing Xvfb (borrowed — don't kill).
+        child: Option<Child>,
     }
 
     impl Xvfb {
         /// Start Xvfb on :99, 1920x1080x24. Returns the DISPLAY env
         /// value (":99") for Chrome to use.
+        ///
+        /// If an Xvfb is already running on :99 (e.g. the MCP daemon
+        /// started one), reuses it — does NOT kill or restart. This
+        /// is critical for CLI+MCP coexistence: the CLI must not
+        /// disrupt the daemon's warm Xvfb.
         pub async fn start() -> Result<Self, FetchError> {
             let display = format!(":{DISPLAY_NUM}");
+
+            // Check if an X server is already alive on :99.
+            // If so, reuse it — don't kill, don't restart.
+            if display_alive(&display).await {
+                if std::env::var_os("DONGHOST_DEBUG").is_some() {
+                    eprintln!("[ghost] Xvfb already running on {display}, reusing");
+                }
+                return Ok(Self { child: None });
+            }
 
             // Kill stale Xvfb on this display (crash recovery).
             let _ = tokio::process::Command::new("pkill")
@@ -91,7 +106,10 @@ mod linux {
                 }
             }
 
-            Ok(Self { child })
+            if std::env::var_os("DONGHOST_DEBUG").is_some() {
+                eprintln!("[ghost] Xvfb started on {display}");
+            }
+            Ok(Self { child: Some(child) })
         }
 
         /// The DISPLAY environment value for Chrome.
@@ -99,16 +117,20 @@ mod linux {
             format!(":{DISPLAY_NUM}")
         }
 
-        /// Kill Xvfb.
-        #[allow(dead_code)] // Xvfb lives for daemon lifetime (mem::forget)
+        /// Kill Xvfb (only if we own it).
         pub async fn kill(mut self) {
-            let _ = self.child.kill().await;
+            if let Some(mut child) = self.child.take() {
+                let _ = child.kill().await;
+            }
         }
 
         /// Check if Xvfb process is still alive.
         #[allow(dead_code)]
         pub fn is_alive(&mut self) -> bool {
-            self.child.try_wait().map(|r| r.is_none()).unwrap_or(false)
+            match &mut self.child {
+                Some(c) => c.try_wait().map(|r| r.is_none()).unwrap_or(false),
+                None => true, // borrowed — assume alive
+            }
         }
     }
 
@@ -121,6 +143,28 @@ mod linux {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
+    }
+
+    /// Check if an X display is already alive by testing the X
+    /// socket file. If the socket exists but xdpyinfo is not
+    /// installed, assume alive (the socket is strong evidence).
+    async fn display_alive(display: &str) -> bool {
+        let sock = format!("/tmp/.X11-unix/X{DISPLAY_NUM}");
+        if !std::fs::exists(&sock).unwrap_or(false) {
+            return false;
+        }
+        // Try xdpyinfo for a definitive check.
+        let r = tokio::process::Command::new("xdpyinfo")
+            .env("DISPLAY", display)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+        match r {
+            Ok(s) => s.success(),
+            // xdpyinfo not installed but socket exists → probably alive.
+            Err(_) => true,
+        }
     }
 }
 

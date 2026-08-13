@@ -20,6 +20,7 @@ use crate::profile::BrowserProfile;
 
 struct Slot {
     ghost: Option<Ghost>,
+    xvfb: Option<super::xvfb::Xvfb>,
     last_used: Instant,
 }
 
@@ -58,17 +59,14 @@ impl Drop for GhostGuard {
 impl GhostManager {
     pub async fn new() -> Arc<Self> {
         // Start Xvfb on Linux if available.
-        let display = if super::xvfb::is_available() {
+        let xvfb = if super::xvfb::is_available() {
             match super::xvfb::Xvfb::start().await {
                 Ok(xvfb) => {
                     let disp = xvfb.display_env();
-                    // Leak the Xvfb — it lives for the daemon's lifetime.
-                    // We never kill it (keeping it warm is the point).
-                    std::mem::forget(xvfb);
                     if std::env::var_os("DONGHOST_DEBUG").is_some() {
                         eprintln!("[ghost] Xvfb started on {disp}");
                     }
-                    Some(disp)
+                    Some(xvfb)
                 }
                 Err(e) => {
                     eprintln!("[ghost] Xvfb start failed: {e}, falling back to headless");
@@ -82,9 +80,12 @@ impl GhostManager {
             None
         };
 
+        let display = xvfb.as_ref().map(|x| x.display_env());
+
         let mgr = Arc::new(Self {
             slot: Arc::new(Mutex::new(Slot {
                 ghost: None,
+                xvfb,
                 last_used: Instant::now(),
             })),
             display,
@@ -133,11 +134,14 @@ impl GhostManager {
         }
     }
 
-    /// Daemon shutdown: kill the browser, always.
+    /// Daemon shutdown: kill browser + Xvfb (if owned).
     pub async fn shutdown(&self) {
         let mut slot = self.slot.lock().await;
         if let Some(mut g) = slot.ghost.take() {
             g.kill().await;
+        }
+        if let Some(xvfb) = slot.xvfb.take() {
+            xvfb.kill().await;
         }
     }
 

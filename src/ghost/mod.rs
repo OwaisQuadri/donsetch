@@ -187,7 +187,7 @@ impl Ghost {
             format!("--user-data-dir={}", dir.display()),
             format!("--user-agent={}", profile.user_agent),
             "--window-size=1920,1080".into(),
-            "--window-position=0,0".into(),
+            "--window-position=-32000,-32000".into(),
             "--lang=en-US".into(),
             "--no-first-run".into(),
             "--no-default-browser-check".into(),
@@ -218,34 +218,23 @@ impl Ghost {
             // Linux + Xvfb: headful on virtual display.
             cmd.env("DISPLAY", disp);
             chrome_args.push("--ozone-platform=x11".into());
-        } else {
-            // Linux without Xvfb: off-screen headful.
-            // Position the window far off-screen so the user
-            // never sees it, but Chrome still has real GPU.
-            chrome_args.push("--window-position=-32000,-32000".into());
         }
+        // No platform-specific window-position needed —
+        // -32000,-32000 is set globally above. On Linux+Xvfb
+        // the window is on a virtual display (invisible regardless
+        // of position). On macOS/Windows the off-screen position
+        // + CDP minimize (below) makes it invisible.
 
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "linux"))]
         {
-            // macOS: headful Chrome, window off-screen.
-            // No --headless flag. Real Metal GPU, real window.chrome.
-            chrome_args.push("--window-position=-32000,-32000".into());
             let _ = display;
         }
 
-        #[cfg(target_os = "windows")]
-        {
-            // Windows: headful Chrome, window off-screen.
-            // No --headless flag. Real D3D11 GPU, real window.chrome.
-            chrome_args.push("--window-position=-32000,-32000".into());
-            let _ = display;
-        }
-
+        // Unknown platforms (not Linux/macOS/Windows): headless
+        // fallback — no off-screen positioning guarantee.
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
-            // Unknown platform: headless fallback.
             chrome_args.push("--headless=new".into());
-            let _ = display;
         }
         // Modern Chrome (136+) sets navigator.webdriver
         // under --headless/--remote-debugging-port even
@@ -311,10 +300,36 @@ impl Ghost {
             .ok_or_else(|| FetchError::ghost("no sessionId"))?
             .to_string();
         cdp.call(Some(&session), "Page.enable", json!({})).await?;
-        // Headful Chrome (Xvfb or off-screen) has real screen
-        // geometry — no Emulation.setDeviceMetricsOverride needed.
-        // (Only needed in true headless mode, which we no longer use
-        // on any supported platform.)
+
+        // Minimize the window on ALL platforms — makes Chrome
+        // invisible even on macOS (Dock) and Windows (taskbar).
+        // Combined with --window-position=-32000,-32000, the
+        // window is both off-screen and minimized. Chrome still
+        // renders normally (minimized ≠ background tab; the
+        // active tab's visibilityState stays "visible").
+        if let Ok(win) = cdp
+            .call(
+                None,
+                "Browser.getWindowForTarget",
+                json!({ "targetId": target }),
+            )
+            .await
+            && let Some(id) = win.get("windowId").and_then(Value::as_i64)
+        {
+            let _ = cdp
+                .call(
+                    None,
+                    "Browser.setWindowBounds",
+                    json!({
+                        "windowId": id,
+                        "bounds": { "windowState": "minimized" }
+                    }),
+                )
+                .await;
+        }
+
+        // Unknown platform fallback: headless mode with device
+        // metrics override (no real screen geometry available).
         #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             cdp.call(
@@ -330,25 +345,6 @@ impl Ghost {
                 }),
             )
             .await?;
-            if let Ok(win) = cdp
-                .call(Some(&session), "Browser.getWindowForTarget", json!({}))
-                .await
-                && let Some(id) = win.get("windowId").and_then(Value::as_i64)
-            {
-                let _ = cdp
-                    .call(
-                        None,
-                        "Browser.setWindowBounds",
-                        json!({
-                            "windowId": id,
-                            "bounds": {
-                                "left": 0, "top": 0,
-                                "width": 1920, "height": 1167
-                            }
-                        }),
-                    )
-                    .await;
-            }
         }
 
         Ok(Self {

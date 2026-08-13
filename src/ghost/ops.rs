@@ -385,8 +385,16 @@ pub async fn ghost_fetch(
         }
 
         // Content-quality oracle: substantive AND stable.
+        // The key metric is VISIBLE text length, not total HTML
+        // size. SPA shells have < 10 visible chars; the smallest
+        // real pages (example.com, httpbin) have 80+. A page with
+        // 80+ visible chars that's stable across 2 polls is real
+        // content. The old cur_len >= 4_000 gate was too strict
+        // for simple pages — ghost_fetch ran the full 20s timeout
+        // on example.com (visible=122, cur_len=559) instead of
+        // returning immediately.
         let visible = visible_text_len(&html);
-        let substantive = cur_len >= 4_000 && visible >= 200;
+        let substantive = visible >= 80;
         let stable = prev_len > 0 && cur_len.abs_diff(prev_len) < cur_len / 100 + 64;
         if substantive && stable {
             settle_streak += 1;
