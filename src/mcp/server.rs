@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, mpsc};
 use crate::crawl::real as crawl_real;
 use crate::crawl::{CrawlMode, CrawlOptions, Crawler};
 use crate::detect::walls::Verdict;
+use crate::error::FetchError;
 use crate::extract::{self, ExtractOptions};
 use crate::fetch::client::Fetcher;
 use crate::ghost::cache::{CookieRecord, GhostState, RouteDecision};
@@ -160,7 +161,10 @@ fn initialize(params: &Value) -> Value {
     })
 }
 
-async fn call_tool(daemon: &Arc<Daemon>, params: &Value) -> Result<Value, (i64, String)> {
+pub(crate) async fn call_tool(
+    daemon: &Arc<Daemon>,
+    params: &Value,
+) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     match name {
@@ -250,7 +254,7 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
 
     let result = match daemon.crawler.crawl(&url, opts, resume.as_deref()).await {
         Ok(r) => r,
-        Err(e) => return tool_error(format!("crawl: {e}")),
+        Err(e) => return tool_error_kind(format!("crawl: {e}"), "transient"),
     };
 
     // Content text: the map (if any) + pages. Keep the lead-in
@@ -319,8 +323,7 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
 
 /// Map a raw FetchError to a user-friendly diagnostic.
 /// No Rust internals, no TLS jargon — clean, actionable.
-fn friendly_fetch_error(e: &crate::error::FetchError) -> String {
-    use crate::error::FetchError;
+fn friendly_fetch_error(e: &FetchError) -> String {
     match e {
         FetchError::Timeout => "request timed out (the server took too long to respond)".into(),
         FetchError::TooManyRedirects => "too many redirects (the URL loops)".into(),
@@ -494,7 +497,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     if !skip_tier1 {
         out = Some(match daemon.fetcher.fetch(&url).await {
             Ok(o) => o,
-            Err(e) => return tool_error(friendly_fetch_error(&e)),
+            Err(e) => return tool_error_kind(friendly_fetch_error(&e), fetch_error_kind(&e)),
         });
 
         // === Observe the outcome ===
@@ -533,7 +536,10 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         match o.verdict {
             Verdict::ContentOk => {}
             Verdict::Challenge(_) if tier != "1" => {}
-            v => return tool_error(verdict_error(v, o.status, &o.url)),
+            v => {
+                let kind = verdict_kind(v, o.status);
+                return tool_error_kind(verdict_error(v, o.status, &o.url), kind);
+            }
         }
     }
 
@@ -647,8 +653,8 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 final_status = status;
                 final_url = furl;
             }
-            Err(msg) => {
-                return tool_error(msg);
+            Err((msg, kind)) => {
+                return tool_error_kind(msg, kind);
             }
         }
     }
@@ -672,15 +678,15 @@ async fn ghost_escalate(
     opts: &ExtractOptions,
     learn: bool,
     shot: Option<&str>,
-) -> Result<(extract::Extracted, &'static str, u16, String), String> {
+) -> Result<(extract::Extracted, &'static str, u16, String), (String, &'static str)> {
     let mut g = daemon
         .ghost_mgr
         .acquire(&daemon.profile)
         .await
-        .map_err(|e| format!("browser launch failed: {e}"))?;
+        .map_err(|e| (format!("browser launch failed: {e}"), "permanent"))?;
     let page = ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(20))
         .await
-        .map_err(|e| format!("browser automation error: {e}"))?;
+        .map_err(|e| (format!("browser automation error: {e}"), "permanent"))?;
     if std::env::var_os("DONGHOST_DEBUG").is_some() {
         let safe: String = host
             .chars()
@@ -698,8 +704,11 @@ async fn ghost_escalate(
         if let Some(p) = shot {
             let _ = g.screenshot(p).await;
         }
-        return Err(format!(
-            "interactive captcha required at {url} — no automated solving service by design"
+        return Err((
+            format!(
+                "interactive captcha required at {url} — no automated solving service by design"
+            ),
+            "walled",
         ));
     }
     if !page.cookies.is_empty() {
@@ -805,9 +814,12 @@ async fn ghost_escalate(
         return Ok((e, t, s, u));
     }
 
-    Err(format!(
-        "extraction failed: {url} — tier 2 rendered a {}KB DOM but no real content was extractable",
-        page.html.len() / 1024
+    Err((
+        format!(
+            "extraction failed: {url} — tier 2 rendered a {}KB DOM but no real content was extractable",
+            page.html.len() / 1024
+        ),
+        "permanent",
     ))
 }
 
@@ -892,13 +904,39 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 "structuredContent": meta,
             })
         }
-        Err(e) => tool_error(format!("search: {e}")),
+        Err(e) => tool_error_kind(format!("search: {e}"), "transient"),
     }
 }
 
 fn tool_error(message: impl Into<String>) -> Value {
+    tool_error_kind(message, "permanent")
+}
+
+/// Like `tool_error` but with an explicit `errorKind` for CLI
+/// exit-code mapping. `kind` is one of: "permanent", "transient",
+/// "walled". MCP clients ignore the extra field; the CLI uses it
+/// to choose exit 1 / 2 / 3.
+fn tool_error_kind(message: impl Into<String>, kind: &str) -> Value {
     json!({
         "content": [{ "type": "text", "text": message.into() }],
-        "isError": true
+        "isError": true,
+        "errorKind": kind
     })
+}
+
+/// Classify a wall verdict into an errorKind for CLI exit codes.
+fn verdict_kind(v: Verdict, status: u16) -> &'static str {
+    match v {
+        Verdict::Challenge(_) | Verdict::AuthWall | Verdict::Paywall => "walled",
+        Verdict::Blocked if status == 429 || status == 503 => "transient",
+        _ => "permanent",
+    }
+}
+
+/// Classify a network/fetch error into an errorKind.
+fn fetch_error_kind(e: &FetchError) -> &'static str {
+    match e {
+        FetchError::Timeout | FetchError::Io(_) => "transient",
+        _ => "permanent",
+    }
 }

@@ -13,9 +13,11 @@ pub struct SolveResult {
     pub cookies: Vec<CookieRecord>,
     /// Wall vendor detected during the challenge ("cloudflare",
     /// "datadome", etc.) — feeds the domain profile.
+    #[allow(dead_code)]
     pub vendor: Option<String>,
     /// Last DOM snapshot — fallback content if tier 1 with
     /// harvested cookies still gets refused.
+    #[allow(dead_code)]
     pub html: String,
     pub took: Duration,
 }

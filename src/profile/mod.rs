@@ -66,6 +66,7 @@ pub struct H2Profile {
 
 #[derive(Clone, Debug)]
 pub struct BrowserProfile {
+    #[allow(dead_code)]
     pub name: &'static str,
     pub tls: TlsProfile,
     pub h2: H2Profile,
