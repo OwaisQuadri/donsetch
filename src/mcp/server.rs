@@ -628,8 +628,17 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // Triggers: explicit tier 2, profile skip-to-solve, challenge
     // wall, or tier 1 produced only a JS shell on auto tier.
     // (thin recomputed AFTER the tier-1 links fallback.)
+    //
+    // Exception: very small pages (< 5KB) that came back thin are
+    // 404/error pages, not JS shells. JS shells are > 50KB (React
+    // apps, SPAs). A 2KB page with no content is a 404 — don't
+    // waste 20s launching a browser for it.
     let still_thin = final_ex.as_ref().map(|e| e.thin).unwrap_or(false);
-    let need_ghost = (challenge && tier != "1") || skip_tier1 || (still_thin && tier == "auto");
+    let page_size = out.as_ref().map(|o| o.body.len()).unwrap_or(0);
+    let is_small_404 = page_size > 0 && page_size < 5_000 && still_thin;
+    let need_ghost = (challenge && tier != "1" && !is_small_404)
+        || skip_tier1
+        || (still_thin && tier == "auto" && !is_small_404);
 
     if need_ghost {
         // Render-cache shortcut: a previously recovered DOM.
@@ -674,6 +683,16 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     let Some(ex) = final_ex else {
         return tool_error("all fetch tiers exhausted — no response received");
     };
+
+    // Small 404 page: if we didn't escalate to ghost (is_small_404)
+    // and the extraction is still thin/empty, return "not found".
+    // This is honest — the page exists (HTTP 200) but has no content.
+    // Could be a non-existent product, a deleted page, or a soft 404.
+    if is_small_404 {
+        return tool_error(format!(
+            "not found: {url} — page returned no content (may not exist or requires JavaScript)"
+        ));
+    }
 
     finish_result(&ex, final_tier, final_status, &final_verdict, &final_url)
 }
@@ -833,6 +852,30 @@ async fn ghost_escalate(
         return Ok((e, t, s, u));
     }
 
+    // Last resort: raw text fallback. If the ghost DOM has real
+    // visible text but DonSift's block extraction couldn't parse
+    // it (complex DOM, non-standard structure), strip tags and
+    // return the visible text. This makes "found DOM but failed
+    // to extract content" IMPOSSIBLE when the DOM has real text.
+    if !page.captcha {
+        let doc = scraper::Html::parse_document(&page.html);
+        let meta = crate::extract::metadata::metadata(&doc);
+        let max_chars = opts.max_chars.unwrap_or(16_000).max(200);
+        if let Some(fb) = crate::extract::text_fallback(&page.html, &meta, url, opts, max_chars) {
+            return Ok((fb, "ghost-text", 200, url.to_string()));
+        }
+    }
+
+    // Differentiate: small DOM with no content = not found / blocked.
+    // Large DOM with no extractable content = genuine extraction failure.
+    if page.html.len() < 5_000 {
+        return Err((
+            format!(
+                "not found: {url} — page returned no content (may not exist or requires JavaScript)"
+            ),
+            "permanent",
+        ));
+    }
     Err((
         format!(
             "blocked at {url} — tier 2 rendered a {}KB DOM but no real content was extractable. Use an Agent browser to browse sites like these",

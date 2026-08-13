@@ -426,20 +426,24 @@ pub async fn ghost_fetch(
         }
 
         // Dead DOM early exit: if the DOM is static (not changing)
-        // AND has < 80 visible chars for 8+ seconds, it's a dead
+        // AND has < 80 visible chars for several seconds, it's a dead
         // page — a block/challenge page that the ghost can't solve.
         // Don't waste 20s waiting; exit early and let the caller
         // handle it. This saves 12s on Amazon-type pages.
         //
         // Tolerance: allow small DOM changes (< 100 bytes) so
         // dynamic ads/trackers don't reset the streak.
+        //
+        // Adaptive threshold: tiny DOMs (< 5KB) exit faster (8 polls
+        // ≈ 1.6s early / 4s late) — a 2KB DOM with 0 visible chars is
+        // clearly dead. Larger DOMs get 15 polls (≈ 3s / 7.5s).
         if prev_len > 0 && visible < 80 && cur_len.abs_diff(prev_len) < 100 {
             dead_streak += 1;
         } else {
             dead_streak = 0;
         }
-        // 20 polls * 200ms (early) = 4s, or 20 * 500ms (late) = 10s
-        if dead_streak >= 20 {
+        let dead_threshold = if cur_len < 5000 { 8 } else { 15 };
+        if dead_streak >= dead_threshold {
             if std::env::var_os("DONGHOST_DEBUG").is_some() {
                 eprintln!(
                     "[ghost_fetch] dead DOM: static + visible<80 for {dead_streak} polls, exiting early"
