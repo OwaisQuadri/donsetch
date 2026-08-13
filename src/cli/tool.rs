@@ -179,8 +179,16 @@ fn render_result(result: &Value, json_mode: bool, quiet: bool, cmd: &str) -> u8 
         .unwrap_or(false);
 
     if is_error {
-        // Error: content goes to stderr.
-        eprintln!("{content}");
+        // Strip redundant tool-name prefix from core error messages
+        // (e.g. "crawl: url required" → "url required" since we already
+        // prefix with [cmd] error:).
+        let sep = format!("{cmd}: ");
+        let msg = if content.starts_with(sep.as_str()) {
+            &content[sep.len()..]
+        } else {
+            content
+        };
+        eprintln!("[{cmd}] error: {msg}");
     } else {
         // Success: content goes to stdout.
         print!("{content}");
@@ -190,22 +198,21 @@ fn render_result(result: &Value, json_mode: bool, quiet: bool, cmd: &str) -> u8 
         && !is_error
         && let Some(sc) = result.get("structuredContent")
     {
-        eprintln!("{}", stats_line(cmd, sc));
+        eprintln!("{}", stats_line(cmd, sc, content.len()));
     }
 
     exit
 }
 
 /// Build the compact one-line stats string for stderr.
-fn stats_line(cmd: &str, sc: &Value) -> String {
+fn stats_line(cmd: &str, sc: &Value, content_len: usize) -> String {
     match cmd {
         "fetch" => {
-            let total_chars = sc.get("total_chars").and_then(|v| v.as_u64()).unwrap_or(0);
             let tokens_est = sc.get("tokens_est").and_then(|v| v.as_u64()).unwrap_or(0);
             let tier = sc.get("tier").and_then(|v| v.as_str()).unwrap_or("?");
             let verdict = sc.get("verdict").and_then(|v| v.as_str()).unwrap_or("?");
             let mut parts = vec![
-                format!("{total_chars} chars"),
+                format!("{content_len} chars"),
                 format!("~{tokens_est} tokens"),
                 format!("tier {tier}"),
                 verdict.to_string(),
@@ -434,7 +441,7 @@ mod tests {
             "next_offset": 15923,
             "thin": false
         });
-        let s = stats_line("fetch", &sc);
+        let s = stats_line("fetch", &sc, 15853);
         assert!(s.contains("15853 chars"));
         assert!(s.contains("tier 1"));
         assert!(s.contains("ContentOk"));
@@ -449,7 +456,7 @@ mod tests {
             "provider": null,
             "weak": true
         });
-        let s = stats_line("search", &sc);
+        let s = stats_line("search", &sc, 0);
         assert!(s.contains("2 results"));
         assert!(s.contains("weak consensus"));
     }
@@ -462,7 +469,7 @@ mod tests {
             "stop": "MaxPages",
             "resume": "abc123"
         });
-        let s = stats_line("crawl", &sc);
+        let s = stats_line("crawl", &sc, 0);
         assert!(s.contains("2 pages"));
         assert!(s.contains("8000 chars"));
         assert!(s.contains("stop MaxPages"));
