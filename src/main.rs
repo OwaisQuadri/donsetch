@@ -54,7 +54,12 @@ async fn main() {
             dev::dispatch(&args[1..]).await;
         }
 
-        _ => cli::tool::print_top_help(),
+        "help" | "-h" | "--help" => cli::tool::print_top_help(),
+        _ => {
+            eprintln!("donsetch: unknown command '{cmd}'\n");
+            cli::tool::print_top_help();
+            std::process::exit(1);
+        }
     }
 }
 
