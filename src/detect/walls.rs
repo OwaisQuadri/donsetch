@@ -70,6 +70,23 @@ pub fn detect(status: u16, headers: &[(String, String)], body: &[u8]) -> Verdict
     Verdict::ContentOk
 }
 
+/// Detect wall from a ghost-rendered DOM (no HTTP headers).
+/// Always checks body markers — the DOM is already rendered,
+/// so challenge markers in the HTML are real, not false
+/// positives from CSS class names mentioning a vendor.
+/// Scans first 64KB (challenge markers live in <head>).
+///
+/// Unlike `detect`, this doesn't gate body markers on page size:
+/// ghost DOMs are rendered, so large DOMs with challenge markers
+/// are genuinely challenged (Amazon's 51KB block page).
+/// Also strips <style>/<script> before checking for "skeleton"
+/// and other markers that appear in CSS class names.
+pub fn detect_dom(body: &[u8]) -> Verdict {
+    let scan = &body[..body.len().min(64 * 1024)];
+    let text = String::from_utf8_lossy(scan).to_lowercase();
+    classify_wall(&text, &[], false, 200, true)
+}
+
 fn classify_wall(
     text: &str,
     headers: &[(String, String)],
@@ -195,6 +212,17 @@ fn classify_wall(
     {
         return Verdict::Challenge(Vendor::Generic);
     }
+    // Small 200-page bot-check interstitials without a captcha
+    // form. IMDB, Amazon, and other server-side bot detection:
+    // "verify that you're not a robot" + "JavaScript is disabled".
+    // A real page is never this small with these phrases.
+    if text.len() < 16_384 && text.contains("verify") && text.contains("robot") {
+        return Verdict::Challenge(Vendor::Generic);
+    }
+    // "JavaScript is disabled" + "not a robot" on a tiny page.
+    if text.len() < 16_384 && text.contains("javascript is disabled") && text.contains("robot") {
+        return Verdict::Challenge(Vendor::Generic);
+    }
     Verdict::ContentOk
 }
 
@@ -222,6 +250,15 @@ mod tests {
     fn small_captcha_page_is_challenge() {
         let body = include_bytes!("../../tests/fixtures/mojeek-captcha.html").to_vec();
         let v = detect(200, &[], &body);
+        assert!(matches!(v, Verdict::Challenge(_)), "got {v:?}");
+    }
+
+    #[test]
+    fn imdb_bot_check_page_is_challenge() {
+        // IMDB serves this tiny page when it detects a bot:
+        // "JavaScript is disabled / verify that you're not a robot"
+        let body = b"<html><noscript>JavaScript is disabled In order to continue, we need to verify that you're not a robot. This requires JavaScript. Enable JavaScript and then reload the page.</noscript></html>";
+        let v = detect_dom(body);
         assert!(matches!(v, Verdict::Challenge(_)), "got {v:?}");
     }
 }

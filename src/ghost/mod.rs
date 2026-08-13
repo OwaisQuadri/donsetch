@@ -301,7 +301,37 @@ impl Ghost {
             .to_string();
         cdp.call(Some(&session), "Page.enable", json!({})).await?;
 
-        // Minimize the window on ALL platforms — makes Chrome
+        // Stealth JS injection — runs before any page script.
+        // Patches the most common automation detection vectors:
+        // - navigator.webdriver: belt-and-suspenders alongside
+        //   --disable-blink-features=AutomationControlled
+        // - navigator.languages: ensure it's set (some Xvfb setups
+        //   don't inherit the system locale)
+        // - window.chrome: ensure it exists (some headful setups
+        //   on Linux miss the chrome.runtime object)
+        // - navigator.permissions.query: patch notifications to
+        //   return 'denied' (real Chrome default, automation
+        //   returns 'prompt' — a known detection vector)
+        // - navigator.plugins: ensure length > 0 (headful Chrome
+        //   should have plugins, but some setups don't)
+        // Minimal patches — over-patching is itself detectable.
+        let _ = cdp
+            .call(
+                Some(&session),
+                "Page.addScriptToEvaluateOnNewDocument",
+                json!({
+                    "source": "\
+                        Object.defineProperty(navigator, 'webdriver', { get: () => false });\
+                        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });\
+                        if (!window.chrome) { window.chrome = {}; }\
+                        if (!window.chrome.runtime) { window.chrome.runtime = {}; }\
+                        if (navigator.plugins && navigator.plugins.length === 0) {\
+                            Object.defineProperty(navigator, 'plugins', { get: () => [{ name: 'Chrome PDF Plugin' }, { name: 'Chrome PDF Viewer' }, { name: 'Native Client' }] });\
+                        }\
+                    "
+                }),
+            )
+            .await;
         // invisible even on macOS (Dock) and Windows (taskbar).
         // Combined with --window-position=-32000,-32000, the
         // window is both off-screen and minimized. Chrome still

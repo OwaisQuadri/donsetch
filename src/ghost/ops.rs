@@ -255,6 +255,7 @@ pub async fn ghost_fetch(
     let mut kicked = false;
     let mut vendor: Option<String> = None;
     let mut settle_streak = 0u8;
+    let mut dead_streak = 0u32; // consecutive polls: DOM static + visible < 80
     let mut prev_len = 0usize;
     let mut html = String::new();
 
@@ -295,9 +296,11 @@ pub async fn ghost_fetch(
         }
 
         // Challenge still up → wait it out (click turnstile once).
-        let verdict = walls::detect(200, &[], html.as_bytes());
-        let challenged =
-            cur_len < 30_000 && matches!(verdict, Verdict::Challenge(_) | Verdict::Blocked);
+        // Use detect_dom (not detect) — ghost DOMs have no HTTP
+        // headers, and detect disables body markers for pages > 32KB.
+        // Amazon's 51KB block page passed as ContentOk with detect.
+        let verdict = walls::detect_dom(html.as_bytes());
+        let challenged = matches!(verdict, Verdict::Challenge(_) | Verdict::Blocked);
         if challenged {
             if vendor.is_none()
                 && let Verdict::Challenge(v) = &verdict
@@ -359,14 +362,23 @@ pub async fn ghost_fetch(
             continue;
         }
 
-        // Still hydrating: skeleton placeholders, aria-busy
-        // spinners, modal-hidden body. Not a wall — the SPA just
-        // hasn't loaded its content yet. Kick it once (dismiss
-        // consent modals + scroll to trigger lazy fetches) and
-        // keep waiting; never settle on a skeleton page.
+        // Still hydrating: aria-busy spinners, modal-hidden
+        // body. Not a wall — the SPA just hasn't loaded its
+        // content yet. Kick it once (dismiss consent modals +
+        // scroll to trigger lazy fetches) and keep waiting;
+        // never settle on a skeleton page.
+        //
+        // NOTE: "skeleton" in CSS class names is NOT a reliable
+        // loading signal — Amazon, React apps, and many CSS
+        // frameworks use "skeleton" in class names even after
+        // the page has fully hydrated. Using it here causes the
+        // ghost to never settle on pages with real content.
+        // The content-quality oracle (visible >= 80) is the
+        // reliable signal: if the page has 80+ visible chars
+        // that are stable, it's real content, regardless of
+        // CSS class names.
         let loading = lower.matches("aria-busy=\"true\"").take(3).count() >= 3
-            || lower.matches("skeleton").take(6).count() >= 6
-            || lower.contains("<body aria-hidden=\"true\"");
+            || lower.contains("<body aria-hidden=\"true\">");
         if loading {
             settle_streak = 0;
             prev_len = cur_len;
@@ -412,15 +424,40 @@ pub async fn ghost_fetch(
         } else {
             settle_streak = 0;
         }
+
+        // Dead DOM early exit: if the DOM is static (not changing)
+        // AND has < 80 visible chars for 8+ seconds, it's a dead
+        // page — a block/challenge page that the ghost can't solve.
+        // Don't waste 20s waiting; exit early and let the caller
+        // handle it. This saves 12s on Amazon-type pages.
+        //
+        // Tolerance: allow small DOM changes (< 100 bytes) so
+        // dynamic ads/trackers don't reset the streak.
+        if prev_len > 0 && visible < 80 && cur_len.abs_diff(prev_len) < 100 {
+            dead_streak += 1;
+        } else {
+            dead_streak = 0;
+        }
+        // 20 polls * 200ms (early) = 4s, or 20 * 500ms (late) = 10s
+        if dead_streak >= 20 {
+            if std::env::var_os("DONGHOST_DEBUG").is_some() {
+                eprintln!(
+                    "[ghost_fetch] dead DOM: static + visible<80 for {dead_streak} polls, exiting early"
+                );
+            }
+            break;
+        }
+
         prev_len = cur_len;
 
         if std::env::var_os("DONGHOST_DEBUG").is_some() {
             eprintln!(
-                "[ghost_fetch] t={:.0?} html={}B visible={} challenged=false streak={}",
+                "[ghost_fetch] t={:.0?} html={}B visible={} challenged=false streak={} dead={}",
                 start.elapsed(),
                 cur_len,
                 visible,
                 settle_streak,
+                dead_streak,
             );
         }
     }
@@ -433,10 +470,10 @@ pub async fn ghost_fetch(
     // BUT: if the final DOM is still a challenge/wall page, flag it
     // as captcha so ghost_escalate doesn't extract and cache the
     // interstitial as content (the Indeed false-positive bug).
-    let final_verdict = walls::detect(200, &[], html.as_bytes());
-    let still_challenged =
-        html.len() < 30_000 && matches!(final_verdict, Verdict::Challenge(_) | Verdict::Blocked);
-    if still_challenged {
+    // Use detect_dom (not detect) — ghost DOMs have no HTTP headers,
+    // and detect disables body markers for pages > 32KB.
+    let final_verdict = walls::detect_dom(html.as_bytes());
+    if matches!(final_verdict, Verdict::Challenge(_) | Verdict::Blocked) {
         if std::env::var_os("DONGHOST_DEBUG").is_some() {
             eprintln!(
                 "[ghost_fetch] timeout on challenge page ({:?}), flagging as captcha",
