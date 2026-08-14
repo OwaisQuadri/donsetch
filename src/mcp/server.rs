@@ -653,7 +653,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         {
             // Defense in depth: even if a challenge page slipped into
             // the cache (pre-fix), don't serve it as ContentOk.
-            let cached_verdict = crate::detect::walls::detect_dom(rc.html.as_bytes());
+            let cached_verdict = crate::detect::walls::detect_dom_smart(rc.html.as_bytes());
             if !matches!(cached_verdict, crate::detect::walls::Verdict::Challenge(_)) {
                 let vstr = format!("{:?}", cached_verdict);
                 let mut res = finish_result(&e2, "render-cache", final_status, &vstr, &final_url);
@@ -856,7 +856,7 @@ async fn ghost_escalate(
         // the ghost_fetch timeout check. A challenge page that has
         // enough block structure to pass !thin would otherwise be
         // cached and re-served as ContentOk forever.
-        let dom_verdict = crate::detect::walls::detect_dom(page.html.as_bytes());
+        let dom_verdict = crate::detect::walls::detect_dom_smart(page.html.as_bytes());
         if !matches!(dom_verdict, crate::detect::walls::Verdict::Challenge(_)) {
             daemon.state.lock().await.record_render(&u, &page.html);
         }
@@ -891,7 +891,7 @@ async fn ghost_escalate(
     // found" (exit 1). This fixes the Medium URL that gave different
     // verdicts across runs: sometimes the challenge page was < 5KB
     // (→ "not found"), sometimes larger (→ "blocked").
-    let dom_verdict = crate::detect::walls::detect_dom(page.html.as_bytes());
+    let dom_verdict = crate::detect::walls::detect_dom_smart(page.html.as_bytes());
     if matches!(dom_verdict, Verdict::Challenge(_)) {
         return Err((
             format!(

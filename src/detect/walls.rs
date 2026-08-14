@@ -67,7 +67,12 @@ pub fn detect(status: u16, headers: &[(String, String)], body: &[u8]) -> Verdict
         return Verdict::ContentOk;
     }
 
-    Verdict::ContentOk
+    // Any other status (4xx/5xx not specifically handled above)
+    // is a server error, not content. Previously this fell through
+    // to ContentOk, causing 400/500/502 etc. to be treated as
+    // successful fetches — the agent would trust error pages as
+    // real content.
+    Verdict::Blocked
 }
 
 /// Detect wall from a ghost-rendered DOM (no HTTP headers).
@@ -85,6 +90,89 @@ pub fn detect_dom(body: &[u8]) -> Verdict {
     let scan = &body[..body.len().min(64 * 1024)];
     let text = String::from_utf8_lossy(scan).to_lowercase();
     classify_wall(&text, &[], false, 200, true)
+}
+
+/// Smart DOM detection for ghost-rendered pages: considers
+/// visible text content before challenge markers.
+///
+/// A real page with an embedded challenge widget (Cloudflare
+/// Turnstile on a contact form, DataDome monitoring script on
+/// a Forbes article) contains challenge markers but also has
+/// substantial visible text. `detect_dom` alone would classify
+/// these as Challenge, causing the ghost to never settle and
+/// eventually return captcha=true.
+///
+/// This function first checks visible text: if the page has
+/// ≥ 80 non-whitespace chars outside scripts/styles, it's real
+/// content — return ContentOk regardless of challenge markers.
+/// Only when the page is visually empty (< 80 visible chars)
+/// does it fall back to `detect_dom` for challenge detection.
+///
+/// Challenge interstitials (CF, DataDome, PX) always have
+/// < 80 visible chars — they're mostly JS/HTML structure.
+/// The Amazon 51KB block page has ~50 visible chars.
+/// Real pages have 80+ visible chars even when they embed
+/// challenge widgets in a small section.
+pub fn detect_dom_smart(body: &[u8]) -> Verdict {
+    let visible = visible_text_count(body);
+    if visible >= 80 {
+        return Verdict::ContentOk;
+    }
+    detect_dom(body)
+}
+
+/// Fast visible-text estimate: strip tags + script/style bodies,
+/// count non-whitespace characters. No lowercasing, no DOM —
+/// byte scan. Same algorithm as ghost/ops.rs::visible_text_len.
+fn visible_text_count(html: &[u8]) -> usize {
+    let b = html;
+    let mut n = 0usize;
+    let mut i = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'<' => {
+                // Skip script/style/noscript bodies entirely.
+                let close: &[u8] = if starts_ci(&b[i + 1..], b"script") {
+                    b"</script"
+                } else if starts_ci(&b[i + 1..], b"style") {
+                    b"</style"
+                } else if starts_ci(&b[i + 1..], b"noscript") {
+                    b"</noscript"
+                } else {
+                    // Not a skipped tag — skip to end of this tag.
+                    while i < b.len() && b[i] != b'>' {
+                        i += 1;
+                    }
+                    i += 1;
+                    continue;
+                };
+                i = find_ci(b, close, i + 8)
+                    .map(|p| p + close.len() + 1)
+                    .unwrap_or(b.len());
+            }
+            c if !c.is_ascii_whitespace() => {
+                n += 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    n
+}
+
+fn starts_ci(b: &[u8], pat: &[u8]) -> bool {
+    b.len() >= pat.len()
+        && b[..pat.len()]
+            .iter()
+            .zip(pat)
+            .all(|(a, p)| a.to_ascii_lowercase() == *p)
+}
+
+fn find_ci(b: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if from >= b.len() || needle.is_empty() || b.len() < needle.len() {
+        return None;
+    }
+    (from..=b.len() - needle.len()).find(|&p| starts_ci(&b[p..], needle))
 }
 
 fn classify_wall(
@@ -105,7 +193,8 @@ fn classify_wall(
             && (text.contains("just a moment")
                 || text.contains("cf-chl")
                 || text.contains("challenge-platform")
-                || text.contains("turnstile")
+                || text.contains("cf-turnstile")
+                || text.contains("challenges.cloudflare.com")
                 || text.contains("attention required"))
         {
             return Verdict::Challenge(Vendor::Cloudflare);
@@ -170,7 +259,8 @@ fn classify_wall(
         if text.contains("just a moment")
             || text.contains("challenge-platform")
             || text.contains("cf-chl")
-            || text.contains("turnstile")
+            || text.contains("cf-turnstile")
+            || text.contains("challenges.cloudflare.com")
             || status == 403
             || status == 503
         {
@@ -360,5 +450,75 @@ mod tests {
         let headers = vec![("x-datadome".into(), "protected".into())];
         let v = detect(200, &headers, body);
         assert!(matches!(v, Verdict::ContentOk), "got {v:?}");
+    }
+
+    #[test]
+    fn detect_dom_smart_real_page_with_turnstile_is_content() {
+        // A real page with an embedded Cloudflare Turnstile widget
+        // (contact form, login page) has challenge markers but also
+        // substantial visible text. detect_dom_smart must return ContentOk.
+        let body = b"<html><head><script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\"></script></head><body><h1>Contact Us</h1><p>Fill out the form below and we will get back to you within 24 hours. Our team is dedicated to providing the best possible support for all your inquiries.</p><div class=\"cf-turnstile\"></div><form><input name=\"email\"><textarea name=\"message\"></textarea><button>Send</button></form></body></html>";
+        let v = detect_dom_smart(body);
+        assert!(
+            matches!(v, Verdict::ContentOk),
+            "got {v:?} — page with Turnstile widget + real content must be ContentOk"
+        );
+    }
+
+    #[test]
+    fn detect_dom_smart_challenge_interstitial_is_challenge() {
+        // A challenge interstitial has < 80 visible chars — detect_dom_smart
+        // falls back to detect_dom and correctly identifies the challenge.
+        let body = b"<html><head><script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\"></script></head><body><div class=\"cf-turnstile\"></div></body></html>";
+        let v = detect_dom_smart(body);
+        assert!(
+            matches!(v, Verdict::Challenge(_)),
+            "got {v:?} — challenge interstitial must be Challenge"
+        );
+    }
+
+    #[test]
+    fn detect_500_is_blocked_not_content() {
+        // A 500 status code should NOT be ContentOk — it's a server error.
+        let body = b"<html><body>500 Internal Server Error</body></html>";
+        let v = detect(500, &[], body);
+        assert!(
+            matches!(v, Verdict::Blocked),
+            "got {v:?} — 500 must be Blocked, not ContentOk"
+        );
+    }
+
+    #[test]
+    fn detect_400_is_blocked_not_content() {
+        // A 400 status code should NOT be ContentOk.
+        let body = b"<html><body>400 Bad Request</body></html>";
+        let v = detect(400, &[], body);
+        assert!(
+            matches!(v, Verdict::Blocked),
+            "got {v:?} — 400 must be Blocked"
+        );
+    }
+
+    #[test]
+    fn detect_502_is_blocked_not_content() {
+        // A 502 Bad Gateway should NOT be ContentOk.
+        let body = b"<html><body>502 Bad Gateway</body></html>";
+        let v = detect(502, &[], body);
+        assert!(
+            matches!(v, Verdict::Blocked),
+            "got {v:?} — 502 must be Blocked"
+        );
+    }
+
+    #[test]
+    fn turnstile_generic_word_does_not_trigger_challenge() {
+        // The word "turnstile" alone (without cf-turnstile or
+        // challenges.cloudflare.com) should NOT trigger a challenge.
+        let body = b"<html><body><h1>Turnstile Documentation</h1><p>This page discusses the turnstile feature in detail and how it works with various configurations.</p></body></html>";
+        let v = detect(200, &[], body);
+        assert!(
+            matches!(v, Verdict::ContentOk),
+            "got {v:?} — bare 'turnstile' word must not trigger challenge"
+        );
     }
 }

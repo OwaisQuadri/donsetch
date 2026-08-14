@@ -296,10 +296,14 @@ pub async fn ghost_fetch(
         }
 
         // Challenge still up → wait it out (click turnstile once).
-        // Use detect_dom (not detect) — ghost DOMs have no HTTP
-        // headers, and detect disables body markers for pages > 32KB.
-        // Amazon's 51KB block page passed as ContentOk with detect.
-        let verdict = walls::detect_dom(html.as_bytes());
+        // Use detect_dom_smart (not detect_dom) — real pages with
+        // embedded challenge widgets (Turnstile on a contact form)
+        // have challenge markers but also substantial visible text.
+        // detect_dom alone would classify these as Challenge on every
+        // poll, preventing the content oracle from ever running.
+        // detect_dom_smart checks visible text first: ≥ 80 visible
+        // chars = real content, skip challenge check.
+        let verdict = walls::detect_dom_smart(html.as_bytes());
         let challenged = matches!(verdict, Verdict::Challenge(_) | Verdict::Blocked);
         if challenged {
             if vendor.is_none()
@@ -474,9 +478,11 @@ pub async fn ghost_fetch(
     // BUT: if the final DOM is still a challenge/wall page, flag it
     // as captcha so ghost_escalate doesn't extract and cache the
     // interstitial as content (the Indeed false-positive bug).
-    // Use detect_dom (not detect) — ghost DOMs have no HTTP headers,
-    // and detect disables body markers for pages > 32KB.
-    let final_verdict = walls::detect_dom(html.as_bytes());
+    // Use detect_dom_smart — a real page with an embedded challenge
+    // widget (Turnstile) has challenge markers but also visible text.
+    // detect_dom alone would flag it as captcha; detect_dom_smart
+    // checks visible text first.
+    let final_verdict = walls::detect_dom_smart(html.as_bytes());
     if matches!(final_verdict, Verdict::Challenge(_) | Verdict::Blocked) {
         if std::env::var_os("DONGHOST_DEBUG").is_some() {
             eprintln!(
