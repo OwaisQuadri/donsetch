@@ -265,6 +265,15 @@ pub fn merge(
     // Skipped gracefully if model unavailable or feature disabled.
     crate::search::rerank::rerank(query, &mut results);
 
+    // Entity coverage penalty: penalize results that miss
+    // key query entities (compound terms like "B-tree", wrong
+    // version numbers like "5.5" when the query says "5.2").
+    // Sits after rerank so the cross-encoder can still rescue
+    // semantically-relevant results, but coverage gaps can't
+    // be fully overridden — "binary tree" ≠ "B-tree" no matter
+    // how similar the cross-encoder thinks they are.
+    crate::search::coverage::penalize(query, &mut results);
+
     results.sort_by(|a, b| b.score.total_cmp(&a.score));
 
     // Syndicated content dedup: same article republished under

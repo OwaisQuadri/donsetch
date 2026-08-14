@@ -5,6 +5,7 @@
 //! honest engine reporting.
 
 pub mod byok;
+pub mod coverage;
 pub mod egress;
 pub mod engines;
 pub mod intent;
