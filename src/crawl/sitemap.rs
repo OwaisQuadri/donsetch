@@ -226,12 +226,21 @@ pub async fn discover(fetch: &PageFetcher, host: &str, cap: usize) -> (Robots, V
     // Sitemap candidates: robots directives first.
     let mut queue: Vec<String> = robots.sitemaps.clone();
     if queue.is_empty() {
-        queue.push(format!("https://{host}/sitemap.xml"));
+        // Multiple conventional locations — many sites use non-standard
+        // sitemap paths (WordPress /wp-sitemap.xml, Yoast /sitemap_index.xml).
+        queue.extend([
+            format!("https://{host}/sitemap.xml"),
+            format!("https://{host}/sitemap_index.xml"),
+            format!("https://{host}/sitemap-index.xml"),
+            format!("https://{host}/wp-sitemap.xml"),
+            format!("https://{host}/sitemaps.xml"),
+            format!("https://{host}/sitemap.txt"),
+        ]);
     }
 
     let mut entries = Vec::new();
     let mut fetched = 0usize;
-    while !queue.is_empty() && entries.len() < cap && fetched < 8 {
+    while !queue.is_empty() && entries.len() < cap && fetched < 32 {
         let loc = queue.remove(0);
         fetched += 1;
         let page = fetch(loc, "direct".to_string(), None).await;
@@ -264,7 +273,7 @@ pub async fn discover(fetch: &PageFetcher, host: &str, cap: usize) -> (Robots, V
         // Child sitemaps recurse; pages go straight to the map.
         for e in here {
             if e.is_index {
-                if queue.len() < 32 {
+                if queue.len() < 128 {
                     queue.push(e.loc);
                 }
             } else {

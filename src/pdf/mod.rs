@@ -147,6 +147,14 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
             .map(|mut f| {
                 f.garbage_ratio = trust;
                 f
+            })
+            .or_else(|| {
+                // No pixels (text-rich page) — still track glyph trust
+                // for garbage detection (PUA glyph soup pages).
+                Some(fusion::FusionData {
+                    garbage_ratio: trust,
+                    ..Default::default()
+                })
             });
         for w in widgets {
             all_widgets.push((pl.index, w));

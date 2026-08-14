@@ -298,7 +298,7 @@ impl Crawler {
         let host_ok = {
             let sh = seed_host.clone();
             let same = opts.same_host;
-            move |u: &Url| !same || u.host_str().map(|h| h == sh).unwrap_or(false)
+            move |u: &Url| !same || u.host_str().map(|h| host_matches(h, &sh)).unwrap_or(false)
         };
 
         // ── Phase 1: the map ───────────────────────────────
@@ -353,13 +353,23 @@ impl Crawler {
             self.governor.set_crawl_delay(robots.crawl_delay);
         }
         if opts.mode == CrawlMode::Map {
-            // Map-only crawl: cheap exit.
+            // Map-only crawl: cheap exit. Guide the agent when no
+            // sitemap was found.
+            let skipped = if map.is_empty() {
+                vec![(
+                    seed.to_string(),
+                    "no sitemap found at common locations — use mode=content to BFS from the seed"
+                        .into(),
+                )]
+            } else {
+                Vec::new()
+            };
             return Ok(CrawlResult {
                 seed: seed.to_string(),
                 pages: Vec::new(),
                 queued: Vec::new(),
                 filtered_out: 0,
-                skipped: Vec::new(),
+                skipped,
                 stop: StopReason::FrontierEmpty,
                 elapsed: started.elapsed(),
                 map,
@@ -548,7 +558,7 @@ impl Crawler {
                         break 'work;
                     }
                     let host = parsed.host_str().unwrap_or("");
-                    if opts_worker.same_host && host != seed_host2 {
+                    if opts_worker.same_host && !host_matches(host, &seed_host2) {
                         filtered_out.fetch_add(1, Ordering::Relaxed);
                         continue 'work;
                     }
@@ -729,14 +739,6 @@ impl Crawler {
                         .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
                         .map(|(_, v)| v.as_str())
                         .unwrap_or("text/html");
-                    let ctype_lower = ctype.to_lowercase();
-                    if ghost_html.is_none() && ctype_lower.contains("pdf") {
-                        skipped
-                            .lock()
-                            .unwrap()
-                            .push((item.url.clone(), "pdf (not crawled, use web_fetch)".into()));
-                        continue 'work;
-                    }
                     if ghost_html.is_none() && crate::fetch::guards::is_binary(&page.body, ctype) {
                         let kind = ctype.split(';').next().unwrap_or("unknown").trim();
                         skipped
@@ -918,7 +920,10 @@ impl Crawler {
                             for nh in &next_hrefs {
                                 if let Some(nu) = frontier::resolve(&base, nh) {
                                     if opts_worker.same_host
-                                        && nu.host_str() != Some(seed_host2.as_str())
+                                        && !nu
+                                            .host_str()
+                                            .map(|h| host_matches(h, &seed_host2))
+                                            .unwrap_or(false)
                                     {
                                         continue;
                                     }
@@ -953,7 +958,12 @@ impl Crawler {
                                 Some(u) => u,
                                 None => continue,
                             };
-                            if opts_worker.same_host && fu.host_str() != Some(seed_host2.as_str()) {
+                            if opts_worker.same_host
+                                && !fu
+                                    .host_str()
+                                    .map(|h| host_matches(h, &seed_host2))
+                                    .unwrap_or(false)
+                            {
                                 continue;
                             }
                             // Governor-pace the feed fetch.
@@ -981,7 +991,10 @@ impl Crawler {
                                 for eu in &entries {
                                     if let Ok(u) = Url::parse(eu) {
                                         if opts_worker.same_host
-                                            && u.host_str() != Some(seed_host2.as_str())
+                                            && !u
+                                                .host_str()
+                                                .map(|h| host_matches(h, &seed_host2))
+                                                .unwrap_or(false)
                                         {
                                             continue;
                                         }
@@ -1021,7 +1034,10 @@ impl Crawler {
                                 .filter_map(|(child, anchor)| {
                                     let cu = frontier::resolve(&base, &child)?;
                                     if opts_worker.same_host
-                                        && cu.host_str() != Some(seed_host2.as_str())
+                                        && !cu
+                                            .host_str()
+                                            .map(|h| host_matches(h, &seed_host2))
+                                            .unwrap_or(false)
                                     {
                                         filtered_out.fetch_add(1, Ordering::Relaxed);
                                         return None;
@@ -1352,4 +1368,12 @@ fn self_harvest_static(html: &str, _base: &Url) -> Vec<(String, String)> {
         out.push((href.to_string(), anchor));
     }
     out
+}
+
+/// Compare two hosts, treating `www.` prefix as equivalent.
+/// `example.com` matches `www.example.com` and vice versa.
+fn host_matches(a: &str, b: &str) -> bool {
+    let a = a.strip_prefix("www.").unwrap_or(a);
+    let b = b.strip_prefix("www.").unwrap_or(b);
+    a.eq_ignore_ascii_case(b)
 }

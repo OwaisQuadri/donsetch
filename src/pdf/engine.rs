@@ -619,6 +619,12 @@ where
                     });
                 }
             }
+            // Lazy pixel rendering: text-rich pages (200+ chars,
+            // no images) don't need pixel fusion — the text layer
+            // is sufficient for reading order and garbage detection.
+            // This makes 50-page arXiv papers fast (no bitmap per page).
+            let char_count = chars.len();
+            let needs_pixels = char_count < 200 || images > 0;
             pages_out.push(page_sink(PageInput {
                 chars: PageChars {
                     index: pi,
@@ -627,7 +633,7 @@ where
                     chars,
                     images,
                 },
-                bitmap: if opts.want_pixels {
+                bitmap: if opts.want_pixels && needs_pixels {
                     rasterize_page(page, width, height, opts.dpi)
                 } else {
                     None

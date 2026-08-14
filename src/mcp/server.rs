@@ -540,12 +540,23 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         .and_then(|u| u.host_str().map(String::from))
         .unwrap_or_default();
 
+    // === PDF early detection ===
+    // Ghost can't render PDFs (Chrome's PDF viewer is a JS shell).
+    // If the URL looks like a PDF, always fetch raw bytes (tier 1)
+    // and route to the DonSheet engine. Never skip tier 1 for PDFs.
+    let is_pdf_url = url
+        .split('?')
+        .next()
+        .unwrap_or(&url)
+        .to_lowercase()
+        .ends_with(".pdf");
+
     // === Decision: how to route this fetch? ===
     // The self-improving loop: the domain profile decides
     // cold / warm / skip-to-solve / recheck-cold.
-    let route = if tier == "2" {
+    let route = if tier == "2" && !is_pdf_url {
         RouteDecision::SkipToSolve
-    } else if tier == "1" {
+    } else if tier == "1" || is_pdf_url {
         RouteDecision::Cold
     } else {
         daemon.state.lock().await.route_for(&host)
@@ -707,10 +718,29 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // waste 20s launching a browser for it.
     let still_thin = final_ex.as_ref().map(|e| e.thin).unwrap_or(false);
     let page_size = out.as_ref().map(|o| o.body.len()).unwrap_or(0);
-    let is_small_404 = page_size > 0 && page_size < 5_000 && still_thin && !challenge;
-    let need_ghost = (challenge && tier != "1" && !is_small_404)
-        || skip_tier1
-        || (still_thin && tier == "auto" && !is_small_404);
+    // PDF detection: if the response is a PDF (content-type or magic
+    // bytes), never escalate to ghost — Chrome's PDF viewer is a JS
+    // shell with no extractable text. PDFs are handled by DonSheet.
+    let is_pdf_content = out
+        .as_ref()
+        .map(|o| {
+            let ct = o
+                .headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            crate::fetch::guards::is_pdf(&o.body, &ct)
+        })
+        .unwrap_or(is_pdf_url);
+    // Small 404 check: a small thin page is likely a 404/error.
+    // But a small PDF is still a PDF — DonSheet handles it.
+    let is_small_404 =
+        page_size > 0 && page_size < 5_000 && still_thin && !challenge && !is_pdf_content;
+    let need_ghost = !is_pdf_content
+        && ((challenge && tier != "1" && !is_small_404)
+            || skip_tier1
+            || (still_thin && tier == "auto" && !is_small_404));
 
     if need_ghost {
         // Render-cache shortcut: a previously recovered DOM.

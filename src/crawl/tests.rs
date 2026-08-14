@@ -203,10 +203,13 @@ async fn map_mode_reads_sitemap_cheap() {
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
     assert_eq!(r.pages.len(), 0);
     assert_eq!(r.map.len(), 3);
-    // Cost: robots + sitemap = 2 fetches max, never the pages.
+    // Cost: robots + sitemap discovery fetches, never the pages.
+    // Multiple sitemap locations are tried (6 fallbacks), but only
+    // /sitemap.xml returns 200 — the others 404.
     let hits = hits.lock().unwrap();
-    assert!(hits.len() <= 2);
     assert!(!hits.iter().any(|h| h.ends_with("/a")));
+    assert!(!hits.iter().any(|h| h.ends_with("/b")));
+    assert!(!hits.iter().any(|h| h.ends_with("/c")));
 }
 
 #[tokio::test]
@@ -640,8 +643,10 @@ async fn v2_canonical_dedup_prevents_double_fetch() {
 }
 
 #[tokio::test]
-async fn v2_binary_pdf_skipped() {
-    // Gap 5: binary content fed to DonSift. Now guarded.
+async fn v2_pdf_not_skipped_as_binary() {
+    // PDFs are now extracted (routed to DonSheet), not skipped as
+    // "binary" or "pdf". A fake PDF body will fail to parse and be
+    // skipped with "low quality", not "binary" or "pdf".
     let seed = "<html><body><article><p>content words for extractor threshold pass yes yes yes</p><a href=\"/doc.pdf\">pdf</a><a href=\"/ok\">ok</a></article></body></html>";
     let site = MockSite::new()
         .page("https://ex.com/", 200, seed)
@@ -654,13 +659,13 @@ async fn v2_binary_pdf_skipped() {
     o.mode = CrawlMode::Content;
     o.max_pages = 10;
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
-    // PDF must be skipped, not fed to extractor.
+    // PDF must NOT be skipped as "binary" or "pdf".
     assert!(
-        r.skipped
+        !r.skipped
             .iter()
-            .any(|(u, why)| u.ends_with(".pdf") && why.contains("pdf"))
+            .any(|(u, why)| u.ends_with(".pdf") && (why.contains("binary") || why.contains("pdf"))),
+        "PDF should not be skipped as binary/pdf"
     );
-    assert!(!r.pages.iter().any(|p| p.url.ends_with(".pdf")));
     assert!(r.pages.iter().any(|p| p.url.ends_with("/ok")));
 }
 
@@ -892,4 +897,117 @@ fn v2_governor_zero_dwell_no_extra_wait() {
     let w = g.wait_for("ex.com", "d", 1);
     // Without dwell, the wait is just the base pacing delay.
     assert!(w < Duration::from_secs(3));
+}
+
+// ── Hardening tests (PDF, sitemap, www normalization) ────────
+
+#[test]
+fn host_matches_www_equivalence() {
+    use super::host_matches;
+    assert!(host_matches("example.com", "example.com"));
+    assert!(host_matches("www.example.com", "example.com"));
+    assert!(host_matches("example.com", "www.example.com"));
+    assert!(host_matches("www.example.com", "www.example.com"));
+    assert!(!host_matches("other.com", "example.com"));
+    assert!(!host_matches("www.other.com", "example.com"));
+    // Case-insensitive
+    assert!(host_matches("Example.COM", "example.com"));
+}
+
+#[tokio::test]
+async fn empty_map_returns_guidance() {
+    // No sitemap at any location → map mode returns guidance.
+    let site = MockSite::new().page("https://ex.com/robots.txt", 200, "User-agent: *\n");
+    let (fetch, _) = site.fetcher();
+    let crawler = Crawler::new(fetch, gov());
+    let mut o = opts();
+    o.mode = CrawlMode::Map;
+    let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
+    assert!(r.map.is_empty());
+    assert!(
+        r.skipped
+            .iter()
+            .any(|(_, why)| why.contains("mode=content"))
+    );
+}
+
+#[tokio::test]
+async fn sitemap_fallback_locations_tried() {
+    // /sitemap.xml returns 404, but /sitemap_index.xml returns 200.
+    let index = r#"<urlset>
+<url><loc>https://ex.com/found-page</loc></url>
+</urlset>"#;
+    let robots = "User-agent: *\n";
+    let site = MockSite::new()
+        .page("https://ex.com/robots.txt", 200, robots)
+        .page("https://ex.com/sitemap.xml", 404, "not found")
+        .page("https://ex.com/sitemap_index.xml", 200, index);
+    let (fetch, hits) = site.fetcher();
+    let crawler = Crawler::new(fetch, gov());
+    let mut o = opts();
+    o.mode = CrawlMode::Map;
+    let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
+    assert!(r.map.contains(&"https://ex.com/found-page".to_string()));
+    let hits = hits.lock().unwrap();
+    assert!(hits.iter().any(|h| h.contains("sitemap_index.xml")));
+}
+
+#[tokio::test]
+async fn crawl_www_host_matches_bare_seed() {
+    // Sitemap lists www.example.com URLs, seed is example.com.
+    // With www normalization, the www URLs should be crawled.
+    let sitemap = r#"<urlset>
+<url><loc>https://www.ex.com/article</loc></url>
+</urlset>"#;
+    let seed = "<html><body><article><p>content words for extractor threshold pass yes yes yes</p></article></body></html>";
+    let article = "<html><body><article><h1>Article</h1><p>Article content here for the extractor threshold pass yes yes yes</p></article></body></html>";
+    let site = MockSite::new()
+        .page("https://ex.com/robots.txt", 200, "User-agent: *\n")
+        .page("https://ex.com/sitemap.xml", 200, sitemap)
+        .page("https://ex.com/", 200, seed)
+        .page("https://www.ex.com/article", 200, article);
+    let (fetch, _) = site.fetcher();
+    let crawler = Crawler::new(fetch, gov());
+    let mut o = opts();
+    o.mode = CrawlMode::Full;
+    o.max_pages = 5;
+    let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
+    // The www subdomain page should be in results (www normalization).
+    assert!(
+        r.pages.iter().any(|p| p.url.contains("article")),
+        "www. subdomain page should be crawled from bare-domain seed"
+    );
+}
+
+#[tokio::test]
+async fn crawl_extracts_pdf_not_skips() {
+    // A PDF page linked from the seed should be extracted, not
+    // skipped with "use web_fetch".
+    let seed = "<html><body><article><p>content words for extractor threshold pass yes yes yes</p><a href=\"/doc.pdf\">pdf</a><a href=\"/ok\">ok</a></article></body></html>";
+    // Minimal valid PDF with a text layer.
+    let pdf = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n4 0 obj<</Length 44>>stream\nBT /F1 12 Tf 100 700 Td (Hello World from PDF) Tj ET\nendstream\nendobj\n5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000180 00000 n \n0000000268 00000 n \ntrailer<</Size 6/Root 1 0 R>>\nstartxref\n341\n%%EOF";
+    let site = MockSite::new()
+        .page("https://ex.com/", 200, seed)
+        .page(
+            "https://ex.com/doc.pdf",
+            200,
+            std::str::from_utf8(pdf).unwrap(),
+        )
+        .content_type("https://ex.com/doc.pdf", "application/pdf")
+        .page("https://ex.com/ok", 200, &html("Ok", "ok page"));
+    let (fetch, _) = site.fetcher();
+    let crawler = Crawler::new(fetch, gov());
+    let mut o = opts();
+    o.mode = CrawlMode::Content;
+    o.max_pages = 10;
+    let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
+    // PDF should NOT be in skipped with "pdf" or "binary" reason.
+    assert!(
+        !r.skipped
+            .iter()
+            .any(|(u, why)| u.ends_with(".pdf") && (why.contains("pdf") || why.contains("binary"))),
+        "PDF should not be skipped as binary/pdf"
+    );
+    // The ok page should be in results.
+    assert!(r.pages.iter().any(|p| p.url.ends_with("/ok")));
 }

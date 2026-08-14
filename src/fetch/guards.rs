@@ -83,10 +83,23 @@ pub fn is_binary_content_type(ct: &str) -> bool {
             && !ct.contains("pdf")
 }
 
+/// True if the body is a PDF (magic bytes or content-type).
+/// PDFs are binary but are handled by the DonSheet engine, NOT
+/// rejected by the binary guard.
+pub fn is_pdf(body: &[u8], content_type: &str) -> bool {
+    (body.len() >= 5 && body.starts_with(b"%PDF-")) || content_type.to_lowercase().contains("pdf")
+}
+
 /// True if the body starts with known binary magic bytes.
 /// Catches cases where the content-type is missing or wrong.
 pub fn is_binary_body(body: &[u8]) -> bool {
     if body.is_empty() {
+        return false;
+    }
+    // PDFs contain null bytes (binary streams, xref tables) but
+    // are NOT binary — the DonSheet engine handles them. Skip the
+    // null-byte heuristic entirely for PDFs.
+    if body.starts_with(b"%PDF-") {
         return false;
     }
     // Known binary magic bytes (common file signatures).
@@ -115,7 +128,11 @@ pub fn is_binary_body(body: &[u8]) -> bool {
 }
 
 /// Combine both checks: is this content binary we should reject?
+/// PDFs are never binary — they're routed to the DonSheet engine.
 pub fn is_binary(body: &[u8], content_type: &str) -> bool {
+    if is_pdf(body, content_type) {
+        return false;
+    }
     is_binary_content_type(content_type) || is_binary_body(body)
 }
 
@@ -204,5 +221,34 @@ mod tests {
         assert!(is_binary(b"fake png", "image/png"));
         assert!(!is_binary(b"hello", "text/plain"));
         assert!(!is_binary(b"<html>", "text/html; charset=utf-8"));
+    }
+
+    #[test]
+    fn pdf_not_binary_by_magic() {
+        // A PDF with null bytes in first 1024 bytes (binary xref stream).
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        pdf.extend_from_slice(&[0x00; 200]); // null bytes — would trigger old heuristic
+        pdf.extend_from_slice(b"\n%%EOF\n");
+        assert!(
+            !is_binary_body(&pdf),
+            "PDF body must not be flagged as binary"
+        );
+        assert!(!is_binary(&pdf, "application/pdf"));
+        assert!(is_pdf(&pdf, "application/pdf"));
+    }
+
+    #[test]
+    fn pdf_not_binary_by_content_type() {
+        // Even if body has null bytes, content-type=application/pdf wins.
+        let body = b"\x00\x00\x00\x00\x00\x00\x00\x00";
+        assert!(!is_binary(body, "application/pdf"));
+    }
+
+    #[test]
+    fn pdf_detected_by_magic_bytes() {
+        assert!(is_pdf(b"%PDF-1.7", ""));
+        assert!(is_pdf(b"%PDF-1.4", "application/octet-stream"));
+        assert!(is_pdf(b"not a pdf", "application/pdf"));
+        assert!(!is_pdf(b"<html>", "text/html"));
     }
 }
