@@ -849,15 +849,15 @@ impl Crawler {
                         continue 'work;
                     }
 
-                    // Scope gate for results: the seed is always
-                    // fetched for link discovery, but only included
-                    // in results if it matches include_paths. Non-seed
-                    // pages already passed scope before fetching.
-                    let in_scope = scope_allowed(
-                        parsed.path(),
-                        &opts_worker.include_paths,
-                        &opts_worker.exclude_paths,
-                    );
+                    // Scope gate for results: the seed is ALWAYS
+                    // in scope — the user explicitly asked to crawl it.
+                    // Non-seed pages already passed scope before fetching.
+                    let in_scope = is_seed
+                        || scope_allowed(
+                            parsed.path(),
+                            &opts_worker.include_paths,
+                            &opts_worker.exclude_paths,
+                        );
 
                     let chars = md.chars().count();
 

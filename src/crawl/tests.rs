@@ -645,12 +645,12 @@ async fn v2_canonical_dedup_prevents_double_fetch() {
 #[tokio::test]
 async fn v2_pdf_not_skipped_as_binary() {
     // PDFs are now extracted (routed to DonSheet), not skipped as
-    // "binary" or "pdf". A fake PDF body will fail to parse and be
-    // skipped with "low quality", not "binary" or "pdf".
+    // "binary" or "pdf". A non-PDF body with PDF content-type will
+    // fail to parse and be skipped with "low quality", not "binary".
     let seed = "<html><body><article><p>content words for extractor threshold pass yes yes yes</p><a href=\"/doc.pdf\">pdf</a><a href=\"/ok\">ok</a></article></body></html>";
     let site = MockSite::new()
         .page("https://ex.com/", 200, seed)
-        .page("https://ex.com/doc.pdf", 200, "%PDF-1.4 fake pdf bytes")
+        .page("https://ex.com/doc.pdf", 200, "not a real pdf body")
         .content_type("https://ex.com/doc.pdf", "application/pdf")
         .page("https://ex.com/ok", 200, &html("Ok", "ok page"));
     let (fetch, _) = site.fetcher();
@@ -1010,4 +1010,42 @@ async fn crawl_extracts_pdf_not_skips() {
     );
     // The ok page should be in results.
     assert!(r.pages.iter().any(|p| p.url.ends_with("/ok")));
+}
+
+#[tokio::test]
+async fn seed_always_in_scope_with_include() {
+    // The seed should always be included in results, even when
+    // it doesn't match --include globs. Scope filters apply to
+    // discovered links, not the seed the user explicitly asked for.
+    // Regression test for docs.rs: crawling /tokio with
+    // --include /tokio/* — seed /tokio doesn't match /tokio/*
+    // but must still be in results.
+    let seed = "<html><body><article><h1>Tokio</h1><p>content words for extractor threshold pass yes yes yes</p><a href=\"/tokio/v0.1/api\">api</a></article></body></html>";
+    let api = "<html><body><article><h1>Tokio API</h1><p>API docs content words for extractor threshold pass yes yes yes</p></article></body></html>";
+    let site = MockSite::new()
+        .page("https://ex.com/tokio", 200, seed)
+        .page("https://ex.com/tokio/v0.1/api", 200, api);
+    let (fetch, _) = site.fetcher();
+    let crawler = Crawler::new(fetch, gov());
+    let mut o = opts();
+    o.mode = CrawlMode::Content;
+    o.max_pages = 5;
+    o.include_paths = vec!["/tokio/*".into()];
+    let r = crawler
+        .crawl("https://ex.com/tokio", o, None)
+        .await
+        .unwrap();
+    // Seed must be in results even though /tokio doesn't match /tokio/*.
+    assert!(
+        r.pages.iter().any(|p| p.url.ends_with("/tokio")),
+        "seed must always be in scope, even when it doesn't match --include"
+    );
+    assert!(r.pages.iter().any(|p| p.url.contains("/tokio/v0.1/api")));
+    // Seed should NOT be in skipped as "out of scope".
+    assert!(
+        !r.skipped
+            .iter()
+            .any(|(u, why)| u.ends_with("/tokio") && why.contains("out of scope")),
+        "seed should not be marked out of scope"
+    );
 }
