@@ -1,19 +1,19 @@
 //! TinyFish search provider adapter.
 //!
-//! POST https://api.search.tinyfish.ai/search
-//! Auth: X-API-Key <key>
-//! Body: { query, num, domain_type }
-//! Response: { results: [{ title, url, snippet, position, domain }] }
+//! GET https://api.search.tinyfish.ai/
+//! Auth: X-API-Key header
+//! Query params: query, num, domain_type
+//! Response: { query, results: [{ title, url, snippet, position, site_name }], total_results, page }
 //!
 //! Search is free (no credit cost), just rate-limited per key.
 
 use std::time::Instant;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{KeyError, ProviderResult, SearchHit};
 
-const ENDPOINT: &str = "https://api.search.tinyfish.ai/search";
+const ENDPOINT: &str = "https://api.search.tinyfish.ai/";
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub async fn search(
@@ -32,16 +32,14 @@ pub async fn search(
         _ => "web",
     };
 
-    let body = json!({
-        "query": query,
-        "num": max.min(10),
-        "domain_type": domain_type,
-    });
-
     let resp = client
-        .post(ENDPOINT)
+        .get(ENDPOINT)
         .header("X-API-Key", key)
-        .json(&body)
+        .query(&[
+            ("query", query),
+            ("num", &max.to_string()),
+            ("domain_type", domain_type),
+        ])
         .timeout(TIMEOUT)
         .send()
         .await
