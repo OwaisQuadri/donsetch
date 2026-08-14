@@ -195,7 +195,14 @@ impl ResumeFile {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(s) = serde_json::to_string(self) {
-            let _ = std::fs::write(p, s);
+            // Atomic write: write to temp file, then rename.
+            // Without this, a concurrent process reading the file
+            // mid-write gets partial JSON → empty store → "token
+            // expired or unknown" on a freshly-issued token.
+            let tmp = p.with_extension("tmp");
+            if std::fs::write(&tmp, s).is_ok() {
+                let _ = std::fs::rename(&tmp, &p);
+            }
         }
     }
 

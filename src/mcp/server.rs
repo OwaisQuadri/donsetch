@@ -635,7 +635,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // waste 20s launching a browser for it.
     let still_thin = final_ex.as_ref().map(|e| e.thin).unwrap_or(false);
     let page_size = out.as_ref().map(|o| o.body.len()).unwrap_or(0);
-    let is_small_404 = page_size > 0 && page_size < 5_000 && still_thin;
+    let is_small_404 = page_size > 0 && page_size < 5_000 && still_thin && !challenge;
     let need_ghost = (challenge && tier != "1" && !is_small_404)
         || skip_tier1
         || (still_thin && tier == "auto" && !is_small_404);
@@ -715,9 +715,20 @@ async fn ghost_escalate(
         .acquire(&daemon.profile)
         .await
         .map_err(|e| (format!("browser launch failed: {e}"), "permanent"))?;
-    let page = ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(20))
-        .await
-        .map_err(|e| (format!("browser automation error: {e}"), "permanent"))?;
+    let page = match ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(20)).await {
+        Ok(p) => p,
+        Err(e) => {
+            // CDP timeouts on first attempt are transient — the
+            // browser was still warming up. Retry once before
+            // conceding a permanent failure.
+            if std::env::var_os("DONGHOST_DEBUG").is_some() {
+                eprintln!("[ghost_escalate] first attempt failed: {e}, retrying...");
+            }
+            ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(20))
+                .await
+                .map_err(|e| (format!("browser automation error: {e}"), "permanent"))?
+        }
+    };
     if std::env::var_os("DONGHOST_DEBUG").is_some() {
         let safe: String = host
             .chars()
@@ -857,17 +868,38 @@ async fn ghost_escalate(
     // it (complex DOM, non-standard structure), strip tags and
     // return the visible text. This makes "found DOM but failed
     // to extract content" IMPOSSIBLE when the DOM has real text.
+    //
+    // BUT: only return Ok when the fallback is non-thin (>= 800
+    // chars of visible text). A captcha/challenge page with 300
+    // chars of "Please verify you are a human" must NOT be
+    // returned as ContentOk — the agent would trust it.
     if !page.captcha {
         let doc = scraper::Html::parse_document(&page.html);
         let meta = crate::extract::metadata::metadata(&doc);
         let max_chars = opts.max_chars.unwrap_or(16_000).max(200);
-        if let Some(fb) = crate::extract::text_fallback(&page.html, &meta, url, opts, max_chars) {
+        if let Some(fb) = crate::extract::text_fallback(&page.html, &meta, url, opts, max_chars)
+            && !fb.thin
+        {
             return Ok((fb, "ghost-text", 200, url.to_string()));
         }
     }
 
     // Differentiate: small DOM with no content = not found / blocked.
     // Large DOM with no extractable content = genuine extraction failure.
+    // A challenge page (captcha, bot wall) must ALWAYS return "blocked"
+    // with kind="walled" (exit 3), regardless of DOM size — never "not
+    // found" (exit 1). This fixes the Medium URL that gave different
+    // verdicts across runs: sometimes the challenge page was < 5KB
+    // (→ "not found"), sometimes larger (→ "blocked").
+    let dom_verdict = crate::detect::walls::detect_dom(page.html.as_bytes());
+    if matches!(dom_verdict, Verdict::Challenge(_)) {
+        return Err((
+            format!(
+                "blocked at {url} — interactive captcha or challenge could not be solved automatically. Use an Agent browser to browse sites like these"
+            ),
+            "walled",
+        ));
+    }
     if page.html.len() < 5_000 {
         return Err((
             format!(

@@ -221,8 +221,10 @@ impl Searcher {
                     && at.elapsed() < cache_ttl(intent_probe, query)
                 {
                     let weak = rank::is_weak(&cached, total);
+                    let mut results = cached.iter().take(max_results).cloned().collect();
+                    site_filter(query, &mut results);
                     return Ok(SearchOutcome {
-                        results: cached.iter().take(max_results).cloned().collect(),
+                        results,
                         weak,
                         intent: intent_probe,
                         report: Vec::new(),
@@ -259,8 +261,10 @@ impl Searcher {
             && at.elapsed() < cache_ttl(intent, query)
         {
             let weak = rank::is_weak(cached, *total);
+            let mut results = cached.iter().take(max_results).cloned().collect();
+            site_filter(query, &mut results);
             return Ok(SearchOutcome {
-                results: cached.iter().take(max_results).cloned().collect(),
+                results,
                 weak,
                 intent,
                 report: Vec::new(),
@@ -506,6 +510,12 @@ impl Searcher {
         // The genius feature: results carry the page's own title
         // and description, not the SERP's truncated version.
         self.enrich_results(&mut results).await;
+
+        // ── site: operator enforcement: engines don't strictly
+        // respect `site:domain.com` — some results leak through
+        // from other domains. Filter them out post-merge so the
+        // agent only gets results from the requested domain.
+        site_filter(query, &mut results);
         // Poisoning guard: a merge built while engines
         // were down must NOT persist for 30 minutes —
         // degraded-period results expire with the moment.
@@ -803,6 +813,67 @@ mod tests {
             Duration::from_secs(1800)
         );
     }
+
+    fn merged(url: &str) -> Merged {
+        Merged {
+            title: "test".into(),
+            url: url.into(),
+            snippet: "test".into(),
+            sources: vec![("bing".into(), 0)],
+            score: 1.0,
+            published: None,
+        }
+    }
+
+    #[test]
+    fn site_filter_removes_non_matching() {
+        let mut results = vec![
+            merged("https://stackoverflow.com/questions/123"),
+            merged("https://github.com/owner/repo"),
+            merged("https://stackoverflow.com/a/456"),
+            merged("https://blog.example.com/post"),
+            merged("https://docs.stackoverflow.com/faq"),
+        ];
+        site_filter("rust site:stackoverflow.com", &mut results);
+        assert_eq!(
+            results.len(),
+            3,
+            "should keep SO + subdomain, drop github + example.com"
+        );
+        assert!(results.iter().all(|r| r.url.contains("stackoverflow.com")));
+    }
+
+    #[test]
+    fn site_filter_noop_without_operator() {
+        let mut results = vec![
+            merged("https://stackoverflow.com/q/1"),
+            merged("https://github.com/owner/repo"),
+        ];
+        site_filter("rust async runtime", &mut results);
+        assert_eq!(results.len(), 2, "no site: operator = no filtering");
+    }
+
+    #[test]
+    fn site_filter_matches_subdomains() {
+        let mut results = vec![
+            merged("https://docs.python.org/3/library"),
+            merged("https://python.org/about"),
+            merged("https://github.com/python/cpython"),
+        ];
+        site_filter("asyncio site:python.org", &mut results);
+        assert_eq!(results.len(), 2, "should match domain + subdomains");
+    }
+
+    #[test]
+    fn site_filter_strips_www_prefix() {
+        let mut results = vec![
+            merged("https://www.wikipedia.org/wiki/Rust"),
+            merged("https://en.wikipedia.org/wiki/Rust"),
+            merged("https://github.com/rust-lang/rust"),
+        ];
+        site_filter("rust site:www.wikipedia.org", &mut results);
+        assert_eq!(results.len(), 1, "www.wikipedia.org matches www. only");
+    }
 }
 
 fn load_cache_disk() -> HashMap<String, (Instant, Vec<Merged>, usize)> {
@@ -851,6 +922,42 @@ fn width_for_stress(stress: f64, available: usize) -> usize {
     } else {
         available.min(1)
     }
+}
+
+/// Enforce `site:domain.com` operator: extract the target domain
+/// from the query and remove results whose host doesn't match.
+/// Engines (especially Bing/DDG) don't strictly respect `site:` —
+/// they often inject related results from other domains. This
+/// post-merge filter ensures the agent only sees results from the
+/// requested domain.
+///
+/// Matches `domain.com` and any subdomain `*.domain.com`.
+/// Case-insensitive. Strips `www.` prefix before comparison.
+fn site_filter(query: &str, results: &mut Vec<Merged>) {
+    let q = query.to_lowercase();
+    let mut site_domain: Option<String> = None;
+    for token in q.split_whitespace() {
+        if let Some(rest) = token.strip_prefix("site:") {
+            let domain = rest.trim_end_matches('/');
+            if !domain.is_empty() {
+                site_domain = Some(domain.to_string());
+                break;
+            }
+        }
+    }
+    let Some(domain) = site_domain else {
+        return;
+    };
+    // Use raw host (not host_of which strips www.) so
+    // `site:www.wikipedia.org` matches only www., while
+    // `site:wikipedia.org` matches all subdomains.
+    results.retain(|r| {
+        let host = url::Url::parse(&r.url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_lowercase()))
+            .unwrap_or_default();
+        host == domain || host.ends_with(&format!(".{domain}"))
+    });
 }
 
 /// Markdown rendering for the MCP/CLI surface.

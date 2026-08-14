@@ -271,7 +271,7 @@ pub fn extract(html: &str, url: &str, opts: &ExtractOptions) -> Option<Extracted
         blocks_total: kept.len(),
         blocks_shown: kept.len(),
         tokens_est: total / 4,
-        thin: false,
+        thin: total < 800,
         content_kind: ContentKind::Page,
         lang: guess_lang(&md),
         quality: 0.7,

@@ -458,6 +458,12 @@ pub fn text_fallback(
     let blocks_total = paragraphs.len();
     let tokens_est = slice.len() / 4;
 
+    // thin=true when < 800 chars: a JS shell with 300 chars of
+    // visible text (script filenames, noscript messages, meta
+    // descriptions) is NOT real content. The MCP layer must
+    // escalate to ghost. Only pages with >= 800 chars of real
+    // visible text are non-thin — those are genuinely complex
+    // DOMs where block extraction failed but text is real.
     Some(Extracted {
         markdown: slice,
         title: meta.title.clone(),
@@ -469,7 +475,7 @@ pub fn text_fallback(
         blocks_total,
         blocks_shown: blocks_total,
         tokens_est,
-        thin: false, // verified substantial text
+        thin: total_text < 800,
         content_kind: ContentKind::Page,
         lang: "unknown".to_string(),
         quality: 0.3, // lower quality than block-based extraction
@@ -709,12 +715,17 @@ fn downstream(
     //
     // Thinness: the extraction yield is the truth. If we
     // got < 800 chars from a large page or a page with zero
-    // blocks, it's a shell. Skeleton markers in CSS class
+    // blocks, it's a shell. Also catches medium JS shells
+    // (5-50KB) that have 1-2 blocks from title/meta tags —
+    // these are JS-only SPAs (Instagram, YouTube) that
+    // produce a handful of blocks from boilerplate but
+    // no real content. Skeleton markers in CSS class
     // names (Amazon, React apps) are NOT evidence of an
     // un-hydrated SPA — the extraction yield is. Only use
     // skeleton markers as a secondary signal when the yield
     // is borderline (< 4000 chars from a > 50KB page).
-    let thin = (full.len() < 800 && (thin_flag || blocks_total == 0))
+    let thin = (full.len() < 800
+        && (thin_flag || blocks_total == 0 || (raw_len > 5_000 && blocks_total <= 2)))
         || (thin_flag && has_skeletons && full.len() < 4000);
     if thin {
         full = format!(
