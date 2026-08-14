@@ -151,9 +151,13 @@ impl Searcher {
             let mut dead = 0usize;
             for proxy in proxies {
                 let id = proxy.id();
-                let probe =
-                    this.fetcher
-                        .fetch_once_via("https://api.ipify.org/", &[], Some(&proxy), false);
+                let probe = this.fetcher.fetch_once_via(
+                    "https://api.ipify.org/",
+                    &[],
+                    Some(&proxy),
+                    false,
+                    None,
+                );
                 match tokio::time::timeout(Duration::from_secs(6), probe).await {
                     Ok(Ok(o)) if o.status == 200 => {}
                     Ok(Err(e)) if format!("{e}").contains("CONNECT -> 407") => {
@@ -597,7 +601,7 @@ impl Searcher {
             futures.push(Box::pin(async move {
                 let out = tokio::time::timeout(
                     ENRICH_TIMEOUT,
-                    fetcher.fetch_once_via(&url, &[], None, false),
+                    fetcher.fetch_once_via(&url, &[], None, false, None),
                 )
                 .await;
                 match out {
@@ -680,7 +684,7 @@ async fn engine_task(
     };
     let out = match tokio::time::timeout(
         ENGINE_TIMEOUT,
-        fetcher.fetch_once_via(&url, &[], proxy.as_ref(), false),
+        fetcher.fetch_once_via(&url, &[], proxy.as_ref(), false, None),
     )
     .await
     {

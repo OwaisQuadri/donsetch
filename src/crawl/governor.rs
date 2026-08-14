@@ -177,7 +177,7 @@ impl Governor {
     /// the pending next_allowed FORWARD when the rung decays —
     /// a host answering fine again shouldn't serve an old
     /// penalty window computed while it was upset.
-    pub fn on_success(&self, host: &str, lane: &str, latency: Duration) {
+    pub fn on_success(&self, host: &str, lane: &str, latency: Duration, dwell_ms: u64) {
         let ms = latency.as_secs_f64() * 1000.0;
         let mut lanes = self.lanes.lock().unwrap();
         let key = (host.to_string(), lane.to_string());
@@ -207,6 +207,17 @@ impl Governor {
                     .base()
                     .min(hl.next_allowed.saturating_duration_since(Instant::now()))
                     .mul_f64(new_mult);
+        }
+        // Dwell time: a human reads the page before navigating
+        // to the next one. Proportional to page size (bytes/4),
+        // capped at 2s. Added AFTER rung adjustments so it
+        // extends — not replaces — the paced window. This breaks
+        // the metronome fingerprint: a 50KB page gets a longer
+        // gap than a 2KB page, just like real reading.
+        if dwell_ms > 0 {
+            let dwell = Duration::from_millis(dwell_ms);
+            let now = Instant::now();
+            hl.next_allowed = hl.next_allowed.max(now) + dwell;
         }
         drop(lanes);
 
@@ -340,9 +351,9 @@ mod tests {
                 Some(Instant::now() - Duration::from_secs(1));
             hosts.get_mut("ex.com").unwrap().rung = 2;
         }
-        g.on_success("ex.com", "lane0", Duration::from_millis(50));
-        g.on_success("ex.com", "lane0", Duration::from_millis(50));
-        g.on_success("ex.com", "lane0", Duration::from_millis(50));
+        g.on_success("ex.com", "lane0", Duration::from_millis(50), 0);
+        g.on_success("ex.com", "lane0", Duration::from_millis(50), 0);
+        g.on_success("ex.com", "lane0", Duration::from_millis(50), 0);
         let after = g.wait_for("ex.com", "lane0", 2);
         let _ = before;
         assert!(after < Duration::from_secs(2));
@@ -351,10 +362,10 @@ mod tests {
     #[test]
     fn rising_latency_adds_rung() {
         let g = gov(&[LaneKind::Direct]);
-        g.on_success("ex.com", "lane0", Duration::from_millis(100));
+        g.on_success("ex.com", "lane0", Duration::from_millis(100), 0);
         // Feed rising latencies.
         for _ in 0..6 {
-            g.on_success("ex.com", "lane0", Duration::from_millis(500));
+            g.on_success("ex.com", "lane0", Duration::from_millis(500), 0);
         }
         {
             let lanes = g.lanes.lock().unwrap();

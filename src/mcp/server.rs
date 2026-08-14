@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc};
 
+use futures_util::FutureExt;
+
 use crate::crawl::real as crawl_real;
 use crate::crawl::{CrawlMode, CrawlOptions, Crawler};
 use crate::detect::walls::Verdict;
@@ -29,7 +31,7 @@ pub struct Daemon {
     fetcher: Arc<Fetcher>,
     profile: BrowserProfile,
     ghost_mgr: Arc<GhostManager>,
-    state: Mutex<GhostState>,
+    state: Arc<Mutex<GhostState>>,
     searcher: Arc<Searcher>,
     byok: ByokSearcher,
     crawler: Crawler,
@@ -45,12 +47,79 @@ impl Daemon {
         ));
         searcher.preflight();
         let proxies = crate::transport::proxy::load_all();
+        let ghost_mgr = GhostManager::new().await;
+        let state = Arc::new(Mutex::new(GhostState::load()));
+
+        // Build ghost escalation hook for the crawl: renders
+        // JS-only pages in the headless browser so SPA sites
+        // yield real content instead of empty shells. Capped at
+        // 3 per crawl by the orchestrator.
+        let ghost_hook: crate::crawl::GhostHook = {
+            let ghost_mgr = Arc::clone(&ghost_mgr);
+            let profile = profile.clone();
+            let fetcher = Arc::clone(&fetcher);
+            let state = Arc::clone(&state);
+            Arc::new(move |url: String| {
+                let ghost_mgr = Arc::clone(&ghost_mgr);
+                let profile = profile.clone();
+                let fetcher = Arc::clone(&fetcher);
+                let state = Arc::clone(&state);
+                async move {
+                    // Render cache shortcut.
+                    {
+                        let s = state.lock().await;
+                        if let Some(rc) = s.render_for(&url) {
+                            return Some(crate::crawl::GhostRender {
+                                html: rc.html.clone(),
+                            });
+                        }
+                    }
+                    let mut g = match ghost_mgr.acquire(&profile).await {
+                        Ok(g) => g,
+                        Err(_) => return None,
+                    };
+                    let page =
+                        match ops::ghost_fetch(&mut g, &url, std::time::Duration::from_secs(20))
+                            .await
+                        {
+                            Ok(p) => p,
+                            Err(_) => {
+                                // Retry once on transient timeout.
+                                match ops::ghost_fetch(
+                                    &mut g,
+                                    &url,
+                                    std::time::Duration::from_secs(20),
+                                )
+                                .await
+                                {
+                                    Ok(p) => p,
+                                    Err(_) => return None,
+                                }
+                            }
+                        };
+                    if page.captcha {
+                        return None;
+                    }
+                    if !page.cookies.is_empty() {
+                        fetcher.import_cookies(&page.cookies).await;
+                    }
+                    {
+                        let mut s = state.lock().await;
+                        s.record_render(&url, &page.html);
+                    }
+                    Some(crate::crawl::GhostRender { html: page.html })
+                }
+                .boxed()
+            })
+        };
+
         let (crawler, _gov) = crawl_real::build(Arc::clone(&fetcher), proxies);
+        let crawler = crawler.with_ghost(ghost_hook);
         Ok(Self {
             fetcher,
             profile,
-            ghost_mgr: GhostManager::new().await,
-            state: Mutex::new(GhostState::load()),
+            ghost_mgr,
+            state,
             searcher,
             byok: ByokSearcher::new(),
             crawler,
@@ -312,6 +381,9 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
             "kind": format!("{:?}", p.kind),
             "chars": p.chars,
             "quality": p.quality,
+            "parent": p.parent,
+            "score": (p.score * 100.0).round() / 100.0,
+            "lastmod": p.lastmod,
         })).collect::<Vec<_>>(),
         "map": result.map,
         "queued": result.queued,

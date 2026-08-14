@@ -97,7 +97,9 @@ pub async fn run(
     let Some(url) = endpoint(vertical, query) else {
         return Ok(Vec::new());
     };
-    let out = fetcher.fetch_once_via(&url, &[], proxy, false).await?;
+    let out = fetcher
+        .fetch_once_via(&url, &[], proxy, false, None)
+        .await?;
     if out.status != 200 {
         return Err(FetchError::Http(format!(
             "{vertical}: status {}",

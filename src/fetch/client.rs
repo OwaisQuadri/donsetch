@@ -115,6 +115,22 @@ impl Fetcher {
         proxy: Option<&proxy::Proxy>,
         use_jar: bool,
     ) -> Result<FetchOutcome, FetchError> {
+        self.fetch_via_jar_ref(url_str, proxy, use_jar, None).await
+    }
+
+    /// Same as `fetch_via_jar` but with a referer header. The
+    /// referer is sent on the initial request only (not redirect
+    /// hops), matching browser behavior. `sec-fetch-site` is
+    /// computed from the referer's origin vs the target's origin:
+    /// `same-origin` or `cross-site`. No referer → `none` (typed
+    /// URL, the default).
+    pub async fn fetch_via_jar_ref(
+        &self,
+        url_str: &str,
+        proxy: Option<&proxy::Proxy>,
+        use_jar: bool,
+        referer: Option<&str>,
+    ) -> Result<FetchOutcome, FetchError> {
         let started = Instant::now();
 
         // Fresh-window cache hit: no request at all (browser-true).
@@ -143,11 +159,15 @@ impl Fetcher {
 
         let mut current = url_str.to_string();
         let mut redirects = 0u8;
+        let mut first_request = true;
 
         loop {
             let host = host_of(&current)?;
+            // Referer applies to the initial request only.
+            // Redirects get no referer (avoids cross-origin leak).
+            let ref_arg = if first_request { referer } else { None };
             let mut out = self
-                .fetch_once_via(&current, &conditional, proxy, use_jar)
+                .fetch_once_via(&current, &conditional, proxy, use_jar, ref_arg)
                 .await?;
             {
                 let mut jar = self.jar.lock().unwrap();
@@ -170,6 +190,7 @@ impl Fetcher {
             match out.status {
                 301 | 302 | 303 | 307 | 308 => {
                     redirects += 1;
+                    first_request = false;
                     if redirects > MAX_REDIRECTS {
                         return Err(FetchError::TooManyRedirects);
                     }
@@ -204,8 +225,9 @@ impl Fetcher {
                     // second, cookie-carrying request).
                     if let Verdict::Challenge(_) = out.verdict
                         && header_value(&out.headers, "set-cookie").is_some()
-                        && let Ok(mut retry) =
-                            self.fetch_once_via(&current, &[], proxy, use_jar).await
+                        && let Ok(mut retry) = self
+                            .fetch_once_via(&current, &[], proxy, use_jar, ref_arg)
+                            .await
                     {
                         {
                             let mut jar = self.jar.lock().unwrap();
@@ -238,6 +260,7 @@ impl Fetcher {
         conditional: &[(String, String)],
         proxy: Option<&proxy::Proxy>,
         use_jar: bool,
+        referer: Option<&str>,
     ) -> Result<FetchOutcome, FetchError> {
         let url = url::Url::parse(url_str).map_err(|_| FetchError::InvalidUrl(url_str.into()))?;
         let scheme = url.scheme();
@@ -280,6 +303,27 @@ impl Fetcher {
             }
         }
         req_headers.extend(conditional.iter().cloned());
+
+        // Referer + sec-fetch-site: when following a link, a real
+        // browser sends `Referer` and sets `sec-fetch-site` to
+        // `same-origin` or `cross-site` (never `none` — that's
+        // for typed URLs only). Without this, every crawl request
+        // looks like a fresh typed navigation, which is a bot
+        // fingerprint.
+        if let Some(ref_url) = referer {
+            let site = sec_fetch_site(ref_url, url_str);
+            if let Some(pos) = req_headers.iter().position(|(n, _)| n == "sec-fetch-site") {
+                req_headers[pos].1 = site.into();
+            }
+            // Chrome puts Referer after Sec-Fetch-Dest, before
+            // Accept-Encoding.
+            let ref_val = referer_value(ref_url, url_str);
+            let pos = req_headers
+                .iter()
+                .position(|(n, _)| n == "accept-encoding")
+                .unwrap_or(req_headers.len());
+            req_headers.insert(pos, ("referer".into(), ref_val));
+        }
 
         // 1) Try a pooled h2 connection for this origin.
         let pooled = self.pool.lock().unwrap().take_h2(&origin);
@@ -483,4 +527,53 @@ fn header_value(headers: &[(String, String)], name: &str) -> Option<String> {
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(name))
         .map(|(_, v)| v.clone())
+}
+
+/// Compute `sec-fetch-site` from the referer's origin vs the
+/// target's origin. `same-origin` = same scheme+host+port;
+/// everything else = `cross-site` (conservative — we don't
+/// compute the registrable domain for `same-site`).
+fn sec_fetch_site(referer: &str, target: &str) -> &'static str {
+    let ref_origin = url::Url::parse(referer).ok().map(|u| {
+        (
+            u.scheme().to_string(),
+            u.host_str().unwrap_or("").to_string(),
+            u.port_or_known_default(),
+        )
+    });
+    let tgt_origin = url::Url::parse(target).ok().map(|u| {
+        (
+            u.scheme().to_string(),
+            u.host_str().unwrap_or("").to_string(),
+            u.port_or_known_default(),
+        )
+    });
+    match (ref_origin, tgt_origin) {
+        (Some(r), Some(t)) if r == t => "same-origin",
+        _ => "cross-site",
+    }
+}
+
+/// Chrome's default referrer policy `strict-origin-when-cross-origin`:
+/// same-origin = full URL, cross-origin = origin only.
+fn referer_value(referer: &str, target: &str) -> String {
+    let ref_url = url::Url::parse(referer).ok();
+    let tgt_url = url::Url::parse(target).ok();
+    let same_origin = match (&ref_url, &tgt_url) {
+        (Some(r), Some(t)) => {
+            r.scheme() == t.scheme()
+                && r.host_str() == t.host_str()
+                && r.port_or_known_default() == t.port_or_known_default()
+        }
+        _ => false,
+    };
+    if same_origin {
+        referer.to_string()
+    } else if let Some(r) = ref_url {
+        let host = r.host_str().unwrap_or("");
+        let port = r.port().map(|p| format!(":{p}")).unwrap_or_default();
+        format!("{}://{host}{port}/", r.scheme())
+    } else {
+        referer.to_string()
+    }
 }

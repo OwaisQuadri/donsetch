@@ -35,7 +35,7 @@ pub fn build(fetcher: Arc<Fetcher>, proxies: Vec<Proxy>) -> (Crawler, Arc<Govern
     let fetch: PageFetcher = {
         let fetcher = Arc::clone(&fetcher);
         let proxies = Arc::new(proxies);
-        Arc::new(move |url: String, lane: String| {
+        Arc::new(move |url: String, lane: String, referer: Option<String>| {
             let fetcher = Arc::clone(&fetcher);
             let proxies = Arc::clone(&proxies);
             async move {
@@ -48,7 +48,10 @@ pub fn build(fetcher: Arc<Fetcher>, proxies: Vec<Proxy>) -> (Crawler, Arc<Govern
                 // Proxy lanes: shared jar OUT — one cookie carrying
                 // lane B's identity would link the two egress IPs.
                 let use_jar = proxy.is_none();
-                match fetcher.fetch_via_jar(&url, proxy, use_jar).await {
+                match fetcher
+                    .fetch_via_jar_ref(&url, proxy, use_jar, referer.as_deref())
+                    .await
+                {
                     Ok(out) => {
                         // Fresh-window cache hit made ZERO requests:
                         // exclude from governor pacing. Revalidated

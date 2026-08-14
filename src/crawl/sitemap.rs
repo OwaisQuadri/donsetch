@@ -110,6 +110,9 @@ impl Robots {
 pub struct SitemapEntry {
     pub loc: String,
     pub lastmod: Option<String>,
+    /// Sitemap-declared priority (0.0–1.0). Used to seed
+    /// the frontier relevance score.
+    pub priority: Option<f32>,
     /// True when the entry came from a `<sitemap>` index block
     /// (a CHILD sitemap to fetch), false for `<url>` (a page).
     pub is_index: bool,
@@ -131,10 +134,12 @@ pub fn parse_sitemap(xml: &str, out: &mut Vec<SitemapEntry>, cap: usize) {
         let block = &xml[tag_off..end];
         if let Some(loc) = extract_tag(block, "loc") {
             let lastmod = extract_tag(block, "lastmod");
+            let priority = extract_tag(block, "priority").and_then(|s| s.parse::<f32>().ok());
             let is_index = close == "</sitemap>";
             out.push(SitemapEntry {
                 loc,
                 lastmod,
+                priority,
                 is_index,
             });
         }
@@ -213,7 +218,7 @@ pub fn maybe_gunzip(body: &[u8]) -> Vec<u8> {
 pub async fn discover(fetch: &PageFetcher, host: &str, cap: usize) -> (Robots, Vec<SitemapEntry>) {
     let robots_url = format!("https://{host}/robots.txt");
     let mut robots = Robots::default();
-    let page = fetch(robots_url, "direct".to_string()).await;
+    let page = fetch(robots_url, "direct".to_string(), None).await;
     if page.status == 200 {
         robots = Robots::parse(&String::from_utf8_lossy(&maybe_gunzip(&page.body)), host);
     }
@@ -229,7 +234,7 @@ pub async fn discover(fetch: &PageFetcher, host: &str, cap: usize) -> (Robots, V
     while !queue.is_empty() && entries.len() < cap && fetched < 8 {
         let loc = queue.remove(0);
         fetched += 1;
-        let page = fetch(loc, "direct".to_string()).await;
+        let page = fetch(loc, "direct".to_string(), None).await;
         if page.status != 200 {
             continue;
         }
@@ -250,6 +255,7 @@ pub async fn discover(fetch: &PageFetcher, host: &str, cap: usize) -> (Robots, V
                     here.push(SitemapEntry {
                         loc: u.to_string(),
                         lastmod: None,
+                        priority: None,
                         is_index: false,
                     });
                 }

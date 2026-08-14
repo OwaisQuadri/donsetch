@@ -176,6 +176,13 @@ pub struct Frontier {
     pub url: String,
     pub score: f64,
     pub depth: u32,
+    /// Consecutive transient-failure retries already spent.
+    /// Network errors and 5xx requeue with this incremented;
+    /// walls/404s are permanent skips and never retried.
+    pub retries: u8,
+    /// The URL that linked to this one (referer chain).
+    /// None = seed / typed entry point.
+    pub parent: Option<String>,
 }
 
 impl PartialEq for Frontier {
@@ -260,6 +267,17 @@ impl FrontierQueue {
 
     /// Push a URL if its normalized form is new.
     pub fn push(&mut self, url: Url, score: f64, depth: u32) -> bool {
+        self.push_with_parent(url, score, depth, None)
+    }
+
+    /// Push a URL with a referer parent (the page that linked to it).
+    pub fn push_with_parent(
+        &mut self,
+        url: Url,
+        score: f64,
+        depth: u32,
+        parent: Option<String>,
+    ) -> bool {
         let key = normalize(&url);
         if !self.seen.insert(key.clone()) {
             return false;
@@ -268,6 +286,8 @@ impl FrontierQueue {
             url: key,
             score,
             depth,
+            retries: 0,
+            parent,
         });
         true
     }
@@ -287,8 +307,21 @@ impl FrontierQueue {
     }
 
     /// Push an entry the seen-set already recorded (resume).
-    pub fn push_to_heap(&mut self, url: String, score: f64, depth: u32) {
-        self.heap.push(Frontier { url, score, depth });
+    pub fn push_to_heap(
+        &mut self,
+        url: String,
+        score: f64,
+        depth: u32,
+        retries: u8,
+        parent: Option<String>,
+    ) {
+        self.heap.push(Frontier {
+            url,
+            score,
+            depth,
+            retries,
+            parent,
+        });
     }
 
     /// Full seen-set snapshot for resume persistence.
@@ -300,12 +333,13 @@ impl FrontierQueue {
         self.heap.pop()
     }
 
-    /// Snapshot all queued entries (url, score, depth) for a
-    /// resume token. Does not drain — the seen-set survives.
-    pub fn snapshot_entries(&self) -> Vec<(String, f64, u32)> {
+    /// Snapshot all queued entries (url, score, depth, retries,
+    /// parent) for a resume token. Does not drain — the seen-set
+    /// survives.
+    pub fn snapshot_entries(&self) -> Vec<(String, f64, u32, u8, Option<String>)> {
         self.heap
             .iter()
-            .map(|f| (f.url.clone(), f.score, f.depth))
+            .map(|f| (f.url.clone(), f.score, f.depth, f.retries, f.parent.clone()))
             .collect()
     }
 
@@ -316,6 +350,15 @@ impl FrontierQueue {
 
     pub fn is_empty(&self) -> bool {
         self.heap.is_empty()
+    }
+
+    /// Mark a URL as seen without enqueuing it. Used for
+    /// canonical URL resolution: when a page declares a
+    /// canonical URL different from its fetched URL, the
+    /// canonical form is marked seen to prevent a separate
+    /// fetch of the same content under a different URL.
+    pub fn mark_seen(&mut self, url: String) {
+        self.seen.insert(url);
     }
 }
 

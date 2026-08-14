@@ -45,9 +45,24 @@ pub struct FetchedPage {
     pub error_hint: Option<String>,
 }
 
+/// Ghost-rendered page from tier-2 browser escalation.
+/// The orchestrator stays ghost-agnostic — this is the
+/// payload the injected `GhostHook` returns.
+pub struct GhostRender {
+    pub html: String,
+}
+
+/// Injected ghost escalation hook. Takes a URL, returns
+/// rendered HTML + cookies on success, None on failure
+/// (captcha, timeout, launch error). The orchestrator calls
+/// it when a page is a JS shell (thin extraction) or a bot
+/// wall (Challenge verdict). Capped at 3 per crawl.
+pub type GhostHook = Arc<dyn Fn(String) -> BoxFuture<'static, Option<GhostRender>> + Send + Sync>;
+
 /// Pluggable fetch: real = DonShadow, tests = in-memory map.
-pub type PageFetcher = Arc<dyn Fn(String, String) -> BoxFuture<'static, FetchedPage> + Send + Sync>;
-//            (url, lane_id) -> page
+pub type PageFetcher =
+    Arc<dyn Fn(String, String, Option<String>) -> BoxFuture<'static, FetchedPage> + Send + Sync>;
+//            (url, lane_id, referer) -> page
 
 /// Crawl surface mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +85,13 @@ pub struct CrawlPage {
     pub quality: f32,
     /// Same-content duplicate of an already-kept page.
     pub duplicate: bool,
+    /// The URL that linked to this page (referer chain).
+    /// None = seed / typed entry point.
+    pub parent: Option<String>,
+    /// Frontier relevance score (from focus scoring + sitemap priority).
+    pub score: f64,
+    /// Sitemap `<lastmod>` if available (ISO 8601 date string).
+    pub lastmod: Option<String>,
 }
 
 /// Why the crawl stopped. Agents MUST see this to decide
@@ -158,7 +180,8 @@ impl Default for CrawlOptions {
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct ResumeState {
     seed: String,
-    queue: Vec<(String, f64, u32)>,
+    /// (url, score, depth, retries, parent)
+    queue: Vec<(String, f64, u32, u8, Option<String>)>,
     /// Seen-set from run 1 — without it, run-2 pages re-link
     /// to already-fetched pages and they crawl AGAIN.
     seen: Vec<String>,
@@ -219,6 +242,7 @@ impl ResumeFile {
 pub struct Crawler {
     fetch: PageFetcher,
     governor: Arc<Governor>,
+    ghost: Option<GhostHook>,
     token_seq: AtomicUsize,
 }
 
@@ -227,8 +251,18 @@ impl Crawler {
         Self {
             fetch,
             governor,
+            ghost: None,
             token_seq: AtomicUsize::new(0),
         }
+    }
+
+    /// Attach a ghost escalation hook for JS-only pages.
+    /// When a page's extraction is thin (JS shell) or its
+    /// verdict is Challenge (bot wall), the orchestrator calls
+    /// the hook to render the page in a headless browser.
+    pub fn with_ghost(mut self, ghost: GhostHook) -> Self {
+        self.ghost = Some(ghost);
+        self
     }
 
     /// Run one crawl. Returns when a stop condition hits.
@@ -347,8 +381,8 @@ impl Crawler {
             store.sweep();
             if let Some((state, _)) = store.entries.remove(tok) {
                 queue.restore_seen(state.seen);
-                for (u, s, d) in state.queue {
-                    queue.push_to_heap(u, s, d);
+                for (u, s, d, r, p) in state.queue {
+                    queue.push_to_heap(u, s, d, r, p);
                 }
                 store.save();
             } else {
@@ -372,7 +406,8 @@ impl Crawler {
                     if !seeded_locales.insert(lcanon) {
                         continue; // Another variant already queued
                     }
-                    let s = score::score_candidate("", u.path(), opts.focus.as_deref());
+                    let s = score::score_candidate("", u.path(), opts.focus.as_deref())
+                        + e.priority.unwrap_or(0.0) as f64 * 2.0;
                     queue.push(u, s, 1);
                 }
             }
@@ -413,6 +448,7 @@ impl Crawler {
         let focus = Arc::new(opts.focus.clone());
 
         let workers = opts.concurrency.max(1);
+        let ghost_budget = Arc::new(AtomicUsize::new(3));
         let mut handles = Vec::new();
         for wid in 0..workers {
             let queue = Arc::clone(&sh_queue);
@@ -428,6 +464,8 @@ impl Crawler {
             let focus = Arc::clone(&focus);
             let fetch = self.fetch.clone();
             let governor = Arc::clone(&self.governor);
+            let ghost_hook = self.ghost.clone();
+            let ghost_budget = Arc::clone(&ghost_budget);
             let opts_worker = opts.clone();
             let seed_host2 = seed_host.clone();
             let seed_norm_w = seed_norm.clone();
@@ -565,6 +603,8 @@ impl Crawler {
                                 url: item.url.clone(),
                                 score: item.score,
                                 depth: item.depth,
+                                retries: item.retries,
+                                parent: item.parent.clone(),
                             });
                             tokio::time::sleep(Duration::from_millis(400)).await;
                             continue 'work;
@@ -580,13 +620,17 @@ impl Crawler {
                         tokio::time::sleep(wait).await;
                     }
 
-                    let page = fetch(item.url.clone(), lane.id.clone()).await;
+                    let page = fetch(item.url.clone(), lane.id.clone(), item.parent.clone()).await;
                     if page.cached {
                         // Warm-cache hit: free — no governor signal.
                     } else {
                         match (page.status, &page.verdict) {
                             (200, Verdict::ContentOk) => {
-                                governor.on_success(host, &lane.id, page.latency)
+                                // Dwell time: proportional to page size,
+                                // capped at 2s. A human reads a 50KB
+                                // article slower than a 2KB snippet.
+                                let dwell = (page.body.len() / 4).min(2000) as u64;
+                                governor.on_success(host, &lane.id, page.latency, dwell)
                             }
                             (429, _) | (503, _) => {
                                 governor.on_throttled(host, &lane.id);
@@ -595,12 +639,58 @@ impl Crawler {
                         }
                     }
 
+                    // Transient retry: network errors (status 0) and
+                    // 5xx non-challenge get requeued up to 2 times.
+                    // Walls, 404s, 429s, and challenges are permanent.
+                    let is_transient = page.status == 0
+                        || (page.status >= 500 && !matches!(page.verdict, Verdict::Challenge(_)));
+                    if is_transient && item.retries < 2 {
+                        queue.lock().unwrap().requeue(frontier::Frontier {
+                            url: item.url.clone(),
+                            score: item.score * 0.8,
+                            depth: item.depth,
+                            retries: item.retries + 1,
+                            parent: item.parent.clone(),
+                        });
+                        continue 'work;
+                    }
+
+                    // Ghost escalation for bot walls: if the page
+                    // is a Challenge verdict and ghost is available,
+                    // try rendering in the headless browser before
+                    // skipping. Ghost may solve the challenge.
+                    let mut ghost_html: Option<String> = None;
+                    if matches!(page.verdict, Verdict::Challenge(_))
+                        && let Some(ref ghost_hook) = ghost_hook
+                    {
+                        let remaining = deadline_at.saturating_duration_since(Instant::now());
+                        if remaining > Duration::from_secs(25)
+                            && ghost_budget.load(Ordering::SeqCst) > 0
+                        {
+                            ghost_budget.fetch_sub(1, Ordering::SeqCst);
+                            if let Some(gp) = ghost_hook(item.url.clone()).await {
+                                ghost_html = Some(gp.html);
+                            }
+                        }
+                    }
+
                     // Wall/denylist verdicts → skip honestly.
-                    if !matches!(page.verdict, Verdict::ContentOk) {
-                        let why = page
-                            .error_hint
-                            .clone()
-                            .unwrap_or_else(|| format!("{:?}", page.verdict));
+                    // (Unless ghost rendered the page — then treat
+                    // as ContentOk and proceed to extraction.)
+                    if ghost_html.is_none() && !matches!(page.verdict, Verdict::ContentOk) {
+                        let why = if item.retries > 0 {
+                            format!(
+                                "{} (failed after {} retries)",
+                                page.error_hint
+                                    .clone()
+                                    .unwrap_or_else(|| format!("{:?}", page.verdict)),
+                                item.retries
+                            )
+                        } else {
+                            page.error_hint
+                                .clone()
+                                .unwrap_or_else(|| format!("{:?}", page.verdict))
+                        };
                         skipped.lock().unwrap().push((item.url.clone(), why));
                         continue 'work;
                     }
@@ -608,17 +698,68 @@ impl Crawler {
                     // against sites full of low-quality pages).
                     total_fetched.fetch_add(1, Ordering::SeqCst);
 
-                    // ── Extract with DonSift ──
-                    let mut eo = ExtractOptions::default();
-                    eo.focus = focus.as_ref().clone();
-                    eo.max_chars = Some(opts_worker.per_page_max);
+                    // ── Canonical URL resolution ──
+                    // Extract <link rel="canonical" href="..."> to
+                    // prevent double-fetching the same page under
+                    // different URLs (trailing slash, index.html,
+                    // tracking variants).
+                    let page_url = page.url.clone();
+                    if let Some(canon_href) =
+                        extract_canonical(&String::from_utf8_lossy(&page.body))
+                        && let Ok(canon_parsed) = Url::parse(&canon_href)
+                    {
+                        let canon_norm = frontier::normalize(&canon_parsed);
+                        let fetched_norm = frontier::normalize(&parsed);
+                        if canon_norm != fetched_norm {
+                            // Mark the canonical form as seen so
+                            // it won't be fetched separately.
+                            queue.lock().unwrap().mark_seen(canon_norm.clone());
+                            // Record the canonical as the page's
+                            // true URL for output.
+                            // (page_url is updated below.)
+                        }
+                    }
+
+                    // ── Binary content guard ──
+                    // Skip non-HTML (images, video, fonts, archives)
+                    // and PDFs before feeding bytes to DonSift.
                     let ctype = page
                         .headers
                         .iter()
                         .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
                         .map(|(_, v)| v.as_str())
                         .unwrap_or("text/html");
-                    let r = match extract::extract(&page.body, ctype, &page.url, &eo) {
+                    let ctype_lower = ctype.to_lowercase();
+                    if ghost_html.is_none() && ctype_lower.contains("pdf") {
+                        skipped
+                            .lock()
+                            .unwrap()
+                            .push((item.url.clone(), "pdf (not crawled, use web_fetch)".into()));
+                        continue 'work;
+                    }
+                    if ghost_html.is_none() && crate::fetch::guards::is_binary(&page.body, ctype) {
+                        let kind = ctype.split(';').next().unwrap_or("unknown").trim();
+                        skipped
+                            .lock()
+                            .unwrap()
+                            .push((item.url.clone(), format!("binary ({kind})")));
+                        continue 'work;
+                    }
+
+                    // ── Extract with DonSift ──
+                    let mut eo = ExtractOptions::default();
+                    eo.focus = focus.as_ref().clone();
+                    eo.max_chars = Some(opts_worker.per_page_max);
+                    let body_bytes: &[u8] = ghost_html
+                        .as_deref()
+                        .map(|s| s.as_bytes())
+                        .unwrap_or(&page.body);
+                    let body_ctype = if ghost_html.is_some() {
+                        "text/html"
+                    } else {
+                        ctype
+                    };
+                    let mut r = match extract::extract(body_bytes, body_ctype, &page_url, &eo) {
                         Ok(r) => r,
                         Err(e) => {
                             skipped
@@ -628,6 +769,38 @@ impl Crawler {
                             continue 'work;
                         }
                     };
+
+                    // Ghost escalation for JS-only pages: if the
+                    // extraction is thin (JS shell) and the page is
+                    // large enough (> 5KB, not a 404), try rendering
+                    // in the headless browser. Capped at 3 per crawl;
+                    // requires 25s remaining deadline. Non-JS sites
+                    // never hit this path.
+                    if r.thin
+                        && ghost_html.is_none()
+                        && page.body.len() > 5_000
+                        && let Some(ref ghost_hook) = ghost_hook
+                    {
+                        let remaining = deadline_at.saturating_duration_since(Instant::now());
+                        if remaining > Duration::from_secs(25)
+                            && ghost_budget.load(Ordering::SeqCst) > 0
+                        {
+                            ghost_budget.fetch_sub(1, Ordering::SeqCst);
+                            if let Some(gp) = ghost_hook(item.url.clone()).await
+                                && let Ok(r2) = extract::extract(
+                                    gp.html.as_bytes(),
+                                    "text/html",
+                                    &page_url,
+                                    &eo,
+                                )
+                                && !r2.thin
+                            {
+                                r = r2;
+                                ghost_html = Some(gp.html);
+                            }
+                        }
+                    }
+
                     let md = r.markdown;
 
                     // Claim the locale-canonical path: translated
@@ -707,6 +880,9 @@ impl Crawler {
                             chars,
                             quality: r.quality,
                             duplicate,
+                            parent: item.parent.clone(),
+                            score: item.score,
+                            lastmod: None, // filled after worker loop from sitemap
                         });
                         if duplicate {
                             skipped
@@ -719,51 +895,170 @@ impl Crawler {
 
                     // ── Harvest outlinks into the frontier ──
                     if item.depth < max_depth {
-                        let html = String::from_utf8_lossy(&page.body).into_owned();
-                        let base = Url::parse(&page.url).unwrap_or_else(|_| parsed.clone());
-                        let links = self_harvest_static(&html, &base);
-                        // Pre-filter: compute locale-canonical paths and
-                        // check against locale_seen BEFORE acquiring
-                        // the queue lock (avoids lock-within-lock).
-                        let ls = locale_seen.lock().unwrap();
-                        let filtered: Vec<(url::Url, String, f64)> = links
-                            .into_iter()
-                            .filter_map(|(child, anchor)| {
-                                let cu = frontier::resolve(&base, &child)?;
-                                if opts_worker.same_host
-                                    && cu.host_str() != Some(seed_host2.as_str())
-                                {
-                                    filtered_out.fetch_add(1, Ordering::Relaxed);
-                                    return None;
-                                }
-                                if !scope_allowed(
-                                    cu.path(),
-                                    &opts_worker.include_paths,
-                                    &opts_worker.exclude_paths,
-                                ) {
-                                    filtered_out.fetch_add(1, Ordering::Relaxed);
-                                    return None;
-                                }
-                                if opts_worker.respect_robots && !robots.allowed(cu.path()) {
-                                    filtered_out.fetch_add(1, Ordering::Relaxed);
-                                    return None;
-                                }
-                                // Skip translated variants of already-fetched pages.
-                                let lcanon = frontier::locale_canonical(cu.path());
-                                if ls.contains(&lcanon) {
-                                    filtered_out.fetch_add(1, Ordering::Relaxed);
-                                    return None;
-                                }
-                                let s =
-                                    score::score_candidate(&anchor, cu.path(), focus.as_deref());
-                                Some((cu, anchor, s))
+                        let html = ghost_html
+                            .clone()
+                            .unwrap_or_else(|| String::from_utf8_lossy(&page.body).into_owned());
+                        // <base href> handling: resolve relative
+                        // links against the base URL when present.
+                        let base = if let Some(bh) = extract_base_href(&html) {
+                            Url::parse(&bh).unwrap_or_else(|_| {
+                                Url::parse(&page.url).unwrap_or_else(|_| parsed.clone())
                             })
-                            .collect();
-                        drop(ls);
-                        let mut q = queue.lock().unwrap();
-                        for (cu, _anchor, s) in filtered {
-                            q.push(cu, s, item.depth + 1);
+                        } else {
+                            Url::parse(&page.url).unwrap_or_else(|_| parsed.clone())
+                        };
+
+                        // Pagination: <link rel="next"> continues a
+                        // linear chain — push at the SAME depth so
+                        // pagination doesn't consume depth budget.
+                        let next_hrefs = extract_link_rel(&html, "next");
+                        {
+                            let ls = locale_seen.lock().unwrap();
+                            let mut q = queue.lock().unwrap();
+                            for nh in &next_hrefs {
+                                if let Some(nu) = frontier::resolve(&base, nh) {
+                                    if opts_worker.same_host
+                                        && nu.host_str() != Some(seed_host2.as_str())
+                                    {
+                                        continue;
+                                    }
+                                    if !scope_allowed(
+                                        nu.path(),
+                                        &opts_worker.include_paths,
+                                        &opts_worker.exclude_paths,
+                                    ) {
+                                        continue;
+                                    }
+                                    if opts_worker.respect_robots && !robots.allowed(nu.path()) {
+                                        continue;
+                                    }
+                                    let lcanon = frontier::locale_canonical(nu.path());
+                                    if ls.contains(&lcanon) {
+                                        continue;
+                                    }
+                                    let s = score::score_candidate("", nu.path(), focus.as_deref());
+                                    q.push_with_parent(nu, s, item.depth, Some(item.url.clone()));
+                                }
+                            }
+                        } // ls + q dropped before feed discovery's await
+
+                        // RSS/Atom feed discovery: <link rel="alternate"
+                        // type="application/rss+xml" href="...">. Fetch
+                        // the feed, parse entry URLs, seed the frontier.
+                        // A blog's feed is its full URL inventory in one
+                        // request.
+                        let feed_hrefs = extract_feed_links(&html);
+                        for fh in &feed_hrefs {
+                            let fu = match frontier::resolve(&base, fh) {
+                                Some(u) => u,
+                                None => continue,
+                            };
+                            if opts_worker.same_host && fu.host_str() != Some(seed_host2.as_str()) {
+                                continue;
+                            }
+                            // Governor-pace the feed fetch.
+                            let fw = governor.wait_for(host, &lane.id, seq);
+                            seq += 1;
+                            let remain = deadline_at.saturating_duration_since(Instant::now());
+                            if fw > remain {
+                                break;
+                            }
+                            if !fw.is_zero() {
+                                tokio::time::sleep(fw).await;
+                            }
+                            let feed_page =
+                                fetch(fu.to_string(), lane.id.clone(), Some(item.url.clone()))
+                                    .await;
+                            total_fetched.fetch_add(1, Ordering::SeqCst);
+                            if !matches!(feed_page.verdict, Verdict::ContentOk) {
+                                continue;
+                            }
+                            let feed_text = String::from_utf8_lossy(&feed_page.body);
+                            let entries = parse_feed_urls(&feed_text, 200);
+                            {
+                                let ls = locale_seen.lock().unwrap();
+                                let mut q = queue.lock().unwrap();
+                                for eu in &entries {
+                                    if let Ok(u) = Url::parse(eu) {
+                                        if opts_worker.same_host
+                                            && u.host_str() != Some(seed_host2.as_str())
+                                        {
+                                            continue;
+                                        }
+                                        if !scope_allowed(
+                                            u.path(),
+                                            &opts_worker.include_paths,
+                                            &opts_worker.exclude_paths,
+                                        ) {
+                                            continue;
+                                        }
+                                        if opts_worker.respect_robots && !robots.allowed(u.path()) {
+                                            continue;
+                                        }
+                                        let lcanon = frontier::locale_canonical(u.path());
+                                        if ls.contains(&lcanon) {
+                                            continue;
+                                        }
+                                        let s =
+                                            score::score_candidate("", u.path(), focus.as_deref());
+                                        q.push_with_parent(
+                                            u,
+                                            s,
+                                            item.depth + 1,
+                                            Some(item.url.clone()),
+                                        );
+                                    }
+                                }
+                            } // ls + q dropped before next iteration's await
                         }
+
+                        // Standard <a href> harvest.
+                        let links = self_harvest_static(&html, &base);
+                        let filtered: Vec<(url::Url, String, f64)> = {
+                            let ls = locale_seen.lock().unwrap();
+                            links
+                                .into_iter()
+                                .filter_map(|(child, anchor)| {
+                                    let cu = frontier::resolve(&base, &child)?;
+                                    if opts_worker.same_host
+                                        && cu.host_str() != Some(seed_host2.as_str())
+                                    {
+                                        filtered_out.fetch_add(1, Ordering::Relaxed);
+                                        return None;
+                                    }
+                                    if !scope_allowed(
+                                        cu.path(),
+                                        &opts_worker.include_paths,
+                                        &opts_worker.exclude_paths,
+                                    ) {
+                                        filtered_out.fetch_add(1, Ordering::Relaxed);
+                                        return None;
+                                    }
+                                    if opts_worker.respect_robots && !robots.allowed(cu.path()) {
+                                        filtered_out.fetch_add(1, Ordering::Relaxed);
+                                        return None;
+                                    }
+                                    let lcanon = frontier::locale_canonical(cu.path());
+                                    if ls.contains(&lcanon) {
+                                        filtered_out.fetch_add(1, Ordering::Relaxed);
+                                        return None;
+                                    }
+                                    let s = score::score_candidate(
+                                        &anchor,
+                                        cu.path(),
+                                        focus.as_deref(),
+                                    );
+                                    Some((cu, anchor, s))
+                                })
+                                .collect()
+                        }; // ls dropped here
+
+                        {
+                            let mut q = queue.lock().unwrap();
+                            for (cu, _anchor, s) in filtered {
+                                q.push_with_parent(cu, s, item.depth + 1, Some(item.url.clone()));
+                            }
+                        } // q dropped here
                     }
                 }
             }));
@@ -788,6 +1083,24 @@ impl Crawler {
         let skipped_v = std::mem::take(&mut *skipped.lock().unwrap());
         let filtered = filtered_out.load(Ordering::Relaxed);
 
+        // Lastmod lookup from sitemap entries + relevance-sorted
+        // output (seed first, then by score desc).
+        let lastmod_map: std::collections::HashMap<&str, &str> = sitemap_entries
+            .iter()
+            .filter_map(|e| e.lastmod.as_ref().map(|lm| (e.loc.as_str(), lm.as_str())))
+            .collect();
+        let mut final_pages = final_pages;
+        for p in &mut final_pages {
+            if let Some(lm) = lastmod_map.get(p.url.as_str()) {
+                p.lastmod = Some(lm.to_string());
+            }
+        }
+        final_pages.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         // Resume token only when stopped by budget (not frontier-empty).
         let resume = match stop {
             StopReason::MaxPages | StopReason::CharBudget | StopReason::Deadline => {
@@ -804,7 +1117,7 @@ impl Crawler {
                         seed: seed.to_string(),
                         queue: queued_entries
                             .iter()
-                            .map(|(u, s, d)| (u.clone(), *s, *d))
+                            .map(|(u, s, d, r, p)| (u.clone(), *s, *d, *r, p.clone()))
                             .collect(),
                         seen: sh_queue.lock().unwrap().seen_snapshot(),
                     };
@@ -839,7 +1152,10 @@ impl Crawler {
         Ok(CrawlResult {
             seed: seed.to_string(),
             pages: final_pages,
-            queued: queued_entries.into_iter().map(|(u, _, _)| u).collect(),
+            queued: queued_entries
+                .into_iter()
+                .map(|(u, _, _, _, _)| u)
+                .collect(),
             filtered_out: filtered,
             skipped: skipped_v,
             stop,
@@ -847,6 +1163,179 @@ impl Crawler {
             map,
             resume,
         })
+    }
+}
+
+/// Extract `<link rel="canonical" href="...">` from HTML.
+/// Byte-scan, no DOM parse. Handles both attribute orders
+/// (`rel` before `href` and `href` before `rel`).
+fn extract_canonical(html: &str) -> Option<String> {
+    extract_link_rel(html, "canonical").into_iter().next()
+}
+
+/// Extract all href values from `<link>` tags with a given `rel`
+/// attribute value. Byte-scan, no DOM parse.
+fn extract_link_rel(html: &str, rel: &str) -> Vec<String> {
+    let lower = html.to_lowercase();
+    let rel_pat = format!("rel=\"{rel}\"");
+    let rel_pat2 = format!("rel='{rel}'");
+    let rel_pat3 = format!("rel={rel}");
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while let Some(link_start) = lower[pos..].find("<link") {
+        let abs = pos + link_start;
+        let Some(tag_end) = lower[abs..].find('>') else {
+            break;
+        };
+        let tag_end_abs = abs + tag_end + 1;
+        let tag = &lower[abs..tag_end_abs];
+        pos = tag_end_abs;
+        if !(tag.contains(&rel_pat) || tag.contains(&rel_pat2) || tag.contains(&rel_pat3)) {
+            continue;
+        }
+        let orig_tag = &html[abs..tag_end_abs];
+        if let Some(href) = extract_href(orig_tag) {
+            out.push(href);
+        }
+    }
+    out
+}
+
+/// Extract `<base href="...">` from HTML. First one wins.
+fn extract_base_href(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let mut pos = 0usize;
+    while let Some(base_start) = lower[pos..].find("<base") {
+        let abs = pos + base_start;
+        let Some(tag_end) = lower[abs..].find('>') else {
+            break;
+        };
+        let tag_end_abs = abs + tag_end + 1;
+        let tag = &lower[abs..tag_end_abs];
+        pos = tag_end_abs;
+        if !tag.contains("href") {
+            continue;
+        }
+        let orig_tag = &html[abs..tag_end_abs];
+        return extract_href(orig_tag);
+    }
+    None
+}
+
+/// Extract RSS/Atom feed links from HTML `<head>`:
+/// `<link rel="alternate" type="application/rss+xml" href="...">`
+/// or `type="application/atom+xml"`.
+fn extract_feed_links(html: &str) -> Vec<String> {
+    let lower = html.to_lowercase();
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while let Some(link_start) = lower[pos..].find("<link") {
+        let abs = pos + link_start;
+        let Some(tag_end) = lower[abs..].find('>') else {
+            break;
+        };
+        let tag_end_abs = abs + tag_end + 1;
+        let tag = &lower[abs..tag_end_abs];
+        pos = tag_end_abs;
+        if !tag.contains("rel=\"alternate\"")
+            && !tag.contains("rel='alternate'")
+            && !tag.contains("rel=alternate")
+        {
+            continue;
+        }
+        if !tag.contains("application/rss+xml") && !tag.contains("application/atom+xml") {
+            continue;
+        }
+        let orig_tag = &html[abs..tag_end_abs];
+        if let Some(href) = extract_href(orig_tag) {
+            out.push(href);
+        }
+    }
+    out
+}
+
+/// Parse RSS/Atom feed XML for entry URLs. Handles both:
+/// RSS: `<link>URL</link>` inside `<item>`
+/// Atom: `<link href="URL"/>` inside `<entry>`
+/// Skips `rel="self"` and `rel="enclosure"` (feed metadata).
+fn parse_feed_urls(xml: &str, cap: usize) -> Vec<String> {
+    let mut urls = Vec::new();
+    let lower = xml.to_lowercase();
+    // RSS: <link>URL</link>
+    let mut pos = 0usize;
+    while urls.len() < cap {
+        let Some(open) = lower[pos..].find("<link>") else {
+            break;
+        };
+        let abs = pos + open;
+        let after = abs + 6;
+        let Some(close_rel) = lower[after..].find("</link>") else {
+            break;
+        };
+        let text = xml[after..after + close_rel].trim();
+        if text.starts_with("http") {
+            urls.push(text.to_string());
+        }
+        pos = after + close_rel + 7;
+    }
+    // Atom: <link href="URL" .../>
+    if urls.len() < cap {
+        pos = 0;
+        while urls.len() < cap {
+            let Some(link_start) = lower[pos..].find("<link ") else {
+                break;
+            };
+            let abs = pos + link_start;
+            let Some(tag_end) = lower[abs..].find('>') else {
+                break;
+            };
+            let tag_end_abs = abs + tag_end + 1;
+            let tag = &lower[abs..tag_end_abs];
+            pos = tag_end_abs;
+            // Skip non-content links.
+            if tag.contains("rel=\"self\"")
+                || tag.contains("rel='self'")
+                || tag.contains("rel=\"enclosure\"")
+                || tag.contains("rel='enclosure'")
+            {
+                continue;
+            }
+            let orig_tag = &html_orig(xml, abs, tag_end_abs);
+            if let Some(href) = extract_href(orig_tag)
+                && href.starts_with("http")
+            {
+                urls.push(href);
+            }
+        }
+    }
+    urls
+}
+
+/// Safe slice of the original XML (not lowered) for href extraction.
+fn html_orig(xml: &str, from: usize, to: usize) -> &str {
+    &xml[from..to.min(xml.len())]
+}
+
+/// Extract the `href` attribute value from an HTML tag string.
+fn extract_href(tag: &str) -> Option<String> {
+    let lower = tag.to_lowercase();
+    let href_pos = lower.find("href")?;
+    let after = &tag[href_pos + 4..];
+    // Skip whitespace and =.
+    let after = after.trim_start();
+    let after = after.strip_prefix('=')?;
+    let after = after.trim_start();
+    // Extract quoted value.
+    if let Some(rest) = after.strip_prefix('"') {
+        let end = rest.find('"')?;
+        Some(rest[..end].to_string())
+    } else if let Some(rest) = after.strip_prefix('\'') {
+        let end = rest.find('\'')?;
+        Some(rest[..end].to_string())
+    } else {
+        // Unquoted: read until whitespace or >.
+        let end = after.find(|c: char| c.is_whitespace() || c == '>')?;
+        Some(after[..end].to_string())
     }
 }
 

@@ -153,7 +153,7 @@ mod dev {
         let u = args.first().map(String::as_str).unwrap_or("");
         let px = args.get(1).and_then(|s| proxy::Proxy::parse(s).ok());
         let f = Fetcher::new(BrowserProfile::host_default()).expect("fetcher");
-        match f.fetch_once_via(u, &[], px.as_ref(), false).await {
+        match f.fetch_once_via(u, &[], px.as_ref(), false, None).await {
             Ok(out) => {
                 println!(
                     "status={} alpn={} bytes={} verdict={:?} t={:.2}s",
