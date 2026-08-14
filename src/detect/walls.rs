@@ -114,8 +114,33 @@ fn classify_wall(
         // origin error (503). Ghost solve won't help.
         return Verdict::Blocked;
     }
+    // DataDome: the x-datadome header is present on ALL responses
+    // from DataDome-protected sites (200s with real content AND 403
+    // challenge pages). The header alone is NOT a wall signal —
+    // DataDome runs in monitoring mode on many sites (Forbes,
+    // Reddit), tagging every response but only blocking on
+    // actual bot detection. The wall is:
+    //   - 403/429 + x-datadome = challenge (always, regardless of body)
+    //   - 200 + x-datadome + small body + datadome/captcha markers = challenge
+    //   - 200 + x-datadome + large body = ContentOk (monitoring mode)
     if header(headers, "x-datadome").is_some() {
-        return Verdict::Challenge(Vendor::DataDome);
+        // On error statuses, x-datadome always means challenge.
+        if status == 403 || status == 429 || status == 503 {
+            return Verdict::Challenge(Vendor::DataDome);
+        }
+        // On 200: only challenge if the body is small AND contains
+        // DataDome CHALLENGE markers (not the monitoring script).
+        // "datadome" alone matches js.datadome.co/tags.js (monitoring);
+        // "captcha-delivery.com" or "datadome"+"captcha" = challenge.
+        if (200..300).contains(&status)
+            && allow_body_markers
+            && (text.contains("captcha-delivery.com")
+                || (text.contains("datadome") && text.contains("captcha")))
+        {
+            return Verdict::Challenge(Vendor::DataDome);
+        }
+        // 200 with x-datadome but no body markers = real content.
+        // Fall through to other checks / ContentOk.
     }
 
     // Body markers below. On 2xx these only run for SMALL
@@ -152,8 +177,15 @@ fn classify_wall(
             return Verdict::Challenge(Vendor::Cloudflare);
         }
     }
-    // DataDome
-    if text.contains("datadome") || text.contains("captcha-delivery.com") {
+    // DataDome body markers: "captcha-delivery.com" is the
+    // challenge-specific script URL. "datadome" alone matches
+    // the monitoring script (js.datadome.co/tags.js) present on
+    // ALL DataDome-protected pages, even real content.
+    // Only trigger on the challenge marker, or "datadome" +
+    // "captcha" together.
+    if text.contains("captcha-delivery.com")
+        || (text.contains("datadome") && text.contains("captcha"))
+    {
         return Verdict::Challenge(Vendor::DataDome);
     }
     // Akamai: block pages carry "Reference #…" +
@@ -260,5 +292,73 @@ mod tests {
         let body = b"<html><noscript>JavaScript is disabled In order to continue, we need to verify that you're not a robot. This requires JavaScript. Enable JavaScript and then reload the page.</noscript></html>";
         let v = detect_dom(body);
         assert!(matches!(v, Verdict::Challenge(_)), "got {v:?}");
+    }
+
+    #[test]
+    fn forbes_200_with_datadome_header_is_content() {
+        // Forbes returns x-datadome: protected on ALL responses
+        // (200s with full 1.3MB articles AND 403 challenge pages).
+        // The header alone is NOT a wall — DataDome runs in
+        // monitoring mode. A 200 with a large body is ContentOk.
+        let body = vec![b'<'; 1_300_000]; // 1.3MB of content
+        let headers = vec![
+            ("x-datadome".into(), "protected".into()),
+            ("content-type".into(), "text/html".into()),
+        ];
+        let v = detect(200, &headers, &body);
+        assert!(
+            matches!(v, Verdict::ContentOk),
+            "got {v:?} — Forbes 200 with x-datadome + large body must be ContentOk"
+        );
+    }
+
+    #[test]
+    fn forbes_403_with_datadome_header_is_challenge() {
+        // When Forbes DOES block (403), x-datadome means challenge.
+        let body = b"<html>DataDome challenge</html>";
+        let headers = vec![("x-datadome".into(), "protected".into())];
+        let v = detect(403, &headers, body);
+        assert!(
+            matches!(v, Verdict::Challenge(Vendor::DataDome)),
+            "got {v:?}"
+        );
+    }
+
+    #[test]
+    fn datadome_200_small_body_with_markers_is_challenge() {
+        // A small 200 page with datadome challenge markers IS a challenge
+        // interstitial (captcha-delivery.com is the challenge script).
+        let body = b"<html><body>datadome captcha-delivery.com challenge</body></html>";
+        let headers = vec![("x-datadome".into(), "protected".into())];
+        let v = detect(200, &headers, body);
+        assert!(
+            matches!(v, Verdict::Challenge(Vendor::DataDome)),
+            "got {v:?}"
+        );
+    }
+
+    #[test]
+    fn datadome_200_small_body_monitoring_script_is_content() {
+        // A small 200 page with x-datadome header and the DataDome
+        // monitoring script (js.datadome.co/tags.js) but NO challenge
+        // markers = real content (DataDome in monitoring mode).
+        let body = b"<html><head><script src=\"https://js.datadome.co/tags.js\"></script></head><body><p>Real article content about technology news today.</p></body></html>";
+        let headers = vec![("x-datadome".into(), "protected".into())];
+        let v = detect(200, &headers, body);
+        assert!(
+            matches!(v, Verdict::ContentOk),
+            "got {v:?} — monitoring script must not trigger challenge"
+        );
+    }
+
+    #[test]
+    fn datadome_200_small_body_no_markers_is_content() {
+        // A small 200 page with x-datadome header but NO datadome/captcha
+        // body markers = real content (DataDome in monitoring mode).
+        let body =
+            b"<html><body><p>Real article content about technology news today.</p></body></html>";
+        let headers = vec![("x-datadome".into(), "protected".into())];
+        let v = detect(200, &headers, body);
+        assert!(matches!(v, Verdict::ContentOk), "got {v:?}");
     }
 }
