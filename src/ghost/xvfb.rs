@@ -76,34 +76,34 @@ mod linux {
                 ))
             })?;
 
-            // Wait for the display to be ready.
-            let ready = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            // Wait for the display to be ready by polling the X11
+            // socket file. Xvfb creates /tmp/.X11-unix/X99 when it's
+            // ready to accept connections. This replaces the old
+            // xdpyinfo dependency (xorg-xdpyinfo package) — not
+            // installed on minimal systems and unnecessary when
+            // the socket file is a reliable readiness signal.
+            let sock_path = format!("/tmp/.X11-unix/X{DISPLAY_NUM}");
+            let ready = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 loop {
-                    let r = tokio::process::Command::new("xdpyinfo")
-                        .env("DISPLAY", &display)
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .status()
-                        .await;
-                    if r.map(|s| s.success()).unwrap_or(false) {
+                    if std::fs::exists(&sock_path).unwrap_or(false) {
+                        // Give Xvfb a moment to finish initializing
+                        // the screen after socket creation.
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         return;
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    // Check if Xvfb died early.
+                    if child.try_wait().ok().flatten().is_some() {
+                        return; // process exited — will fail below
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             })
             .await;
 
-            if ready.is_err() {
-                // xdpyinfo might not be installed; check if the process
-                // is still alive as a fallback.
-                match child.try_wait() {
-                    Ok(None) => {} // alive, probably fine
-                    _ => {
-                        return Err(FetchError::ghost(
-                            "Xvfb failed to start (install: pacman -S xorg-server-xvfb)",
-                        ));
-                    }
-                }
+            if ready.is_err() || !std::fs::exists(&sock_path).unwrap_or(false) {
+                return Err(FetchError::ghost(
+                    "Xvfb failed to start (install: pacman -S xorg-server-xvfb)",
+                ));
             }
 
             if std::env::var_os("DONGHOST_DEBUG").is_some() {
@@ -146,25 +146,11 @@ mod linux {
     }
 
     /// Check if an X display is already alive by testing the X
-    /// socket file. If the socket exists but xdpyinfo is not
-    /// installed, assume alive (the socket is strong evidence).
-    async fn display_alive(display: &str) -> bool {
+    /// socket file. The socket is the reliable signal — no xdpyinfo
+    /// dependency needed.
+    async fn display_alive(_display: &str) -> bool {
         let sock = format!("/tmp/.X11-unix/X{DISPLAY_NUM}");
-        if !std::fs::exists(&sock).unwrap_or(false) {
-            return false;
-        }
-        // Try xdpyinfo for a definitive check.
-        let r = tokio::process::Command::new("xdpyinfo")
-            .env("DISPLAY", display)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-        match r {
-            Ok(s) => s.success(),
-            // xdpyinfo not installed but socket exists → probably alive.
-            Err(_) => true,
-        }
+        std::fs::exists(&sock).unwrap_or(false)
     }
 }
 
