@@ -101,7 +101,7 @@ const FETCH_PARAMS: &[ParamSpec] = &[
         kind: ParamKind::Str,
         cli: CliKind::Flag,
         required: false,
-        help: "BM25 query — return only blocks relevant to it. #1 token saver on long pages. If nothing matches, returns full page with a notice.",
+        help: "Relevance query — returns ONLY blocks relevant to your question, cutting tokens by 50-80% on long pages. Uses hybrid keyword + semantic matching: catches blocks that use different vocabulary than your query (e.g. query \"how gradients flow through layers\" matches \"backpropagation\" and \"chain rule\"). If nothing matches, returns full page with a notice. ALWAYS set this when you know what you're looking for — it is the #1 token saver.",
     },
     ParamSpec {
         name: "max_chars",
@@ -231,7 +231,7 @@ const CRAWL_PARAMS: &[ParamSpec] = &[
         kind: ParamKind::Str,
         cli: CliKind::Flag,
         required: false,
-        help: "BM25 query — rank pages by relevance, crawl only matching ones. Essential for large sites; without it the crawl wastes budget on noise.",
+        help: "Relevance query — rank pages by relevance and crawl only matching ones. Uses hybrid keyword + semantic matching. Essential for large sites; without it the crawl wastes budget on noise. Set this whenever you have a specific topic in mind.",
     },
     ParamSpec {
         name: "max_pages",
@@ -322,7 +322,7 @@ pub static TOOLS: &[ToolSpec] = &[
         name: "web_fetch",
         cli_cmd: "fetch",
         summary: "Fetch a URL as clean markdown (auto bot-wall bypass, PDF, JS render)",
-        description: "Fetch one URL as clean markdown — use when you have a specific URL to read. For finding URLs, use web_search; for multi-page sites, use web_crawl.\n\nAuto-escalation: fast HTTP first; on bot-wall or JS-only page, opens a headless browser, solves the challenge, downgrades back. PDFs auto-detected (content-type or magic bytes) and parsed by DonSheet — text extraction + OCR for scanned pages, up to 100MB. Non-HTML (JSON/XML/text) passes through.\n\nToken savers: focus returns only BM25-relevant blocks (if nothing matches, returns full page with a notice); links and images stripped by default (enable with links=true, media=true).\n\nLong-page workflow: toc=true → heading outline, then section=\"heading\" → that section only. Or use focus to get relevant blocks.\n\nPagination: if structuredContent.next_offset is present, call again with offset=that value.\n\nResponse: content[0].text = markdown; structuredContent = {status, tier, verdict, thin, content_kind, title, byline, published, site, blocks_shown, blocks_total, total_chars, next_offset, tokens_est, url}. thin=true = JS shell (content may be incomplete). content_kind: Article|Listing|Forum|Docs|Table|Page. isError=true on failure (blocked, captcha, network).",
+        description: "Fetch one URL as clean markdown — use when you have a specific URL to read. For finding URLs, use web_search; for multi-page sites, use web_crawl.\n\nAuto-escalation: fast HTTP first; on bot-wall or JS-only page, opens a headless browser, solves the challenge, downgrades back. PDFs auto-detected (content-type or magic bytes) and parsed by DonSheet — text extraction + OCR for scanned pages, up to 100MB. Non-HTML (JSON/XML/text) passes through.\n\nToken efficiency — use focus: the focus parameter returns ONLY blocks relevant to your question, cutting tokens 50-80% on long pages. It uses hybrid keyword + semantic matching, so it catches blocks even when the page uses different vocabulary than your query. If nothing matches, it returns the full page with a notice — so it's always safe to try. ALWAYS set focus when you know what you're looking for. links and images are also stripped by default (enable with links=true, media=true).\n\nLong-page workflow: toc=true → heading outline, then section=\"heading\" → that section only. Or use focus to get relevant blocks.\n\nPagination: if structuredContent.next_offset is present, call again with offset=that value.\n\nResponse: content[0].text = markdown; structuredContent = {status, tier, verdict, thin, content_kind, title, byline, published, site, blocks_shown, blocks_total, total_chars, next_offset, tokens_est, url}. thin=true = JS shell (content may be incomplete). content_kind: Article|Listing|Forum|Docs|Table|Page. isError=true on failure (blocked, captcha, network).",
         params: FETCH_PARAMS,
         examples: &[
             "donsetch fetch https://example.com/article",
@@ -351,7 +351,7 @@ pub static TOOLS: &[ToolSpec] = &[
 
 Sitemap discovery: tries robots.txt directives first, then 6 conventional locations (/sitemap.xml, /sitemap_index.xml, /wp-sitemap.xml, etc.). www. and bare host treated as equivalent. If no sitemap is found, map mode returns guidance to use mode=content.
 
-PDF pages: auto-detected and extracted (same engine as web_fetch). Not skipped.\n\nBudget control: focus ranks pages by relevance and crawls only matching ones — essential for large sites. max_pages, max_total_chars, deadline_s cap the crawl. Resume tokens let you continue large crawls across calls.\n\nResponse: content[0].text = map (if any) + pages as markdown. structuredContent = {seed, pages: [{url, title, kind, chars, quality}], map, queued, filtered_out, skipped: [{url, reason}], stop, elapsed_s, resume}.\n\nstop = why crawl stopped: FrontierEmpty (done), MaxPages|CharBudget|DepthLimit|Deadline (budget — use resume to continue), ThrottledOut (site blocked you — wait and resume). resume = token to continue when stopped by budget/deadline. quality = 0.0-1.0 content trust per page.",
+PDF pages: auto-detected and extracted (same engine as web_fetch). Not skipped.\n\nBudget control: focus (topic) ranks pages by hybrid keyword + semantic relevance and crawls only matching ones — essential for large sites. Set it whenever you have a specific topic in mind. max_pages, max_total_chars, deadline_s cap the crawl. Resume tokens let you continue large crawls across calls.\n\nResponse: content[0].text = map (if any) + pages as markdown. structuredContent = {seed, pages: [{url, title, kind, chars, quality}], map, queued, filtered_out, skipped: [{url, reason}], stop, elapsed_s, resume}.\n\nstop = why crawl stopped: FrontierEmpty (done), MaxPages|CharBudget|DepthLimit|Deadline (budget — use resume to continue), ThrottledOut (site blocked you — wait and resume). resume = token to continue when stopped by budget/deadline. quality = 0.0-1.0 content trust per page.",
         params: CRAWL_PARAMS,
         examples: &[
             "donsetch crawl https://docs.site.com --topic \"authentication\"",
