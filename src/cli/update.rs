@@ -251,6 +251,10 @@ fn platform_asset_name() -> Option<&'static str> {
 ///
 /// The atom feed is a regular GitHub web page (not an API call),
 /// so it is NOT subject to the 60-req/hour API rate limit.
+///
+/// Uses the `<id>` tag (not `<title>`) because release titles can
+/// contain extra text (e.g. "v1.0.0 — Stable Release") that breaks
+/// semver parsing. The `<id>` tag always ends with `/v<version>`.
 async fn fetch_latest_version(fetcher: &Fetcher) -> Result<String, String> {
     let url = format!("https://github.com/{REPO}/releases.atom");
     let out = fetcher.fetch(&url).await.map_err(|e| e.to_string())?;
@@ -261,29 +265,32 @@ async fn fetch_latest_version(fetcher: &Fetcher) -> Result<String, String> {
 
     let body = String::from_utf8_lossy(&out.body);
 
-    // Find the first <entry> block, then the first <title> within it.
+    // Find the first <entry> block, then the <id> within it.
     let entry_pos = body
         .find("<entry>")
         .ok_or_else(|| "no releases found in feed".to_string())?;
 
-    let title_tag = body[entry_pos..]
-        .find("<title")
-        .ok_or_else(|| "could not parse feed: no <title> in first entry".to_string())?
+    // The <id> tag always ends with /v<version> — clean, no extra text.
+    let id_tag = body[entry_pos..]
+        .find("<id>")
+        .ok_or_else(|| "could not parse feed: no <id> in first entry".to_string())?
         + entry_pos;
 
-    // Skip past the opening tag (handles `<title>` and `<title type="html">`).
-    let content_start = body[title_tag..]
+    let content_start = body[id_tag..]
         .find('>')
-        .ok_or_else(|| "could not parse feed: malformed <title>".to_string())?
-        + title_tag
+        .ok_or_else(|| "could not parse feed: malformed <id>".to_string())?
+        + id_tag
         + 1;
 
     let content_end = body[content_start..]
-        .find("</title>")
-        .ok_or_else(|| "could not parse feed: no </title>".to_string())?
+        .find("</id>")
+        .ok_or_else(|| "could not parse feed: no </id>".to_string())?
         + content_start;
 
-    let tag = body[content_start..content_end].trim();
+    // <id> looks like: tag:github.com,2008:Repository/123/v1.0.0
+    // Extract everything after the last '/'.
+    let id_content = body[content_start..content_end].trim();
+    let tag = id_content.rsplit('/').next().unwrap_or(id_content);
 
     // Strip 'v' prefix (v0.5.0-beta.1 -> 0.5.0-beta.1).
     let version = tag.strip_prefix('v').unwrap_or(tag);

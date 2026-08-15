@@ -45,7 +45,7 @@ async fn main() {
         "doctor" | "--doctor" => cli::doctor::run().await,
         "update" | "-u" | "--update" => cli::update::run().await,
         "rollback" | "--rollback" => cli::rollback::run(),
-        "version" | "-v" | "--version" => cli::version::run(),
+        "version" | "-v" | "--version" => cli::version::run().await,
 
         // ── Dev/internal (hidden from --help) ──
         "dev" => dev::dispatch(&args[2..]).await,

@@ -11,11 +11,16 @@
 //! **Windows:** a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
 //! owns the browser tree — the kernel kills every process in the job
 //! when the last handle closes (including if donsetch crashes).
-//! Freeze/thaw via `NtSuspendProcess`/`NtResumeProcess` (ntdll; the
-//! atomic whole-process pause, stable since XP — Sysinternals Process
+//! Freeze/thaw enumerates ALL processes in the Job Object (not just
+//! the main browser) and suspends/resumes each one via
+//! `NtSuspendProcess`/`NtResumeProcess` (ntdll; the atomic
+//! whole-process pause, stable since XP — Sysinternals Process
 //! Explorer, WinDbg, and Chrome's own crash handling all use it).
 //! Linked directly to ntdll via `#[link(name = "ntdll")]` — no
 //! `GetProcAddress` dance, no FARPROC type ambiguity.
+//! Without enumerating all PIDs, only the main Chrome process would
+//! be suspended — the renderer/GPU/utility processes keep running,
+//! burning CPU and RAM.
 
 use crate::error::FetchError;
 use tokio::process::Child;
@@ -152,7 +157,12 @@ impl Proc {
         }
         #[cfg(windows)]
         unsafe {
-            NtSuspendProcess(self.proc_handle);
+            for pid in self.job_pids() {
+                if let Ok(h) = open_for_suspend(pid) {
+                    NtSuspendProcess(h);
+                    fnd::CloseHandle(h);
+                }
+            }
         }
     }
 
@@ -164,7 +174,12 @@ impl Proc {
         }
         #[cfg(windows)]
         unsafe {
-            NtResumeProcess(self.proc_handle);
+            for pid in self.job_pids() {
+                if let Ok(h) = open_for_suspend(pid) {
+                    NtResumeProcess(h);
+                    fnd::CloseHandle(h);
+                }
+            }
         }
     }
 
@@ -180,6 +195,52 @@ impl Proc {
             job::TerminateJobObject(self.job, 1);
         }
     }
+
+    /// Enumerate all PIDs in the Job Object (Windows only).
+    /// Chrome spawns renderer, GPU, and utility processes as
+    /// separate processes in the Job — the main process handle
+    /// only controls the browser process. To freeze/thaw the
+    /// whole tree, we query the Job Object for all member PIDs.
+    #[cfg(windows)]
+    fn job_pids(&self) -> Vec<u32> {
+        use std::mem;
+
+        // Query the Job Object for all process IDs. The struct
+        // has a variable-length trailing array, so we allocate
+        // extra room. Chrome typically has 5-15 processes; 64
+        // slots is generous headroom.
+        const MAX_PIDS: usize = 64;
+        let buf_size = mem::size_of::<job::JOBOBJECT_BASIC_PROCESS_ID_LIST>()
+            + (MAX_PIDS - 1) * mem::size_of::<usize>();
+        let mut buf = vec![0u8; buf_size];
+
+        let ok = unsafe {
+            job::QueryInformationJobObject(
+                self.job,
+                job::JobObjectBasicProcessIdList,
+                buf.as_mut_ptr() as *mut _,
+                buf_size as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            // Query failed — fall back to just the main PID.
+            // The main process is still controlled by proc_handle.
+            return Vec::new();
+        }
+
+        let list = unsafe { &*(buf.as_ptr() as *const job::JOBOBJECT_BASIC_PROCESS_ID_LIST) };
+        let count = list.NumberOfProcessIdsInList as usize;
+        if count == 0 {
+            return Vec::new();
+        }
+        let count = count.min(MAX_PIDS);
+
+        // The ProcessIdList is a flex array at the end of the struct.
+        let pids: &[usize] =
+            unsafe { std::slice::from_raw_parts(&list.ProcessIdList as *const usize, count) };
+        pids.iter().map(|&p| p as u32).collect()
+    }
 }
 
 /// `PR_SET_PDEATHSIG` — kernel kills the child if donsetch dies.
@@ -193,6 +254,17 @@ pub fn pdeath_pre_exec() -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Open a process handle for suspend/resume (Windows only).
+/// Returns Err if the process has already exited (race condition
+/// during freeze — child crashed between enumeration and open).
+#[cfg(windows)]
+fn open_for_suspend(pid: u32) -> Result<fnd::HANDLE, ()> {
+    unsafe {
+        let h = thr::OpenProcess(thr::PROCESS_SUSPEND_RESUME, 0, pid);
+        if h.is_null() { Err(()) } else { Ok(h) }
+    }
 }
 
 // SAFETY: Windows HANDLEs are kernel object references (opaque
