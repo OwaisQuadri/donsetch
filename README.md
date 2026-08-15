@@ -269,7 +269,9 @@ Persistent profile dir `~/.cache/donsetch/ghost-profile`: aged cookie/history st
 
 ---
 
-## 🧠 Self-improving fetch
+## 🧠 Self-improving fetch (experimental)
+
+> **Experimental.** Works reliably for most domains, but edge cases exist (stale profiles, cookie race conditions). Disk persistence can be disabled with `DONSEEK_NO_DISK_STATE=1`.
 
 > Every fetch is both an action AND an observation. The system learns from each outcome and routes the next fetch more efficiently. **The more you use DonSeTch, the less it escalates to tier 2.**
 
@@ -283,6 +285,10 @@ No ML, no prediction models. Pure deterministic observation + state → better r
 | Visit M (24h since cold check) | `RecheckCold` | Try tier 1 cold — the wall may have been removed |
 
 When warm cookies go stale, the system learns the real lifetime: `observed_lifetime = min(previous, now - last_solved)`. Over multiple cycles, it converges to the real cookie lifetime for each domain.
+
+**Only clearance cookies are persisted** (cf_clearance, datadome, _abck, etc.) — tracking cookies are filtered out to keep the state file compact.
+
+**Disable disk persistence** with `DONSEEK_NO_DISK_STATE=1` — keeps in-memory state for the session but skips writing to `~/.cache/donsetch/ghost-state.json`. On by default.
 
 ---
 
@@ -448,6 +454,7 @@ Every layer built in Rust. No dependency on existing OSS web tooling.
 | robots.txt ON by default for crawl | `respect_robots=true` for crawl. `fetch` doesn't check robots. |
 | Search rate-limits without a proxy | Keyless search scrapes public engines from your IP. Set `DONSEEK_PROXIES` for heavy use. |
 | Not built for mass scraping | DonSeTch is for agentic research, not bulk extraction. |
+| Disable disk persistence | `DONSEEK_NO_DISK_STATE=1` skips writing self-improvement data to disk. In-memory state still works for the session. |
 
 ---
 

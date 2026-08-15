@@ -196,6 +196,14 @@ impl Ghost {
             "--disable-sync".into(),
             "--disable-translate".into(),
             "--mute-audio".into(),
+            // ── Disk cache suppression ──
+            // Chrome's disk cache grows unboundedly (1GB+ in days).
+            // We don't need it — tier 1 has its own HTTP cache, and
+            // ghost only renders a few pages per domain. Disabling
+            // keeps the profile dir tiny (~10MB instead of 1GB+).
+            "--disk-cache-size=1".into(),
+            "--disable-gpu-shader-disk-cache".into(),
+            "--disable-features=SiteEngagementService".into(),
         ];
         // ── Stealth mode selection ──
         //

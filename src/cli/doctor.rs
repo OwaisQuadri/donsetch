@@ -251,8 +251,66 @@ fn check_cache_dir() -> CheckResult {
     match std::fs::write(&test, b"test") {
         Ok(()) => {
             let _ = std::fs::remove_file(&test);
-            let size = dir_size(&dir);
-            CheckResult::Pass(format!("{}, writable", format_size(size)))
+            let total = dir_size(&dir);
+
+            // Breakdown by component — helps users understand what's
+            // using space. The ghost-profile (Chrome's own cache) is
+            // typically the largest; ghost-state.json (self-improvement)
+            // should be < 1MB after cookie filtering.
+            let ghost_profile = dir.join("ghost-profile");
+            let ghost_state = dir.join("ghost-state.json");
+            let ocr = dir.join("ocr");
+            let rerank = dir.join("rerank");
+            let search_cache = dir.join("search-cache.json");
+
+            let parts = [
+                (
+                    "self-improvement",
+                    if ghost_state.exists() {
+                        ghost_state.metadata().map(|m| m.len()).unwrap_or(0)
+                    } else {
+                        0
+                    },
+                ),
+                (
+                    "ghost-profile",
+                    if ghost_profile.exists() {
+                        dir_size(&ghost_profile)
+                    } else {
+                        0
+                    },
+                ),
+                ("ocr-models", if ocr.exists() { dir_size(&ocr) } else { 0 }),
+                (
+                    "rerank-models",
+                    if rerank.exists() {
+                        dir_size(&rerank)
+                    } else {
+                        0
+                    },
+                ),
+                (
+                    "search-cache",
+                    if search_cache.exists() {
+                        search_cache.metadata().map(|m| m.len()).unwrap_or(0)
+                    } else {
+                        0
+                    },
+                ),
+            ];
+
+            let breakdown: String = parts
+                .iter()
+                .filter(|(_, s)| *s > 0)
+                .map(|(name, size)| format!("{name}={}", format_size(*size)))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            if breakdown.is_empty() {
+                CheckResult::Pass(format!("{}, writable", format_size(total)))
+            } else {
+                CheckResult::Pass(format!("{} ({breakdown})", format_size(total)))
+            }
         }
         Err(e) => CheckResult::Fail("not writable".into(), format!("Check permissions: {e}")),
     }

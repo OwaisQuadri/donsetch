@@ -38,7 +38,7 @@ pub struct CookieRecord {
 /// Per-domain intelligence. Evolves with every fetch outcome.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DomainProfile {
-    // === Cookie vault ===
+    // === Cookie vault (clearance cookies only) ===
     #[serde(default)]
     pub cookies: Vec<CookieRecord>,
     /// When tier 2 last solved (unix seconds).
@@ -121,6 +121,60 @@ const RECHECK_INTERVAL: u64 = 24 * 60 * 60; // 24 hours
 /// SPA renders stale after 5 min.
 const RENDER_TTL: u64 = 5 * 60;
 
+/// Max render cache entries. Each stores full HTML — cap to
+/// prevent unbounded growth. LRU eviction when full.
+/// 20 entries × ~200KB avg = ~4MB max contribution to state file.
+const RENDER_MAX: usize = 20;
+
+/// Max HTML size to cache per render (200KB). Larger pages are
+/// rendered but not persisted — they'd bloat the state file.
+const RENDER_MAX_HTML: usize = 200_000;
+
+// ────────────────────────── cookie filtering ──────────────────────────
+
+/// Cookie name prefixes that bot-wall vendors use for clearance/
+/// verification cookies. We only persist these — tracking cookies
+/// (_ga, TDID, demdex, etc.) bloat the state file with no benefit.
+const CLEARANCE_PREFIXES: &[&str] = &[
+    "cf_",         // Cloudflare: cf_clearance, cf_chl, cf_ob_setup
+    "__cf",        // Cloudflare alt
+    "__dd",        // DataDome: __dd_cookie, __dd_s
+    "datadome",    // DataDome
+    "_dd_s",       // DataDome session
+    "bm_",         // Akamai: bm_sz, bm_mi, bm_sv, bm_lso
+    "_abck",       // Akamai Bot Manager
+    "ak_bmsb",     // Akamai bot sensor backup
+    "bmsts",       // Akamai bot session token
+    "senseguard",  // PerimeterX
+    "_px",         // PerimeterX: _pxhd, _px2, _pxff
+    "pxcts",       // PerimeterX session
+    "incap_ses",   // Imperva Incapsula
+    "visid_incap", // Imperva Incapsula
+    "nlbi_",       // Imperva load balancer
+    "__utmz",      // Sometimes used by walls for referrer tracking
+];
+
+/// Cookie names that are exact matches for clearance cookies.
+const CLEARANCE_EXACT: &[&str] = &["cf_clearance"];
+
+/// Is this a bot-wall clearance/verification cookie worth persisting?
+/// Filters out tracking/analytics cookies that bloat the state file.
+fn is_clearance_cookie(name: &str) -> bool {
+    if CLEARANCE_EXACT.contains(&name) {
+        return true;
+    }
+    CLEARANCE_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// Filter a cookie list to only clearance cookies.
+fn filter_clearance(cookies: &[CookieRecord]) -> Vec<CookieRecord> {
+    cookies
+        .iter()
+        .filter(|c| is_clearance_cookie(&c.name))
+        .cloned()
+        .collect()
+}
+
 // ────────────────────────── helpers ──────────────────────────
 
 pub fn now() -> u64 {
@@ -172,7 +226,43 @@ impl GhostState {
         let p = path();
         if let Ok(s) = std::fs::read_to_string(&p) {
             // Try new format.
-            if let Ok(state) = serde_json::from_str::<Self>(&s) {
+            if let Ok(mut state) = serde_json::from_str::<Self>(&s) {
+                // One-time migration: prune tracking cookies from
+                // existing profiles. Pre-filter versions stored ALL
+                // cookies (_ga, TDID, demdex, etc.) — some domains
+                // had 1000+ cookies, making the state file 100MB+.
+                // After pruning, only clearance cookies remain.
+                let mut changed = false;
+                for profile in state.profiles.values_mut() {
+                    let before = profile.cookies.len();
+                    profile.cookies = filter_clearance(&profile.cookies);
+                    if profile.cookies.len() != before {
+                        changed = true;
+                    }
+                }
+                // Cap renders to RENDER_MAX (old state files may
+                // have hundreds of cached renders).
+                while state.renders.len() > RENDER_MAX {
+                    if let Some(oldest_key) = state
+                        .renders
+                        .iter()
+                        .min_by_key(|(_, r)| r.at)
+                        .map(|(k, _)| k.clone())
+                    {
+                        state.renders.remove(&oldest_key);
+                    }
+                    changed = true;
+                }
+                // Prune oversized renders (old files may have
+                // cached >200KB pages).
+                let before_renders = state.renders.len();
+                state.renders.retain(|_, r| r.html.len() <= RENDER_MAX_HTML);
+                if state.renders.len() != before_renders {
+                    changed = true;
+                }
+                if changed {
+                    state.save();
+                }
                 return state;
             }
             // Try legacy format and migrate.
@@ -182,16 +272,18 @@ impl GhostState {
                     state.profiles.insert(
                         host,
                         DomainProfile {
-                            cookies: solved
-                                .cookies
-                                .into_iter()
-                                .map(|(n, v, d)| CookieRecord {
-                                    name: n,
-                                    value: v,
-                                    domain: d,
-                                    expires_at: None,
-                                })
-                                .collect(),
+                            cookies: filter_clearance(
+                                &solved
+                                    .cookies
+                                    .into_iter()
+                                    .map(|(n, v, d)| CookieRecord {
+                                        name: n,
+                                        value: v,
+                                        domain: d,
+                                        expires_at: None,
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ),
                             last_solved: solved.at,
                             needs_tier2: true,
                             ..Default::default()
@@ -209,9 +301,16 @@ impl GhostState {
     /// Atomic save: write to temp, rename. Survives crashes.
     /// No-op in test builds — tests exercise the pure decision
     /// and freshness logic without disk side effects.
+    /// No-op when DONSEEK_NO_DISK_STATE is set — keeps in-memory
+    /// state for the session but doesn't persist to disk.
     pub fn save(&self) {
         #[cfg(not(test))]
         {
+            // Allow users to disable disk persistence entirely.
+            // In-memory state still works during the session.
+            if std::env::var_os("DONSEEK_NO_DISK_STATE").is_some() {
+                return;
+            }
             let p = path();
             if let Some(parent) = p.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -284,16 +383,17 @@ impl GhostState {
     /// Tier 1 warm succeeded — cookies are still valid. Refresh
     /// the cookie vault from the response's Set-Cookie headers
     /// so the on-disk cookies stay as fresh as the server's latest
-    /// response. This is the write-back that keeps sessions alive
-    /// across restarts, just like a real browser tab.
+    /// response. Only clearance cookies are merged — tracking
+    /// cookies are filtered out to keep the state file compact.
     pub fn record_warm_ok(&mut self, host: &str, refreshed: &[CookieRecord]) {
         let n = now();
         let p = self.profiles.entry(host.to_string()).or_default();
         p.fetch_count += 1;
         p.warm_ok_count += 1;
         p.last_refreshed = n;
-        // Merge: replace by (name, domain), add new ones.
-        for new in refreshed {
+        // Merge: replace by (name, domain), add new ones — but only
+        // clearance cookies.
+        for new in filter_clearance(refreshed) {
             if let Some(existing) = p
                 .cookies
                 .iter_mut()
@@ -328,11 +428,12 @@ impl GhostState {
     }
 
     /// Tier 2 solved the wall — store fresh cookies with real
-    /// expiry captured from CDP.
+    /// expiry captured from CDP. Only clearance cookies are kept —
+    /// tracking cookies bloat the state file with no benefit.
     pub fn record_solved(&mut self, host: &str, cookies: &[CookieRecord], vendor: Option<&str>) {
         let n = now();
         let p = self.profiles.entry(host.to_string()).or_default();
-        p.cookies = cookies.to_vec();
+        p.cookies = filter_clearance(cookies);
         p.last_solved = n;
         p.last_refreshed = n;
         p.solve_count += 1;
@@ -346,6 +447,22 @@ impl GhostState {
     // ── Render cache (unchanged from v1) ──
 
     pub fn record_render(&mut self, url: &str, html: &str) {
+        // Skip oversized pages — caching 1MB+ HTML bloats the state
+        // file with no benefit (large pages are usually not SPAs
+        // that need render caching).
+        if html.len() > RENDER_MAX_HTML {
+            return;
+        }
+        // LRU cap: evict oldest renders when at capacity.
+        if self.renders.len() >= RENDER_MAX
+            && let Some(oldest_key) = self
+                .renders
+                .iter()
+                .min_by_key(|(_, r)| r.at)
+                .map(|(k, _)| k.clone())
+        {
+            self.renders.remove(&oldest_key);
+        }
         self.renders.insert(
             url.to_string(),
             RenderCache {
@@ -597,15 +714,15 @@ mod tests {
             "hard.com".into(),
             DomainProfile {
                 needs_tier2: true,
-                cookies: vec![cr("old", "old_val", ".hard.com", Some(9999))],
+                cookies: vec![cr("cf_clearance", "old_val", ".hard.com", Some(9999))],
                 last_solved: 1000,
                 ..Default::default()
             },
         );
-        // Simulate: server sent a refreshed cookie.
+        // Simulate: server sent a refreshed cookie + a new clearance cookie.
         let refreshed = vec![
-            cr("old", "new_val", ".hard.com", Some(9999)),
-            cr("new", "new_cookie", ".hard.com", Some(9999)),
+            cr("cf_clearance", "new_val", ".hard.com", Some(9999)),
+            cr("datadome", "new_cookie", ".hard.com", Some(9999)),
         ];
         s.record_warm_ok("hard.com", &refreshed);
         let p = &s.profiles["hard.com"];
@@ -613,8 +730,8 @@ mod tests {
         assert_eq!(p.warm_ok_count, 1);
         // Old cookie value was replaced.
         assert_eq!(p.cookies[0].value, "new_val");
-        // New cookie was added.
-        assert!(p.cookies.iter().any(|c| c.name == "new"));
+        // New clearance cookie was added.
+        assert!(p.cookies.iter().any(|c| c.name == "datadome"));
     }
 
     #[test]
@@ -702,4 +819,98 @@ mod tests {
     }
 
     // ── save is a no-op in test builds (see save() impl) ──
+
+    // ── cookie filtering ──
+
+    #[test]
+    fn clearance_filter_keeps_cf() {
+        let cookies = vec![
+            cr("cf_clearance", "tok", ".a.com", None),
+            cr("_ga", "GA1.2.xxx", ".a.com", None),
+        ];
+        let filtered = filter_clearance(&cookies);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "cf_clearance");
+    }
+
+    #[test]
+    fn clearance_filter_keeps_datadome() {
+        let cookies = vec![
+            cr("datadome", "val", ".a.com", None),
+            cr("__dd_cookie", "val", ".a.com", None),
+            cr("TDID", "tracking", ".a.com", None),
+        ];
+        let filtered = filter_clearance(&cookies);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn clearance_filter_keeps_akamai() {
+        let cookies = vec![
+            cr("_abck", "val", ".a.com", None),
+            cr("bm_sz", "val", ".a.com", None),
+            cr("ak_bmsb", "val", ".a.com", None),
+            cr("bcookie", "tracking", ".a.com", None),
+        ];
+        let filtered = filter_clearance(&cookies);
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn clearance_filter_keeps_perimeterx() {
+        let cookies = vec![
+            cr("_pxhd", "val", ".a.com", None),
+            cr("_px2", "val", ".a.com", None),
+            cr("demdex", "tracking", ".a.com", None),
+        ];
+        let filtered = filter_clearance(&cookies);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn clearance_filter_empty() {
+        let cookies = vec![
+            cr("_ga", "val", ".a.com", None),
+            cr("TDID", "val", ".a.com", None),
+            cr("demdex", "val", ".a.com", None),
+        ];
+        let filtered = filter_clearance(&cookies);
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn solved_stores_only_clearance() {
+        let mut s = GhostState::default();
+        let cookies = vec![
+            cr("cf_clearance", "tok", ".a.com", Some(now() + 3600)),
+            cr("_ga", "tracking", ".a.com", None),
+            cr("datadome", "val", ".a.com", Some(now() + 3600)),
+        ];
+        s.record_solved("a.com", &cookies, Some("cloudflare"));
+        let p = &s.profiles["a.com"];
+        assert_eq!(p.cookies.len(), 2); // cf_clearance + datadome only
+    }
+
+    #[test]
+    fn warm_ok_filters_tracking_cookies() {
+        let mut s = GhostState::default();
+        s.profiles.insert(
+            "hard.com".into(),
+            DomainProfile {
+                needs_tier2: true,
+                cookies: vec![cr("cf_clearance", "old", ".hard.com", Some(9999))],
+                last_solved: 1000,
+                ..Default::default()
+            },
+        );
+        let refreshed = vec![
+            cr("cf_clearance", "new", ".hard.com", Some(9999)),
+            cr("_ga", "tracking", ".hard.com", None),
+            cr("TDID", "tracking", ".hard.com", None),
+        ];
+        s.record_warm_ok("hard.com", &refreshed);
+        let p = &s.profiles["hard.com"];
+        assert_eq!(p.cookies.len(), 1); // only cf_clearance updated
+        assert_eq!(p.cookies[0].value, "new");
+    }
 }
