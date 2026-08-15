@@ -2,21 +2,11 @@
 
 # 🌐 DonSeTch
 
-**Give your AI agent the web. Built from scratch in Rust. No keys, no accounts. Hound replacement**
+**Give your AI agent the web. $0. No keys, no accounts. Built from scratch in Rust.**
 
 Fetch · search · crawl · bypass bot walls · read PDFs (even scanned) · semantic reranking
-One MCP server · Chrome's own TLS library · headless browser escalation · zero Python
 
-</div>
-
-<br>
-
-<div align="center">
-
-> ### ⚠️ BETA — DO NOT USE IN PRODUCTION
-> DonSeTch is in active development. Key systems are being built, tested, and hardened.
-> Things may break, APIs may change, features may be incomplete, very fragile.
-> **Star the repo and check back.** The release you want is coming.
+One binary · Chrome's own TLS · headless browser escalation · zero Python
 
 </div>
 
@@ -25,9 +15,10 @@ One MCP server · Chrome's own TLS library · headless browser escalation · zer
 <div align="center">
 
 [![Release](https://img.shields.io/github/v/release/dondai44423/donsetch?color=00d4aa&label=release&style=flat-square)](https://github.com/dondai44423/donsetch/releases)
-[![Rust](https://img.shields.io/badge/Rust-1.75+-ce422b?style=flat-square)](https://www.rust-lang.org)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-00d4aa&style=flat-square)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-edition%202024-ce422b?style=flat-square)](https://www.rust-lang.org)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-00d4aa?style=flat-square)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/dondai44423/donsetch/ci.yml?label=CI&style=flat-square)](https://github.com/dondai44423/donsetch/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/donsetch?color=cb3837&style=flat-square)](https://www.npmjs.com/package/donsetch)
 [![Stars](https://img.shields.io/github/stars/dondai44423/donsetch?color=ff9f43&style=flat-square)](https://github.com/dondai44423/donsetch)
 
 </div>
@@ -35,35 +26,158 @@ One MCP server · Chrome's own TLS library · headless browser escalation · zer
 <br>
 
 ```bash
-cargo install donsetch
+npm install -g donsetch
 ```
 
 <div align="center">
 
-[🚀 Install](#-install) · [🎯 The 3 tools](#-the-3-tools) · [🛡️ Chrome TLS](#-chrome-tls-not-chrome-like) · [👻 Solve & Bounce](#-solve-and-bounce) · [🧠 Self-Improving](#-self-improving-fetch) · [🔎 Search](#-keyless-search) · [🌐 Fetch](#-fetch) · [🕷️ Crawl](#-crawl) · [📄 PDF](#-pdf--ocr) · [📊 Comparison](#-comparison) · [⚠️ Gotchas](#-gotchas) · [🧱 Limits](#-honest-limits)
+[Install](#-install) · [Two ways to use it](#-two-ways-to-use-it) · [The 3 tools](#-the-3-tools) · [Chrome TLS](#-chrome-tls-not-chrome-like) · [Solve & Bounce](#-solve-and-bounce) · [Search](#-keyless-search) · [PDF](#-pdf--ocr) · [Comparison](#-comparison) · [Gotchas](#-gotchas) · [Limits](#-honest-limits)
 
 </div>
 
 ---
 
-DonSeTch is an [MCP](https://modelcontextprotocol.io) server that gives any AI agent (Claude Code, Cursor, OpenCode, anything that speaks MCP) full web research from a single local process.
+DonSeTch gives any AI agent full web research from a single local process. Three tools, zero API keys, zero accounts. Built in Rust — one binary, no Python, no Playwright, no Selenium, no `reqwest`, no `hyper`. Every layer built from scratch.
 
-**Three tools. Zero API keys. Zero accounts.** Built in **Rust** — one binary, no Python, no Playwright, no Selenium, no `reqwest`, no `hyper`. Every layer built from scratch. That's the point.
+Works with every MCP client: Claude Code, Cursor, OpenCode, Pi, anything that speaks MCP. Also works as a standalone CLI.
 
-Speaks MCP **2024-11-05 through 2026-07-28**. Works with every MCP client, old and new.
+## ✨ What makes it different
 
-### ✨ What makes it different
+| | What it does |
+|---|---|
+| 🛡️ **Real Chrome TLS** | Drives Chrome's own BoringSSL natively. Your ClientHello IS Chrome's ClientHello — fingerprint is emergent from the real engine, not a faked table that rots. |
+| ⏱️ **Temporal stealth** | TLS session resumption, conditional revalidation (304), persistent cookies, connection pooling. The loudest remaining bot tell — and nobody else fakes it. |
+| 👻 **Solve-and-bounce** | Browser solves the challenge, hands cookies to tier 1, goes to sleep. Tier 1 fetches at full speed. The browser almost never fetches content. |
+| 🧠 **Self-improving fetch** | Learns from every fetch. Cookie lifetimes learned adaptively. Warm starts skip the browser entirely. Converges to optimal routing per domain. |
+| 🔎 **Semantic reranking** | Local ONNX cross-encoder reads query + result through full attention. Pushes out generic articles that keyword-match but aren't about the topic. |
+| 🔑 **Keyless search** | 10+ backends in parallel, fused by cross-engine consensus. No API keys, no accounts, no billing. $0 forever. BYOK optional. |
+| 📄 **Pixel-fusion PDF** | Glyphs + rendered pixels from the same stream, fused deterministically. No hallucination. Per-region trust audit. Scanned PDFs auto-OCR'd. |
+| 🧬 **Built from scratch** | Own HTTP/2 (HPACK, flow control), own extraction engine, own PDF parser, own search aggregator, own crawl engine. Zero dependency on existing OSS web tooling. |
 
-| Innovation | What it means | Status |
-|---|---|---|
-| 🛡️ **Real Chrome TLS** | Drives Chrome's own BoringSSL natively — fingerprint is *emergent from the real engine*, not a faked table that rots. Your ClientHello IS Chrome's ClientHello. | Verified live |
-| ⏱️ **Temporal stealth** | Fakes the *relationship over time* with an origin — TLS session resumption, conditional revalidation (304), persistent cookies. The loudest remaining bot tell, and nobody else fakes it. | Verified live |
-| 👻 **Solve-and-bounce** | Browser solves the challenge, hands cookies to tier 1, goes to sleep. Tier 1 fetches at full speed. The browser almost never fetches content. | Live |
-| 🧠 **Self-improving fetch** | Learns from every fetch. Cookie lifetimes learned adaptively. Warm starts skip the browser entirely. Converges to optimal routing per domain. | Live |
-| 🔎 **Semantic reranking** | Local ONNX cross-encoder reads query + result through full attention. Pushes out generic Wikipedia articles that keyword-match but aren't about the topic. | A/B verified |
-| 🔑 **Keyless search** | 10+ backends in parallel, fused by cross-engine consensus. No API keys, no accounts, no billing. $0 forever. | Live |
-| 📄 **Pixel-fusion PDF** | Glyphs + rendered pixels from the same stream, fused deterministically. No hallucination. Per-region trust audit. Scanned PDFs auto-OCR'd. | 40-doc battle |
-| 🧬 **Built from scratch** | Own HTTP/2 (HPACK, flow control), own extraction engine, own PDF parser, own search aggregator, own crawl engine. Zero dependency on existing OSS web tooling. | 249 tests |
+---
+
+## 📦 Install
+
+### Option 1 — npm (recommended)
+
+```bash
+npm install -g donsetch
+```
+
+Downloads the prebuilt binary for your platform from GitHub Releases with SHA256 verification. No build tools needed.
+
+| Platform | Binary |
+|---|---|
+| Linux x86_64 | `donsetch-linux-x64.tar.gz` |
+| macOS arm64 | `donsetch-darwin-arm64.tar.gz` |
+| Windows x86_64 | `donsetch-win32-x64.tar.gz` |
+
+### Option 2 — Build from source
+
+| Dependency | Why | Linux | macOS | Windows |
+|---|---|---|---|---|
+| **Rust** | Build toolchain | `rustup` | `rustup` | `rustup` |
+| **Go** | BoringSSL build | `pacman -S go` | `brew install go` | `winget install GoLang.Go` |
+| **NASM** | BoringSSL assembly | `pacman -S nasm` | `brew install nasm` | `choco install nasm` |
+| **CMake** | BoringSSL build | `pacman -S cmake` | `brew install cmake` | `winget install cmake` |
+
+```bash
+git clone https://github.com/dondai44423/donsetch.git
+cd donsetch
+cargo build --release
+```
+
+Binary lands at `target/release/donsetch`. First build takes ~2 min (compiling BoringSSL). Subsequent builds are cached.
+
+<details>
+<summary><b>Build notes</b></summary>
+
+- **BoringSSL** is vendored and built from source via `boring-sys`. First build compiles it (~2 min), then cached.
+- **PDFium** is downloaded as a static library by `build.rs` — no manual setup.
+- **ONNX Runtime** is downloaded at build time by `oar-ocr` (OCR) and `ort` (reranker).
+- **Models** (OCR + reranker) download on first use to `~/.cache/donsetch/`, not bundled in the binary.
+- **Feature flags**: `default = ["ocr", "rerank"]`. Build with `--no-default-features` for HTTP-only (no OCR, no reranker, smaller binary).
+- **Chromium** (optional): needed for tier 2 browser escalation on bot-walled sites. Linux: `pacman -S chromium`. macOS: `brew install chromium`. Windows: Edge works.
+- **Linux Xvfb**: for headful Chrome on Linux, `xorg-server-xvfb` is needed. DonSeTch starts Xvfb automatically.
+
+</details>
+
+---
+
+## 🎯 Two ways to use it
+
+DonSeTch is **one binary, two interfaces**. Same engine, same output, same reliability.
+
+### MCP Server (for AI agents)
+
+Point your AI agent at the binary. No arguments, no API keys, no environment variables.
+
+```json
+{
+  "mcpServers": {
+    "donsetch": { "command": "donsetch", "args": ["mcp"] }
+  }
+}
+```
+
+Or use `npx` without global install:
+
+```json
+{
+  "mcpServers": {
+    "donsetch": { "command": "npx", "args": ["donsetch", "mcp"] }
+  }
+}
+```
+
+Works with Claude Code, Cursor, OpenCode, Pi, Windsurf, and any client that speaks MCP. Three tools: `web_fetch`, `web_search`, `web_crawl`.
+
+### CLI (for humans and scripts)
+
+```bash
+donsetch fetch https://example.com
+donsetch search "rust async patterns"
+donsetch crawl https://docs.example.com --topic "api reference"
+```
+
+Same engine, same output — the CLI is a thin adapter over the same `call_tool` function the MCP server uses. Every feature available to the agent is available on the command line.
+
+```bash
+donsetch fetch https://example.com --focus "pricing" --max-chars 2000
+donsetch search "GLM 5.2" --intent paper --max-results 5 --json
+donsetch crawl https://docs.python.org --mode map --topic "asyncio"
+donsetch keys add tinyfish sk-tinyfish-...
+donsetch doctor
+donsetch update
+```
+
+<details>
+<summary><b>All CLI commands</b></summary>
+
+| Command | What it does |
+|---|---|
+| `fetch <url>` | Fetch a URL as clean markdown. Auto bot-wall bypass, PDF, JS render. |
+| `search <query>` | Web search — 10+ keyless engines merged + reranked, or your API keys. |
+| `crawl <url>` | Crawl a site into markdown. Sitemap-aware, focus-ranked, resumable. |
+| `mcp` | Start MCP server (JSON-RPC on stdio). |
+| `keys` | Manage BYOK search provider keys (`add`, `remove`, `list`, `default`, `reset`). |
+| `doctor` | Health check with auto-fix. |
+| `update` | Self-update from GitHub Releases. |
+| `rollback` | Revert to previous version. |
+| `version` | Show version and build info. |
+| `tools` | Print tool schemas as JSON (same as MCP `tools/list`). |
+
+</details>
+
+---
+
+## 🎯 The 3 tools
+
+| Tool | One-liner |
+|------|-----------|
+| 🌐 **`web_fetch`** | Fetch any URL as clean markdown. HTTP first, escalates to headless browser if blocked. PDFs with OCR, `focus` for token savings, `toc`/`section`, pagination. |
+| 🔎 **`web_search`** | Keyless multi-engine web search. 10+ backends in parallel, consensus + semantic reranking. Returns URLs + snippets, not content. |
+| 🕷️ **`web_crawl`** | Best-first same-domain crawl. Sitemap + frontier, adaptive pacing, resume tokens. `focus` for budget management. |
 
 ---
 
@@ -78,49 +192,39 @@ DonSeTch does something different in kind:
 When Chrome's TLS posture shifts, we update a data table, not patch a C library. **The fingerprint isn't a table we fake. It's emergent from the real engine.**
 
 <details>
-<summary><b>📊 Verified against live Chromium 150 at tls.peet.ws</b></summary>
+<summary><b>Verified against live Chromium 150 at tls.peet.ws</b></summary>
 
 | Signal | Match |
 |---|---|
-| **JA4** | `t13d1516h2_8daaf6152771_...` — cipher hash identical to Chrome 150 |
-| **Akamai h2 fingerprint** | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` — **exact match** |
-| **h2 header order** | sec-ch-ua → sec-ch-ua-mobile → sec-ch-ua-platform → ... — **exact match** |
+| **JA4** | cipher hash identical to Chrome 150 |
+| **Akamai h2 fingerprint** | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` — exact match |
+| **h2 header order** | sec-ch-ua → sec-ch-ua-mobile → sec-ch-ua-platform → ... — exact match |
 | **Extension set** | identical (contents differ only in random GREASE/key material, like real Chrome) |
-
-> The `_c` suffix differs ONLY because Chrome 150 sends ML-DSA post-quantum sigalgs (0x904/5/6) and vendored BoringSSL 5.1.0 doesn't have them yet. Ours is genuine Chrome ≤131-family JA4.
 
 </details>
 
-### 🔧 Own HTTP/2 stack (because off-the-shelf leaks)
+### Own HTTP/2 stack (because off-the-shelf leaks)
 
-Off-the-shelf h2 (hyper's `h2` crate) doesn't expose pseudo-header order, exact SETTINGS set, WINDOW_UPDATE values, or HPACK indexing strategy — **all fingerprintable** (Akamai h2 fingerprint).
+Off-the-shelf h2 (hyper's `h2` crate) doesn't expose pseudo-header order, exact SETTINGS set, WINDOW_UPDATE values, or HPACK indexing strategy — all fingerprintable (Akamai h2 fingerprint). So we wrote our own:
 
-So we wrote our own:
-
-- 🧩 Own HPACK (RFC 7541 — tables generated from the RFC text, all 257 Huffman symbols + 61 static entries verified)
-- 📦 Own frame engine (SETTINGS, HEADERS, DATA, WINDOW_UPDATE, PING, GOAWAY, RST_STREAM, CONTINUATION)
-- 🔄 Own flow control with WINDOW_UPDATE replenishment
-- 🔗 Own connection pool with TLS 1.3 session resumption
+- Own HPACK (RFC 7541 — all 257 Huffman symbols + 61 static entries verified)
+- Own frame engine (SETTINGS, HEADERS, DATA, WINDOW_UPDATE, PING, GOAWAY, RST_STREAM, CONTINUATION)
+- Own flow control with WINDOW_UPDATE replenishment
+- Own connection pool with TLS 1.3 session resumption
 
 **No `reqwest`. No `hyper`. No `isahc`.** Every byte on the wire is ours.
 
-### ⏱️ Temporal stealth (the tell nobody else fakes)
+### Temporal stealth (the tell nobody else fakes)
 
 Everyone fakes the *handshake*. But a bot wall's second look is **temporal**: what does the client do *over time*?
 
-Real Chrome resumes TLS sessions, holds h2 connections open, carries cookies across visits, and revalidates its cache (`If-None-Match` → `304 Not Modified`).
-
-> Every scraper on earth does a full handshake, fresh connection, no cookies, no cache — every single time. **That temporal silence is the loudest remaining tell.**
-
-DonSeTch fakes the *relationship over time* with an origin:
-
 | Mechanism | What it does | Why it matters |
 |---|---|---|
-| 🔄 **TLS session resumption** | Per-origin session-ticket cache. Resumed handshakes are abbreviated. | Scrapers never resume. Chrome always does. |
-| 🔗 **h2 connection pool** | Connections kept alive, reused across fetches. | Fresh connection every time = bot signal. |
-| ✅ **Conditional revalidation** | Sends `If-None-Match` / `If-Modified-Since` on refetch. `304` → serve cached body. | **Scrapers NEVER send conditional headers. Browsers always do. Nobody in this category does this.** |
-| 🌐 **Happy Eyeballs** | Races IPv6 vs IPv4 with 250ms stagger. | Chrome does exactly this. Fixes dead-IP 10s timeouts. |
-| 🍪 **Persistent cookie jar** | Cookies survive across calls like a real browser profile. | A client with no cookie memory is a bot. |
+| TLS session resumption | Per-origin session-ticket cache. Resumed handshakes are abbreviated. | Scrapers never resume. Chrome always does. |
+| h2 connection pool | Connections kept alive, reused across fetches. | Fresh connection every time = bot signal. |
+| Conditional revalidation | Sends `If-None-Match` / `If-Modified-Since` on refetch. `304` → serve cached body. | Scrapers never send conditional headers. Browsers always do. |
+| Happy Eyeballs | Races IPv6 vs IPv4 with 250ms stagger. | Chrome does exactly this. Fixes dead-IP 10s timeouts. |
+| Persistent cookie jar | Cookies survive across calls like a real browser profile. | A client with no cookie memory is a bot. |
 
 **More stealth AND faster.** The rare quadrant.
 
@@ -128,38 +232,38 @@ DonSeTch fakes the *relationship over time* with an origin:
 
 ## 👻 Solve-and-bounce
 
-The entire industry does tier 2 wrong: **use a 600MB browser for everything.** Every fetch — even ones plain HTTP could do — pays browser startup, browser RAM, browser CPU. And their stealth is *subtractive*: launch with automation flags, then inject JS patches to hide the damage. Every patch is a detectable lie.
+The entire industry does tier 2 wrong: **use a 600MB browser for everything.** Every fetch pays browser startup, browser RAM, browser CPU. And their stealth is *subtractive*: launch with automation flags, then inject JS patches to hide the damage. Every patch is a detectable lie.
 
 DonSeTch inverts both.
 
-> **The browser almost never fetches content.** It exists to do exactly two things HTTP can't: pass JS challenges and execute JS-rendered pages. Its output is *cookies* (handed to tier 1, which fetches at full speed) or *rendered HTML* (handed to the extraction engine). Browser uptime is measured in seconds per domain per cookie-lifetime.
+> **The browser almost never fetches content.** It exists to do exactly two things HTTP can't: pass JS challenges and execute JS-rendered pages. Its output is *cookies* (handed to tier 1, which fetches at full speed) or *rendered HTML* (handed to the extraction engine).
 
 | Step | What happens | Speed |
 |---|---|---|
-| 1️⃣ Tier 1 fetch | Fast stealth HTTP (BoringSSL TLS) | ~100-300ms |
-| 2️⃣ Wall detected | Cloudflare / DataDome / PerimeterX / Akamai | — |
-| 3️⃣ Ghost solves | Headless browser navigates, waits for challenge to clear, harvests clearance cookies | ~2-6s |
-| 4️⃣ **Bounce** 🎾 | Cookies handed to tier 1. Tier 1 re-fetches at full speed. Browser goes to sleep. | ~100-300ms |
-| 5️⃣ Subsequent fetches | Tier 1 with warm cookies. Browser stays asleep. | ~100-300ms |
+| 1. Tier 1 fetch | Fast stealth HTTP (BoringSSL TLS) | ~100-300ms |
+| 2. Wall detected | Cloudflare / DataDome / PerimeterX / Akamai | — |
+| 3. Ghost solves | Headless browser navigates, waits for challenge to clear, harvests clearance cookies | ~2-6s |
+| 4. **Bounce** | Cookies handed to tier 1. Tier 1 re-fetches at full speed. Browser goes to sleep. | ~100-300ms |
+| 5. Subsequent fetches | Tier 1 with warm cookies. Browser stays asleep. | ~100-300ms |
 
-### 🧬 Nothing is patched because nothing is broken
+### Nothing is patched because nothing is broken
 
-Raw CDP launch without `--enable-automation` means `navigator.webdriver` is *natively* false. No JS injection ever. No Runtime, Console, or Debugger domains — the #1 modern CDP detection trap (castle.io). Environmental truthfulness instead of spoofing: real window, real GPU, real locale, consistent story.
+Raw CDP launch without `--enable-automation` means `navigator.webdriver` is *natively* false. No JS injection ever. No Runtime, Console, or Debugger domains. Environmental truthfulness instead of spoofing: real window, real GPU, real locale, consistent story.
 
 <details>
-<summary><b>💾 Process lifecycle — the RAM-smart part</b></summary>
+<summary><b>Process lifecycle — the RAM-smart part</b></summary>
 
 The ghost process is **SIGSTOP'd** (frozen, not killed) after 20s of idleness:
 
 | State | RAM | CPU | Wake time |
 |---|---|---|---|
 | Active | full | real | — |
-| Frozen (SIGSTOP) | mapped but cold (kernel swaps under pressure) | 0.000 | ~50ms (SIGCONT) |
+| Frozen (SIGSTOP) | mapped but cold | 0 | ~50ms (SIGCONT) |
 | Reaped (>10 min frozen) | freed | 0 | ~1-2s (relaunch, profile keeps warmth) |
 
 Crash-transparent: thaw finds a dead browser → silent relaunch. The agent never sees the lifecycle.
 
-Persistent profile dir `~/.cache/donsetch/ghost-profile`: aged cookie/history state makes challenges EASIER (real users have history) and cf_clearance survives daemon restarts.
+Persistent profile dir `~/.cache/donsetch/ghost-profile`: aged cookie/history state makes challenges EASIER (real users have history) and `cf_clearance` survives daemon restarts.
 
 </details>
 
@@ -171,57 +275,14 @@ Persistent profile dir `~/.cache/donsetch/ghost-profile`: aged cookie/history st
 
 No ML, no prediction models. Pure deterministic observation + state → better routing. The loop converges, it doesn't guess.
 
-### The loop
-
-```
-FETCH → OUTCOME → OBSERVE → UPDATE DOMAIN PROFILE → NEXT FETCH
-  ↑                                                    ↓
-  └────────────── ROUTE FROM PROFILE ──────────────────┘
-```
-
-| Visit | Route decision | What happens | What the profile learns |
-|---|---|---|---|
-| 🆕 **Visit 1** (unknown) | `Cold` | Tier 1 → walled → ghost solves → cookies stored | `needs_tier2=true`, cookies vaulted |
-| 🔑 **Visit 2** (cookies fresh) | `Warm` | Tier 1 with injected cookies → success | Cookies refreshed via write-back. Ghost stays asleep. |
-| 🔑 **Visit 3** (cookies fresh) | `Warm` | Tier 1 with injected cookies → success | Session stays alive indefinitely as long as visits continue. |
-| ⏭️ **Visit N** (cookies expired) | `SkipToSolve` | Skip the doomed tier-1 round-trip, go straight to ghost | Saves one HTTP request + wall detection on every known-hard domain. |
-| 🔁 **Visit M** (24h since cold check) | `RecheckCold` | Try tier 1 cold — the wall may have been removed | If it succeeds: `needs_tier2=false`. Domain reverts to easy routing. |
-
-### 📈 Adaptive cookie lifetime learning
-
-When warm cookies go stale (warm fetch gets walled), the system learns the real lifetime:
-
-```
-observed_lifetime = min(previous_observed, now - last_solved)
-```
-
-Next time, it re-solves at 18 min instead of wasting a fetch at 30 min that just hits the wall. Over multiple cycles, `observed_lifetime` converges to the real cookie lifetime for each domain. **This is the self-improvement: the system gets better at predicting cookie death with each observation.**
-
-### 🔄 Cookie write-back (the session-keeper)
-
-When tier 1 fetches with warm cookies and succeeds, the server may send fresh `Set-Cookie` headers. DonSeTch captures them and writes back to the on-disk profile.
-
-> Process restart → loads fresh cookies → warm tier 1 continues without a re-solve. **Sessions stay alive as long as the agent keeps visiting, just like a real browser tab.**
-
-### 🛡️ Three-layer cookie freshness
-
-A cookie is fresh only if ALL three layers agree:
-
-| Layer | Source | What it catches |
+| Visit | Route decision | What happens |
 |---|---|---|
-| 1️⃣ **Server-set expiry** | `expires_at` from CDP or `Max-Age` | The cookie's claimed lifetime |
-| 2️⃣ **Observed lifetime** | Learned from warm-stale events | The cookie's REAL lifetime (often shorter than claimed) |
-| 3️⃣ **TTL cap** (2h hard limit) | Safety net | Server-side invalidation (IP change, session revoke) |
+| Visit 1 (unknown) | `Cold` | Tier 1 → walled → ghost solves → cookies stored |
+| Visit 2 (cookies fresh) | `Warm` | Tier 1 with injected cookies → success. Ghost stays asleep. |
+| Visit N (cookies expired) | `SkipToSolve` | Skip the doomed tier-1 round-trip, go straight to ghost |
+| Visit M (24h since cold check) | `RecheckCold` | Try tier 1 cold — the wall may have been removed |
 
----
-
-## 🎯 The 3 tools
-
-| Tool | One-liner |
-|------|-----------|
-| 🌐 [`fetch`](#-fetch) | Fetch any URL as clean markdown. HTTP first, escalates to headless browser if blocked. PDFs with OCR, `focus` for token savings, `toc`/`section`, pagination. |
-| 🔎 [`search`](#-keyless-search) | Keyless multi-engine web search. 10+ backends in parallel, consensus + semantic reranking. Returns URLs + snippets, not content. |
-| 🕷️ [`crawl`](#-crawl) | Best-first same-domain crawl. Sitemap + frontier, adaptive pacing, resume tokens. `focus` for budget management. |
+When warm cookies go stale, the system learns the real lifetime: `observed_lifetime = min(previous, now - last_solved)`. Over multiple cycles, it converges to the real cookie lifetime for each domain.
 
 ---
 
@@ -229,54 +290,24 @@ A cookie is fresh only if ALL three layers agree:
 
 No API key, no account, no third-party service. 10+ keyless backends in parallel on your machine, merged, deduped, ranked.
 
-- 🌐 **10+ independent backends**: Brave, Bing, DuckDuckGo, Mojeek + keyless verticals (GitHub, Wikipedia, HN, Semantic Scholar, arXiv, StackExchange, MDN, Google News). Six+ independent index families, not the same feed twice.
-- 🧠 **Semantic reranking**: local ONNX cross-encoder (`ms-marco-MiniLM-L-6-v2`, 23MB, Apache-2.0) reads query + title + snippet through full transformer attention. It understands that "fast web scraper" and "high-speed crawler" are the same thing. BM25 can't. Blends 60/40 with RRF + BM25 + consensus. ~5ms/pair on CPU. Graceful no-op if model unavailable.
-- 🎯 **Cross-engine consensus**: a URL returned by several independent indexes gets a consensus boost. Free authority signal. Every result carries `score`, `consensus` count, and `engines` list.
-- 🛡️ **Honest reporting**: `weak=true` means low consensus — treat with care. Per-engine status (`ok` / `blocked:429` / `timeout` / `no-results`) always visible. Never a fake "no results" that's actually a rate limit.
+- **10+ independent backends**: Brave, Bing, DuckDuckGo, Mojeek, Yandex, Startpage + keyless verticals (GitHub, Wikipedia, HN, Semantic Scholar, arXiv, StackExchange, MDN, Google News).
+- **Semantic reranking**: local ONNX cross-encoder (`ms-marco-MiniLM-L-6-v2`, 23MB, Apache-2.0) reads query + title + snippet through full transformer attention. 60/40 blend with RRF + BM25 + consensus. ~5ms/pair on CPU.
+- **Cross-engine consensus**: a URL returned by several independent indexes gets a consensus boost. Every result carries `score`, `consensus` count, and `engines` list.
+- **Entity coverage penalty**: anchor entities (hyphenated compounds like "B-tree") and specifiers (version numbers, years) checked against results. Wrong entity → 0.3× score penalty. Fixes BM25 splitting "B-tree" → "b" + "tree" where "binary tree" matches.
+- **Honest reporting**: `weak=true` means low consensus. Per-engine status always visible. Never a fake "no results" that's actually a rate limit.
 
-### Why SearXNG loses and we don't
+### BYOK (Bring Your Own Keys)
 
-| Problem | SearXNG | DonSeTch |
-|---|---|---|
-| **Transport** | python-requests — engines flag at TLS layer (Brave: 403/1015) | Own BoringSSL: Chrome-true ClientHello + h2. All engines answer 200. |
-| **Merge** | Dedupes by URL, sums positions — bad engine's #1 beats good engine's #2 | Weighted RRF + consensus + BM25 + domain priors + diversity cap |
-| **Rate limits** | One IP | Egress pool (direct + proxies), per-engine health, query cache |
-| **Honesty** | Doesn't report which engines answered | Per-engine status + `weak` flag — agents trust the output contract |
+Want even better search? Add a paid search provider key and the local engine is bypassed entirely — the provider handles search, IP, and rate limits. Falls back to local if the provider is exhausted.
 
-<details>
-<summary><b>🧪 A/B test: semantic reranking on niche queries</b></summary>
+```bash
+donsetch keys add tinyfish sk-tinyfish-...
+donsetch keys add tavily tvly-...
+donsetch keys add serper ...
+donsetch keys add exa ...
+```
 
-6 niche queries, A/B tested with reranker on vs off. **4 clear improvements, 1 correct no-change, 1 defensible change. Zero degradations.**
-
-| Query | What the reranker did |
-|---|---|
-| "best lightweight linux distro for old laptops" | Demoted Stack Overflow's "for Development" result (tangential). Promoted on-topic results. |
-| "how to prevent sql injection in php" | Pushed out a duplicate Stack Overflow page (same URL, HN metadata bolted on). Pulled in two new on-topic sources. |
-| "neural network pruning techniques" | **Pushed out Wikipedia: "Neural network"** (generic, nothing about pruning). Pulled in a Springer academic paper. |
-| "sustainable architecture materials" | **Pushed out Wikipedia: "Sustainability"** (generic). Promoted "Top 50 Sustainable Materials" over "15 Innovative Materials". |
-| "what causes inflation in developing countries" | No change. RRF+BM25 already had optimal ordering. Cross-encoder agreed. Correct behavior. |
-| "how to make sourdough bread at home" | Promoted wikiHow (how-to guide) over nickskitchen (recipe). The query asks "how to make" — a how-to, not a recipe. |
-
-**Most consistent pattern: pushing out generic Wikipedia articles** that keyword-match but are semantically tangential. RRF+BM25 can't catch this because "neural network" appears in both the query and the Wikipedia title. The cross-encoder reads the full title+snippet and recognizes that a generic neural network article isn't about pruning.
-
-</details>
-
-<details>
-<summary><b>⚙️ Adaptive egress governor</b></summary>
-
-Rate limits are a BUDGET problem, not a rotation problem. The governor never exceeds what each lane can sustain:
-
-| # | Mechanism | What it does |
-|---|-----------|--------------|
-| 1 | **Per-engine trust EWMA** | Each engine has a learned trust score (0.2..2.0). High-trust gets fan-out priority; low-trust cut first under stress. |
-| 2 | **Adaptive fan-out width** | Healthy pool = all engines. Stressed (30%+) = max 3. Heavy (50%+) = max 2. Starved (65%+) = top engine + verticals. |
-| 3 | **Chronic-failure quarantine** | 3 consecutive failures = benched for 10 min. |
-| 4 | **Single-flight** | Two identical in-flight queries share one leader's result. Agent parallel calls spend budget once. |
-| 5 | **Retry wave** | Failed engines get one retry through a fresh egress — but only when the merge is thin. |
-| 6 | **Persistent disk cache** | Queries cached with intent + recency-aware TTL. Survives restarts. |
-| 7 | **`DONSEEK_PROXIES`** | Route engine requests through your proxies. Preflight benches dead lines. |
-
-</details>
+Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**. Key rotation, rate-limit cooldown, credit-depletion detection, and local fallback all automatic.
 
 ---
 
@@ -284,17 +315,17 @@ Rate limits are a BUDGET problem, not a rotation problem. The governor never exc
 
 `fetch` tries plain HTTP first (~100-300ms). If the site serves a bot wall or a JS shell, it auto-escalates to the ghost browser, solves the challenge, bounces cookies back to tier 1, and re-fetches at full speed.
 
-- 📝 **DonSift extraction engine**: HTML bytes in, agent-native markdown out. Not article text — a **block model**: typed blocks (Heading/Para/List/Table/Code/Quote/Media) with heading breadcrumbs. The block model powers BM25 focus, stable pagination, and token-war render policies.
-- 🎯 **`focus`** — BM25-relevant blocks only. Cuts context 80%+ on long pages. 12-language BM25: CJK character unigrams + bigrams, 12-language stopword lists, light stemming, accent folding. Chinese "机器学习" → `['机','器','学','习','机器','器学','学习']`.
-- 📑 **`toc` + `section`** — heading outline first, then target one section. Two cheap calls instead of one expensive one. No other extractor offers this two-pass pattern.
-- 📄 **Pagination** — `next_offset` in the response. Call again with `offset=that value`.
-- ✂️ **Token-war policies** — links stripped by default (~30% savings), link-farm lists dropped, bare-link/bare-number lines dropped, wiki `[edit]` junk dropped, cross-block duplicate suppression.
-- 🏷️ **Content classification**: `Article` / `Listing` / `Forum` / `Docs` / `Table` / `Page` from block composition.
-- 📊 **Quality score** (0.0-1.0): content density, metadata, structure, language, text volume.
-- 🔔 **Agent-trust signals inline** — focus-miss notice, section-miss notice, JS-shell warning, empty-content note — all in the content, not metadata.
+- **DonSift extraction engine**: HTML bytes in, agent-native markdown out. Block model: typed blocks (Heading/Para/List/Table/Code/Quote/Media) with heading breadcrumbs.
+- **`focus`** — BM25-relevant blocks only. Cuts context 80%+ on long pages. 12-language BM25: CJK character unigrams + bigrams, stopword lists, light stemming, accent folding.
+- **`toc` + `section`** — heading outline first, then target one section. Two cheap calls instead of one expensive one.
+- **Pagination** — `next_offset` in the response. Call again with `offset=that value`.
+- **Token-war policies** — links stripped by default (~30% savings), link-farm lists dropped, bare-link lines dropped, wiki `[edit]` junk dropped, cross-block duplicate suppression.
+- **Content classification**: `Article` / `Listing` / `Forum` / `Docs` / `Table` / `Page`.
+- **Quality score** (0.0-1.0): content density, metadata, structure, language, text volume.
+- **Agent-trust signals inline** — focus-miss notice, section-miss notice, JS-shell warning, empty-content note — all in the content, not metadata.
 
 <details>
-<summary><b>🛡️ Anti-bot benchmark</b></summary>
+<summary><b>Anti-bot benchmark</b></summary>
 
 | Site | Protection | Status |
 |---|---|---|
@@ -302,9 +333,9 @@ Rate limits are a BUDGET problem, not a rotation problem. The governor never exc
 | DataDome sites | DataDome | ✅ 200 OK |
 | Stack Overflow | Cloudflare | ✅ 200 OK |
 | Medium | Cloudflare | ✅ 200 OK |
-| NowSecure | Cloudflare challenge | ✅ 200 OK |
+| Reddit | bot detection | ✅ 200 OK |
 | Hacker News | None (baseline) | ✅ 200 OK |
-| Interactive captcha sites | hCaptcha / reCAPTCHA | ⛔ Honest block |
+| Interactive captcha sites | hCaptcha / reCAPTCHA / Turnstile | ⛔ Honest block |
 
 </details>
 
@@ -314,12 +345,13 @@ Rate limits are a BUDGET problem, not a rotation problem. The governor never exc
 
 `crawl` walks same-domain links in best-first order. Two phases: sitemap discovery (cheap URL inventory in one fetch), then Governor-paced frontier walk with extraction per page.
 
-- 🗺️ **Three modes**: `full` (default) = sitemap map + content. `map` = URL inventory only (very cheap). `content` = skip sitemap, BFS from seed.
-- 🎯 **Focus-ranked frontier**: `focus="query"` ranks pages by BM25 relevance and crawls only matching ones. Essential for large sites.
-- ⏱️ **Adaptive pacing**: the Governor paces per (host, lane). Success → steady. 429/503 → exponential. Error → cooldown.
-- 🔄 **Resume tokens**: stopped crawls return a resume token. Call again with `resume=token` to continue. Valid 30 min, survives restarts.
-- 📋 **Near-dup detection**: title + first 200 normalized chars → hash. Duplicates skipped, not re-extracted.
-- 🛑 **Honest stop reasons**: `FrontierEmpty` ✅ (done), `MaxPages`/`CharBudget`/`DepthLimit`/`Deadline` ⏳ (use resume), `ThrottledOut` 🚫 (wait and resume).
+- **Three modes**: `full` (default) = sitemap map + content. `map` = URL inventory only (very cheap). `content` = skip sitemap, BFS from seed.
+- **Focus-ranked frontier**: `focus="query"` ranks pages by BM25 relevance and crawls only matching ones.
+- **Adaptive pacing**: the Governor paces per (host, lane). Success → steady. 429/503 → exponential. Error → cooldown. Dwell-time variance proportional to page size breaks metronome fingerprinting.
+- **Resume tokens**: stopped crawls return a resume token. Call again with `resume=token` to continue. Valid 30 min, survives restarts.
+- **Near-dup detection**: title + first 200 normalized chars → hash. Duplicates skipped.
+- **Honest stop reasons**: `FrontierEmpty` (done), `MaxPages`/`CharBudget`/`DepthLimit`/`Deadline` (use resume), `ThrottledOut` (wait and resume).
+- **Seed always in scope**: `--include`/`--exclude` apply to discovered links only, not the seed entry point.
 
 ---
 
@@ -327,54 +359,38 @@ Rate limits are a BUDGET problem, not a rotation problem. The governor never exc
 
 DonSeTch detects PDFs (by Content-Type or `%PDF` magic bytes) and parses them to structured markdown using a custom PDFium FFI. No external PDF library, no Python subprocess.
 
-### The insight nobody exploits
-
-Every existing PDF extractor picks ONE modality and guesses about the other:
-
-| Approach | What it does | How it fails |
-|---|---|---|
-| 📝 **Heuristic** (pymupdf4llm, pdfplumber) | Guesses layout from text-glyph positions/fonts | Collapses on anything visual: rule lines, borders, scans |
-| 🤖 **ML pipeline** (marker, docling, MinerU) | Throws layout-detection models at rendered pages | 200MB-3GB models, and neural models **hallucinate** — emitted text is sampled, not guaranteed to exist |
-
 > **DonSeTch fuses both modalities, deterministically.** PDFium gives us both a document's glyph stream (exact text + positions) AND rendered pixels (exact visual ground truth). Both come from the same content stream, so they're already aligned.
 
 **Pixels tell the truth about structure. Glyphs tell the truth about text. The fusion is exact because both render from one stream. No guessing, no hallucination.**
 
-### Innovations
-
 | Innovation | What it does |
 |---|---|
-| 🔲 **Pixel-fusion rule extraction** | Tables/borders/separators detected on the rendered bitmap via morphological opening. A rule line is a fact, not a hypothesis. |
-| 🔗 **Span detection by ink continuity** | A cell spans a separator iff the separator has NO ink under the cell's row band. Deterministic colspan/rowspan. |
-| 🔍 **Trust audit + per-region arbitration** | Glyph stream authoritative UNLESS: zero glyphs + pixels (scan), or region ≥30% PUA/garbage (broken ToUnicode). Corrupt regions get OCR'd from pixels even when neighbors read fine. |
-| 🔄 **Orientation canonicalization** | Vertical/rotated text = same document rotated. Rotate coordinate frames, run ONE pipeline. No special-case code. |
-| ✅ **Confidence honesty** | Verbatim glyphs or OCR with per-line confidence. `[uncertain: ...]` markers below threshold. Neural extractors cannot offer this. |
-| 📝 **Forms as data** | AcroForm widgets → name/type/value triples. Forms are only "hard" when treated as graphics. |
-
-### Three-engine fusion (mirrors tier 1 → tier 2)
+| Pixel-fusion rule extraction | Tables/borders/separators detected on the rendered bitmap via morphological opening. A rule line is a fact, not a hypothesis. |
+| Span detection by ink continuity | A cell spans a separator iff the separator has NO ink under the cell's row band. Deterministic colspan/rowspan. |
+| Trust audit + per-region arbitration | Glyph stream authoritative UNLESS: zero glyphs + pixels (scan), or region ≥30% PUA/garbage. Corrupt regions get OCR'd from pixels even when neighbors read fine. |
+| Orientation canonicalization | Vertical/rotated text = same document rotated. Rotate coordinate frames, run ONE pipeline. |
+| Confidence honesty | Verbatim glyphs or OCR with per-line confidence. `[uncertain: ...]` markers below threshold. Neural extractors cannot offer this. |
+| Forms as data | AcroForm widgets → name/type/value triples. |
 
 | Tier | What | When |
 |---|---|---|
-| 🟢 **Tier A** (always, zero extra bytes) | Glyph stream + pixel-fusion layout engine | Every page |
-| 🟡 **Tier B** (lazy: ONNX + PP-OCR models) | OCR for pages/regions with no trustworthy text | Scans, broken ToUnicode |
-| 🔴 **Tier C** (design hook) | Layout-detection models for low-confidence structure | Future |
+| Tier A (always) | Glyph stream + pixel-fusion layout engine | Every page |
+| Tier B (lazy) | OCR for pages/regions with no trustworthy text | Scans, broken ToUnicode |
 
 <details>
-<summary><b>📊 PDF battle test results</b></summary>
+<summary><b>PDF battle test results</b></summary>
 
 40-document battle corpus, zero garbage output, 6-14x faster than Python alternatives. 120/120 fuzz clean.
 
 | Document type | Result |
 |---|---|
-| Academic papers | ✅ **Clean text** — math symbols recovered, not CID garbage |
-| Scanned documents | ✅ **OCR'd** — PP-OCR cascade (En → Zh → Deva), confidence-scored |
-| Tax forms (W-9) | ✅ **Forms as data** — field names + values as table |
-| Multi-column layouts | ✅ **Reading order preserved** — column detection + merge |
-| Encrypted PDFs | ⛔ **Honest flag** — `encrypted: password required` |
-| Corrupt PDFs | ⛔ **Honest flag** — `corrupt: parse failed at offset N` |
-| Nepali UDHR (broken ToUnicode) | ✅ **10,542 usable Nepali chars** at 86% confidence (pymupdf: 28 chars) |
-
-> The Nepali UDHR is typeset in TimesNewRomanPSMT with broken ToUnicode (PUA remap). Font sniffing says "Latin." The fix is a confidence cascade: OCR page one with En → Zh → Deva recognizers, lock the winner by mean confidence for the rest. A document pymupdf reads as 28 characters comes out as 10,542.
+| Academic papers | ✅ Clean text — math symbols recovered, not CID garbage |
+| Scanned documents | ✅ OCR'd — PP-OCR cascade (En → Zh → Deva), confidence-scored |
+| Tax forms (W-9) | ✅ Forms as data — field names + values as table |
+| Multi-column layouts | ✅ Reading order preserved — column detection + merge |
+| Encrypted PDFs | ⛔ Honest flag — `encrypted: password required` |
+| Corrupt PDFs | ⛔ Honest flag — `corrupt: parse failed at offset N` |
+| Nepali UDHR (broken ToUnicode) | ✅ 10,542 usable Nepali chars at 86% confidence (pymupdf: 28) |
 
 </details>
 
@@ -386,74 +402,15 @@ Every layer built in Rust. No dependency on existing OSS web tooling.
 
 | Component | What it does | Key files |
 |---|---|---|
-| 🛡️ **DonShadow** | Tier 1 stealth HTTP — BoringSSL TLS, own HTTP/1.1 + HTTP/2, temporal stealth, cookie jar, conditional revalidation | `src/fetch/`, `src/transport/` |
-| 👻 **DonGhost** | Tier 2 ghost browser — CDP (no Runtime/Console/Debugger), solve-and-bounce, SIGSTOP lifecycle, render mode | `src/ghost/` |
-| 📝 **DonSift** | HTML-to-markdown — block model, 12-language BM25 focus, token-war policies, content classification | `src/extract/` |
-| 🔎 **DonSeek** | Keyless multi-engine search — weighted RRF + BM25 + consensus + semantic reranking, adaptive egress governor | `src/search/` |
-| 🕷️ **DonTread** | Crawl engine — sitemap, focus-ranked frontier, Governor pacing, resume tokens, near-dup detection | `src/crawl/` |
-| 📄 **DonSheet** | PDF extraction — PDFium FFI, pixel-truth fusion, OCR arbitration cascade, forms as data | `src/pdf/` |
-| 🔌 **MCP daemon** | stdio server — JSON-RPC 2.0, MCP 2024-11-05 through 2026-07-28, 3 tools at ~1.8K tokens | `src/mcp/` |
+| 🛡️ **DonShadow** | Tier 1 stealth HTTP — BoringSSL TLS, own HTTP/1.1 + HTTP/2, temporal stealth, cookie jar | `src/fetch/`, `src/transport/` |
+| 👻 **DonGhost** | Tier 2 ghost browser — CDP (no Runtime/Console/Debugger), solve-and-bounce, SIGSTOP lifecycle | `src/ghost/` |
+| 📝 **DonSift** | HTML-to-markdown — block model, 12-language BM25 focus, token-war policies | `src/extract/` |
+| 🔎 **DonSeek** | Keyless multi-engine search — weighted RRF + BM25 + consensus + semantic reranking | `src/search/` |
+| 🕷️ **DonTread** | Crawl engine — sitemap, focus-ranked frontier, Governor pacing, resume tokens | `src/crawl/` |
+| 📄 **DonSheet** | PDF extraction — PDFium FFI, pixel-truth fusion, OCR arbitration cascade, forms | `src/pdf/` |
+| 🔌 **MCP daemon** | stdio server — JSON-RPC 2.0, 3 tools | `src/mcp/` |
 
-**249 tests. Zero clippy warnings.** `cargo clippy --release -- -Dwarnings` is the law.
-
----
-
-## 🚀 Install
-
-### Prerequisites
-
-| Dependency | Why | Linux | macOS | Windows |
-|---|---|---|---|---|
-| **Rust 1.75+** | Build toolchain | `rustup` | `rustup` | `rustup` |
-| **Go 1.22+** | BoringSSL build | `pacman -S go` | `brew install go` | `winget install GoLang.Go` |
-| **NASM** | BoringSSL assembly | `pacman -S nasm` | `brew install nasm` | `choco install nasm` |
-| **LLVM/Clang** | bindgen headers | pre-installed | pre-installed | `choco install llvm` |
-| **CMake** | BoringSSL build | `pacman -S cmake` | `brew install cmake` | `winget install cmake` |
-| **Chromium** *(optional)* | Tier 2 browser | `pacman -S chromium` | `brew install chromium` | Edge works |
-
-### Build
-
-```bash
-git clone https://github.com/dondai44423/donsetch.git
-cd donsetch
-cargo build --release
-```
-
-Binary lands at `target/release/donsetch`. First build takes ~5 min (compiling BoringSSL). Subsequent builds are cached.
-
-<details>
-<summary><b>📋 Build notes</b></summary>
-
-- **BoringSSL** is vendored and built from source via `boring-sys`. First build compiles it (~5 min), then it's cached.
-- **PDFium** is downloaded as a static library by `build.rs` — no manual setup.
-- **ONNX Runtime** is downloaded by `oar-ocr` (OCR) and `ort` (reranker) at build time.
-- **Models** (OCR + reranker) download on first use to `~/.cache/donsetch/`, not bundled in the binary.
-- **Feature flags**: `default = ["ocr", "rerank"]`. Build with `--no-default-features` for HTTP-only (no OCR, no reranker, smaller binary).
-- **Cross-compilation**: `rustup target add <target>`. Platform code is `#[cfg]`-gated, not forked.
-
-</details>
-
-### Connect your AI agent
-
-MCP over stdio — point your agent at the binary:
-
-```json
-{ "mcpServers": { "donsetch": { "command": "/path/to/donsetch" } } }
-```
-
-No arguments, no API keys, no environment variables. Done.
-
-<details>
-<summary><b>⚙️ Optional environment variables</b></summary>
-
-| Env Var | What it does |
-|---|---|
-| `DONSEEK_PROXIES` | Comma-separated proxies for search engines. Preflight benches dead lines. |
-| `DONGHOST_DEBUG` | Print ghost solve/render debug to stderr. |
-| `DONSHEET_DEBUG` | Print PDF/OCR debug to stderr. |
-| `DONSHEET_DEBUG_CHARS` | Print PDF layout character stream. |
-
-</details>
+**388 tests. Zero clippy warnings.** `cargo clippy --release -- -Dwarnings` is the law.
 
 ---
 
@@ -462,17 +419,18 @@ No arguments, no API keys, no environment variables. Done.
 | | **DonSeTch** | Hound | Crawl4AI | Jina Reader | Firecrawl |
 |---|---|---|---|---|---|
 | **Language** | Rust | Python | Python | Python (API) | TypeScript |
-| **TLS fingerprint** | Real Chrome (BoringSSL, driven natively) | curl-impersonate (patched) | requests | their servers | their servers |
-| **HTTP/2 stack** | Own (HPACK, flow control, session resumption) | primp | requests | their servers | their servers |
-| **Temporal stealth** | ✅ (session resumption, revalidation, cookies) | ❌ | ❌ | ❌ | ❌ |
-| **Tier 2 strategy** | Solve-and-bounce (cookies to tier 1, browser sleeps) | Browser fetches everything | n/a | n/a | n/a |
-| **Self-improving** | ✅ (adaptive cookie lifetime, warm start, write-back) | ❌ | ❌ | ❌ | ❌ |
+| **TLS fingerprint** | Real Chrome (BoringSSL) | curl-impersonate | requests | their servers | their servers |
+| **HTTP/2 stack** | Own (HPACK, flow control) | primp | requests | their servers | their servers |
+| **Temporal stealth** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Tier 2 strategy** | Solve-and-bounce | Browser fetches all | n/a | n/a | n/a |
+| **Self-improving** | ✅ | ❌ | ❌ | ❌ | ❌ |
 | **Web search** | ✅ (keyless, 10+) | ✅ (keyless, 10) | ❌ | ✅ | ❌ |
-| **Semantic reranking** | ✅ (local ONNX cross-encoder) | ✅ (local ONNX) | ❌ | ❌ | ❌ |
+| **Semantic reranking** | ✅ (local ONNX) | ✅ | ❌ | ❌ | ❌ |
 | **Deep crawl** | ✅ (resume tokens) | ✅ | ✅ | ❌ | ✅ (cloud) |
-| **PDF → markdown** | ✅ (pixel-fusion, per-region arbitration) | ✅ (pdfplumber) | partial | ✅ (native) | ✅ (cloud) |
-| **Scanned-PDF OCR** | ✅ (PP-OCR, confidence cascade) | ✅ (rapidocr) | ❌ | ❌ | ✅ (paid) |
-| **Query focus** | ✅ (12-language BM25, CJK bigrams) | ✅ (BM25) | ✅ (BM25) | ❌ | ❌ |
+| **PDF → markdown** | ✅ (pixel-fusion) | ✅ (pdfplumber) | partial | ✅ | ✅ (cloud) |
+| **Scanned-PDF OCR** | ✅ (PP-OCR) | ✅ (rapidocr) | ❌ | ❌ | ✅ (paid) |
+| **Query focus** | ✅ (12-language BM25) | ✅ | ✅ | ❌ | ❌ |
+| **CLI** | ✅ | ❌ | ✅ | ❌ | ❌ |
 | **Runs locally** | ✅ | ✅ | ✅ | ❌ | self-host |
 | **MCP server** | ✅ | ✅ | community | ✅ | build it |
 | **Token cost** | ~1.8K (3 tools) | ~2.7K (6 tools) | varies | n/a | varies |
@@ -484,12 +442,12 @@ No arguments, no API keys, no environment variables. Done.
 
 | Surprise | Why |
 |---|---|
-| 🔨 **First build takes ~5 min** | BoringSSL is compiled from source. Cached after that. |
-| 🐹 **Go is a build dependency** | BoringSSL's build system is Go-based. You need Go even though DonSeTch is Rust. |
-| ⛔ **Interactive captchas not solved** | hCaptcha, reCAPTCHA, Turnstile checkbox = honest dead end. No solving service by design. |
-| 🤖 **robots.txt ON by default for crawl** | `respect_robots=true` for crawl. `fetch` doesn't check robots. |
-| 🌐 **Search rate-limits without a proxy** | Keyless search scrapes public engines from your IP. Set `DONSEEK_PROXIES` for heavy use. |
-| 📦 **Not built for mass scraping** | DonSeTch is for agentic research, not bulk extraction. |
+| First build takes ~2 min | BoringSSL is compiled from source. Cached after that. |
+| Go is a build dependency | BoringSSL's build system is Go-based. You need Go even though DonSeTch is Rust. |
+| Interactive captchas not solved | hCaptcha, reCAPTCHA, Turnstile checkbox = honest dead end. No solving service by design. |
+| robots.txt ON by default for crawl | `respect_robots=true` for crawl. `fetch` doesn't check robots. |
+| Search rate-limits without a proxy | Keyless search scrapes public engines from your IP. Set `DONSEEK_PROXIES` for heavy use. |
+| Not built for mass scraping | DonSeTch is for agentic research, not bulk extraction. |
 
 ---
 
@@ -497,11 +455,10 @@ No arguments, no API keys, no environment variables. Done.
 
 | What it can NOT do | Why |
 |---|---|
-| ⛔ **Solve CAPTCHAs** | Deliberate. You get a clear error, not a hang. |
-| 🔐 **Sites requiring login** | Out of scope (page rendering, not authenticated sessions). |
-| 🔬 **ML-DSA post-quantum signatures** | BoringSSL 5.1.0 lacks them. Will be added when BoringSSL gains it. |
-| 🪟 **Windows/macOS PDF CI** | Compiled but CI verification pending. Linux is primary target. |
-| 📡 **Search with all engines down** | Returns an error with per-engine status. Honest, not fake. |
+| Solve CAPTCHAs | Deliberate. You get a clear error, not a hang. |
+| Sites requiring login | Out of scope (page rendering, not authenticated sessions). |
+| ML-DSA post-quantum signatures | BoringSSL 5.1.0 lacks them. Will be added when BoringSSL gains it. |
+| Search with all engines down | Returns an error with per-engine status. Honest, not fake. |
 
 ---
 

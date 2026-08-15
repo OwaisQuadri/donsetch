@@ -5,9 +5,49 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] - 2026-08-07 (BETA)
+## [1.0.0] - 2026-08-15
 
-First public release. Feature-complete MCP server for web fetch, search, and crawl.
+First stable release. Feature-complete MCP server + CLI for web fetch, search, and crawl.
+
+### Added
+
+- **CLI**: full command-line interface — `fetch`, `search`, `crawl` with same engine as MCP.
+  - `--json` for machine-readable output, `-q` for quiet mode, `--tier` for manual escalation control.
+  - `keys` subcommand: manage BYOK search provider keys (`add`, `remove`, `list`, `default`, `reset`).
+  - `doctor`: 9-check health diagnostics with auto-fix.
+  - `update`: self-update from GitHub Releases (no API rate limits).
+  - `rollback`: revert to previous version.
+  - `version`: version + build info.
+  - `tools`: print tool schemas as JSON (same as MCP `tools/list`).
+
+- **BYOK search providers**: external search providers (TinyFish, Tavily, Serper, Exa) bypass the local engine entirely. Key stacking, rotation, rate-limit cooldown (60s auto-recovery), credit-depletion detection, local fallback. Config: `~/.cache/donsetch/byok-keys.json`.
+
+- **Query-entity coverage penalty**: anchor entities (hyphenated compounds like "B-tree") and specifiers (version numbers, years) checked against results. Wrong entity = 0.3× score penalty. Fixes BM25 splitting "B-tree" → "b" + "tree" where "binary tree" matches. Universal — no-op for queries without entities.
+
+- **Crawl v2**: transient retry (max 2), canonical URL resolution, pagination (`<link rel="next">`), RSS/Atom feed discovery, `<base href>` resolution, binary content-type guard, referer + sec-fetch-site chaining, parent metadata, score-sorted output, sitemap `<priority>` + `<lastmod>`, ghost escalation (capped 3/crawl). Seed URL always in scope.
+
+- **Xvfb socket-file polling**: replaced `xdpyinfo` dependency with `/tmp/.X11-unix/X99` socket polling for Xvfb readiness. Fixes ghost browser launch failure on systems without `xorg-xdpyinfo`.
+
+- **npm package**: `npm install -g donsetch` downloads platform-correct binary from GitHub Releases at install time (SHA256-verified).
+
+- **Release workflow**: tag-triggered, 3-platform build (Linux x86_64, macOS arm64, Windows x86_64), binary verification, packaging (tar.gz + SHA256), GitHub release.
+
+### Changed
+
+- README rewritten for v1.0.0: removed BETA warnings, added two-usage-modes section (MCP + CLI), updated test counts, cleaned stale info.
+- Rust edition 2024 (let-chains support).
+- Test count: 388 (was 249 at 0.5.0).
+
+### Fixed
+
+- TinyFish BYOK adapter: GET (not POST), root path `/` (not `/search`), query params (not JSON body). Old endpoint returned 404 (Next.js catch-all), misclassified as rate-limited.
+- Crawl seed scope: `--include`/`--exclude` apply to discovered links only, not the seed entry point.
+- Flaky PDF test under parallel execution: non-PDF body + PDF content-type instead of fake `%PDF-1.4` body (avoids PDFium race).
+- Xvfb readiness check: `xdpyinfo` dependency removed, socket-file polling added.
+
+## [0.5.0] - 2026-08-07
+
+Initial public beta. Feature-complete MCP server for web fetch, search, and crawl.
 
 ### Added
 
