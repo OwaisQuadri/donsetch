@@ -554,9 +554,15 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // === Decision: how to route this fetch? ===
     // The self-improving loop: the domain profile decides
     // cold / warm / skip-to-solve / recheck-cold.
-    let route = if tier == "2" && !is_pdf_url {
+    // Reddit is always SSR (old.reddit.com rewrite) — never
+    // needs a browser. Force Cold route even if a stale
+    // profile says SkipToSolve (from a previous Xvfb failure
+    // that poisoned the domain). old.reddit.com serves 80KB+
+    // of server-rendered HTML to plain HTTP clients.
+    let is_reddit = host.ends_with("reddit.com");
+    let route = if tier == "2" && !is_pdf_url && !is_reddit {
         RouteDecision::SkipToSolve
-    } else if tier == "1" || is_pdf_url {
+    } else if tier == "1" || is_pdf_url || is_reddit {
         RouteDecision::Cold
     } else {
         daemon.state.lock().await.route_for(&host)
@@ -738,6 +744,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     let is_small_404 =
         page_size > 0 && page_size < 5_000 && still_thin && !challenge && !is_pdf_content;
     let need_ghost = !is_pdf_content
+        && !is_reddit // old.reddit.com is SSR — never needs a browser
         && ((challenge && tier != "1" && !is_small_404)
             || skip_tier1
             || (still_thin && tier == "auto" && !is_small_404));

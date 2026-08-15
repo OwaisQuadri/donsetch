@@ -58,6 +58,15 @@ mod linux {
                 .await;
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
+            // Remove stale socket + lock files. A dead Xvfb leaves
+            // these behind — a new Xvfb can't bind to a stale socket,
+            // and our readiness check would see the stale file and
+            // think Xvfb is ready when it isn't.
+            let sock_path = format!("/tmp/.X11-unix/X{DISPLAY_NUM}");
+            let lock_path = format!("/tmp/.X{DISPLAY_NUM}-lock");
+            let _ = std::fs::remove_file(&sock_path);
+            let _ = std::fs::remove_file(&lock_path);
+
             let mut cmd = Command::new("Xvfb");
             cmd.args([
                 &display,
@@ -77,18 +86,16 @@ mod linux {
             })?;
 
             // Wait for the display to be ready by polling the X11
-            // socket file. Xvfb creates /tmp/.X11-unix/X99 when it's
-            // ready to accept connections. This replaces the old
-            // xdpyinfo dependency (xorg-xdpyinfo package) — not
-            // installed on minimal systems and unnecessary when
-            // the socket file is a reliable readiness signal.
+            // socket file AND verifying we can connect to it.
+            // Xvfb creates /tmp/.X11-unix/X99 when it's ready to
+            // accept connections. We also try connecting to make
+            // sure the socket is live, not just present.
             let sock_path = format!("/tmp/.X11-unix/X{DISPLAY_NUM}");
             let ready = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 loop {
-                    if std::fs::exists(&sock_path).unwrap_or(false) {
-                        // Give Xvfb a moment to finish initializing
-                        // the screen after socket creation.
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    if std::fs::exists(&sock_path).unwrap_or(false)
+                        && std::os::unix::net::UnixStream::connect(&sock_path).is_ok()
+                    {
                         return;
                     }
                     // Check if Xvfb died early.
@@ -145,12 +152,18 @@ mod linux {
             .unwrap_or(false)
     }
 
-    /// Check if an X display is already alive by testing the X
-    /// socket file. The socket is the reliable signal — no xdpyinfo
-    /// dependency needed.
+    /// Check if an X display is alive by testing the X11
+    /// socket file AND verifying someone is listening. A stale
+    /// socket (from a killed Xvfb process) will still have the
+    /// file but no server — connecting fails with ECONNREFUSED.
     async fn display_alive(_display: &str) -> bool {
         let sock = format!("/tmp/.X11-unix/X{DISPLAY_NUM}");
-        std::fs::exists(&sock).unwrap_or(false)
+        if !std::fs::exists(&sock).unwrap_or(false) {
+            return false;
+        }
+        // Socket exists — but is anyone listening? Try
+        // connecting. If it fails, the socket is stale.
+        std::os::unix::net::UnixStream::connect(&sock).is_ok()
     }
 }
 
