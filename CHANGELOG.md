@@ -5,6 +5,22 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-08-15
+
+Hybrid semantic focus filter + tool definition updates.
+
+### Added
+
+- Hybrid BM25 + cross-encoder semantic focus filter for `web_fetch`. The `focus` parameter now uses keyword matching (BM25) as the base, then if the cross-encoder model is already cached (from search reranking), runs a second pass and adds semantically relevant blocks that BM25 missed. Catches blocks where the query uses different vocabulary than the page (e.g. query "how gradients flow through layers" matches "backpropagation" and "chain rule"). No model download is triggered during fetch — only uses the model if already cached.
+- `cross_encoder_scores` and `is_model_cached` exposed from the rerank module for reuse by the focus filter.
+
+### Changed
+
+- `focus` parameter description strengthened to drive agent adoption: explains the 50-80% token reduction, hybrid matching, concrete example, and ends with a directive to always set focus when you know what you're looking for.
+- `web_fetch` tool description updated with a prominent "Token efficiency — use focus" section.
+- `web_crawl` `focus` (topic) param and description updated similarly.
+- 401 tests (was 395).
+
 ## [1.1.0] - 2026-08-15
 
 Stability, storage, and cross-platform fixes.
