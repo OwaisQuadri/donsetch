@@ -109,7 +109,8 @@ mod imp {
         let data = std::fs::read(path).map_err(|e| e.to_string())?;
         let mut h = sha2::Sha256::new();
         h.update(&data);
-        Ok(format!("{:x}", h.finalize()))
+        let digest = h.finalize();
+        Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
     }
 
     /// Download `m` (atomic tmp+rename) and verify the pinned sha256.
