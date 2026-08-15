@@ -5,6 +5,34 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-08-15
+
+Post-v1.0.0 stability, storage, and cross-platform fixes.
+
+### Added
+
+- **`donsetch version` update check**: now fetches the GitHub releases.atom feed (no API key, no rate limits) and shows whether the current version is up to date (✓), behind (⚠ update available), or ahead (⚠).
+- **`DONSEEK_NO_DISK_STATE` env var**: set to disable disk persistence for self-improving fetch. In-memory state still works during the session. On by default.
+- **Doctor cache breakdown**: `donsetch doctor` now shows per-component disk usage (self-improvement, ghost-profile, ocr-models, rerank-models) instead of just a total.
+
+### Fixed
+
+- **Reddit ghost poisoning**: old.reddit.com was marked `needs_tier2=true` in ghost-state.json from a previous Xvfb failure. The `SkipToSolve` route skipped tier 1 and went straight to ghost, which also failed — death spiral. Fix: force `Cold` route for all reddit.com hosts (old.reddit.com is SSR, never needs a browser) and block ghost escalation entirely for reddit.
+- **Stale Xvfb socket**: a dead Xvfb process left `/tmp/.X11-unix/X99` behind. `display_alive()` checked file existence only — but nobody was listening. Chrome failed to connect, exited silently, 'no devtools ws line'. Fix: try `UnixStream::connect` to verify someone is listening. Clean up stale socket + lock files before starting new Xvfb.
+- **Windows freeze/thaw broken**: `NtSuspendProcess` only suspended Chrome's main process — renderer, GPU, and utility processes kept running. Fix: enumerate all PIDs in the Job Object via `QueryInformationJobObject` (JobObjectBasicProcessIdList), suspend/resume each one individually.
+- **Atom feed parsing**: release titles can contain extra text (e.g. 'v1.0.0 — Stable Release') that breaks semver parsing. Fix: parse the `<id>` tag (always ends with `/v<version>`) instead of `<title>`.
+- **Disk storage bloat (1.2GB → 620KB self-improvement, 1.1GB → 0 Chrome cache)**:
+  - Only clearance cookies (cf_clearance, datadome, __dd_cookie, _abck, bm_sz, _px, etc.) are now persisted. Tracking cookies (_ga, TDID, demdex, etc.) filtered out on write AND on load (one-time migration).
+  - Render cache capped at 20 entries, 200KB max per entry (was unbounded, 175 entries of 400KB+ HTML).
+  - Chrome disk cache disabled: `--disk-cache-size=1`, `--disable-gpu-shader-disk-cache`, `--disable-features=SiteEngagementService`.
+  - One-time migration prunes existing data on load.
+
+### Changed
+
+- Self-improving fetch section marked as experimental in README.
+- Dependency upgrades: sha2 0.10→0.11, brotli 7→8, tokio-tungstenite 0.26→0.30, actions/checkout 4→7, actions/setup-go 5→7, actions/upload-artifact 4→7, softprops/action-gh-release 2→3, KyleMayes/install-llvm-action 1→2.
+- Test count: 395 (was 388 at v1.0.0).
+
 ## [1.0.0] - 2026-08-15
 
 First stable release. Feature-complete MCP server + CLI for web fetch, search, and crawl.
