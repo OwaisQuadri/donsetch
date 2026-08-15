@@ -172,6 +172,16 @@ mod inner {
         1.0 / (1.0 + (-x as f64).exp())
     }
 
+    /// Returns true if the reranker model + tokenizer are already
+    /// on disk. Does NOT trigger a download — used by focus
+    /// extraction to decide whether semantic scoring is available
+    /// without surprising the user with a model download during
+    /// a plain fetch.
+    pub fn is_model_cached() -> bool {
+        let dir = cache_dir();
+        dir.join("model_quantized.onnx").exists() && dir.join("tokenizer.json").exists()
+    }
+
     /// Runs the cross-encoder on (query, doc) pairs, returning sigmoid
     /// scores in [0, 1]. Returns `None` if the model is unavailable.
     pub fn cross_encoder_scores(query: &str, docs: &[(String, String)]) -> Option<Vec<f64>> {
@@ -456,8 +466,14 @@ mod inner {
 
 #[cfg(not(feature = "rerank"))]
 mod inner {
-    /// No-op stub when the `rerank` feature is disabled.
+    /// No-op stubs when the `rerank` feature is disabled.
     pub fn rerank(_query: &str, _results: &mut [crate::search::rank::Merged]) {}
+    pub fn cross_encoder_scores(_query: &str, _docs: &[(String, String)]) -> Option<Vec<f64>> {
+        None
+    }
+    pub fn is_model_cached() -> bool {
+        false
+    }
 }
 
-pub use inner::rerank;
+pub use inner::{cross_encoder_scores, is_model_cached, rerank};

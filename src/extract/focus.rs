@@ -4,13 +4,25 @@
 //! No hits → full content (never punish the agent for a bad
 //! query).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::blocks::Block;
 use super::language::{self, LanguageInfo};
 
 const K1: f64 = 1.2;
 const B: f64 = 0.75;
+
+/// Max blocks for semantic scoring. Pages with more blocks
+/// fall back to BM25-only — large pages are usually reference
+/// docs where keyword matching works well, and the latency
+/// of cross-encoder on 100+ blocks isn't worth it.
+const SEMANTIC_MAX_BLOCKS: usize = 80;
+
+/// Cross-encoder relevance threshold (sigmoid output [0,1]).
+/// Blocks scoring above this are kept even if BM25 missed them.
+/// 0.3 catches semantically relevant blocks while filtering
+/// out navigation, boilerplate, and unrelated sections.
+const XENC_THRESHOLD: f64 = 0.3;
 
 // ── Stopwords ────────────────────────────────────────────────
 
@@ -785,14 +797,14 @@ fn tokenize_cjk(text: &str, lang: &str) -> Vec<String> {
 
 // ── BM25 filter ─────────────────────────────────────────────
 
-/// BM25 block filter. Returns (kept blocks, fell_back).
-/// fell_back = true when the query matched nothing and we
-/// returned the full page — the CALLER must signal this,
-/// or the agent mistakes full content for focus matches.
-pub fn filter<'a>(blocks: &'a [Block], query: &str, lang: &LanguageInfo) -> (Vec<&'a Block>, bool) {
+/// Compute BM25 scores for each block against the query.
+/// Returns a vector of scores (one per block, 0.0 = no match).
+/// Used by both `filter` (BM25-only) and `filter_semantic`
+/// (BM25 + cross-encoder union).
+fn bm25_scores(blocks: &[Block], query: &str, lang: &LanguageInfo) -> Vec<f64> {
     let qterms = tokenize(query, lang);
     if qterms.is_empty() || blocks.is_empty() {
-        return (blocks.iter().collect(), false);
+        return vec![0.0; blocks.len()];
     }
 
     // Document stats.
@@ -809,15 +821,14 @@ pub fn filter<'a>(blocks: &'a [Block], query: &str, lang: &LanguageInfo) -> (Vec
     let n = blocks.len() as f64;
     let avgdl = docs.iter().map(|d| d.len()).sum::<usize>() as f64 / n.max(1.0);
 
-    // Score.
-    let mut scored: Vec<(usize, f64)> = Vec::new();
+    // Score each block.
+    let mut scores = vec![0.0f64; blocks.len()];
     for (i, doc) in docs.iter().enumerate() {
         let mut tf: HashMap<&str, usize> = HashMap::new();
         for t in doc {
             *tf.entry(t.as_str()).or_insert(0) += 1;
         }
         let dl = doc.len() as f64;
-        let mut score = 0.0;
         for q in &qterms {
             let Some(&term_df) = df.get(q.as_str()) else {
                 continue;
@@ -825,27 +836,123 @@ pub fn filter<'a>(blocks: &'a [Block], query: &str, lang: &LanguageInfo) -> (Vec
             let idf = (1.0 + (n - term_df as f64 + 0.5) / (term_df as f64 + 0.5)).ln();
             let f = tf.get(q.as_str()).copied().unwrap_or(0) as f64;
             if f > 0.0 {
-                score += idf * (f * (K1 + 1.0)) / (f + K1 * (1.0 - B + B * dl / avgdl.max(1.0)));
+                scores[i] +=
+                    idf * (f * (K1 + 1.0)) / (f + K1 * (1.0 - B + B * dl / avgdl.max(1.0)));
             }
         }
-        if score > 0.0 {
-            scored.push((i, score));
-        }
+    }
+    scores
+}
+
+/// BM25 block filter. Returns (kept blocks, fell_back).
+/// fell_back = true when the query matched nothing and we
+/// returned the full page — the CALLER must signal this,
+/// or the agent mistakes full content for focus matches.
+///
+/// BM25-only version. Production code uses `filter_semantic`
+/// (BM25 + cross-encoder union). This function is kept for
+/// tests and as a pure-BM25 baseline.
+#[allow(dead_code)]
+pub fn filter<'a>(blocks: &'a [Block], query: &str, lang: &LanguageInfo) -> (Vec<&'a Block>, bool) {
+    let qterms = tokenize(query, lang);
+    if qterms.is_empty() || blocks.is_empty() {
+        return (blocks.iter().collect(), false);
     }
 
-    if scored.is_empty() {
+    let scores = bm25_scores(blocks, query, lang);
+    let max_score = scores.iter().cloned().fold(0.0f64, f64::max);
+    if max_score <= 0.0 {
         return (blocks.iter().collect(), true); // no hits → full, SIGNAL it
     }
 
     // Keep blocks above a fraction of the max score, in doc order.
-    let max_score = scored.iter().map(|(_, s)| *s).fold(0.0, f64::max);
     let threshold = max_score * 0.15;
-    let kept = scored
-        .into_iter()
-        .filter(|(_, s)| *s >= threshold)
+    let kept: Vec<&Block> = scores
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| **s >= threshold)
         .map(|(i, _)| &blocks[i])
         .collect();
     (kept, false)
+}
+
+/// Hybrid BM25 + cross-encoder block filter.
+///
+/// Runs BM25 first (microseconds, zero dependency). If the
+/// cross-encoder model is already cached on disk (downloaded
+/// during search reranking), it runs a second pass on all blocks
+/// and adds semantically relevant blocks that BM25 missed —
+/// catching cases where the query and block use different
+/// vocabulary ("backpropagation" vs "backward pass computes
+/// gradients").
+///
+/// If the model isn't cached, falls back to pure BM25 (same as
+/// `filter`). No model download is triggered during fetch.
+///
+/// The cross-encoder also rescues the BM25 fell_back case: when
+/// BM25 finds zero keyword matches, the cross-encoder may still
+/// find semantic matches, preventing a full-page fallback.
+pub fn filter_semantic<'a>(
+    blocks: &'a [Block],
+    query: &str,
+    lang: &LanguageInfo,
+) -> (Vec<&'a Block>, bool) {
+    let qterms = tokenize(query, lang);
+    if qterms.is_empty() || blocks.is_empty() {
+        return (blocks.iter().collect(), false);
+    }
+
+    // ── Phase 1: BM25 (always — microseconds) ──
+    let scores = bm25_scores(blocks, query, lang);
+    let max_bm25 = scores.iter().cloned().fold(0.0f64, f64::max);
+    let has_bm25_hits = max_bm25 > 0.0;
+
+    let mut kept: Vec<usize> = if has_bm25_hits {
+        let threshold = max_bm25 * 0.15;
+        scores
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| **s >= threshold)
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // ── Phase 2: Cross-encoder semantic augmentation ──
+    // Only when the model is already cached (from search use).
+    // Never triggers a model download during a plain fetch.
+    if blocks.len() <= SEMANTIC_MAX_BLOCKS && crate::search::rerank::is_model_cached() {
+        let docs: Vec<(String, String)> =
+            blocks.iter().map(|b| (b.text(), String::new())).collect();
+        if let Some(xenc_scores) = crate::search::rerank::cross_encoder_scores(query, &docs) {
+            if !has_bm25_hits {
+                // BM25 found nothing — cross-encoder rescues.
+                for (i, xenc) in xenc_scores.iter().enumerate() {
+                    if *xenc >= XENC_THRESHOLD {
+                        kept.push(i);
+                    }
+                }
+            } else {
+                // Union: add cross-encoder matches BM25 missed.
+                let bm25_set: HashSet<usize> = kept.iter().copied().collect();
+                for (i, xenc) in xenc_scores.iter().enumerate() {
+                    if *xenc >= XENC_THRESHOLD && !bm25_set.contains(&i) {
+                        kept.push(i);
+                    }
+                }
+            }
+        }
+    }
+
+    if kept.is_empty() {
+        return (blocks.iter().collect(), true);
+    }
+
+    // Sort by index to preserve document order.
+    kept.sort_unstable();
+    let kept_blocks = kept.into_iter().map(|i| &blocks[i]).collect();
+    (kept_blocks, false)
 }
 
 // ── Tests ────────────────────────────────────────────────────
@@ -1140,5 +1247,83 @@ mod tests {
         // Query "cafe" should match "café" via accent folding.
         let (kept, fell_back) = filter(&blocks, "cafe", &en());
         assert!(!fell_back);
+    }
+
+    // ── bm25_scores unit tests ──
+
+    #[test]
+    fn bm25_scores_positive_for_match() {
+        let blocks = vec![
+            para("Machine learning is a subset of artificial intelligence"),
+            para("The weather is nice today"),
+        ];
+        let scores = bm25_scores(&blocks, "machine learning", &en());
+        assert!(scores[0] > 0.0); // matching block
+        assert_eq!(scores[1], 0.0); // non-matching block
+    }
+
+    #[test]
+    fn bm25_scores_empty_query_zeros() {
+        let blocks = vec![para("Some content")];
+        let scores = bm25_scores(&blocks, "", &en());
+        assert!(scores.iter().all(|s| *s == 0.0));
+    }
+
+    // ── filter_semantic tests ──
+    // These tests assert properties that hold regardless of
+    // whether the cross-encoder model is cached. filter_semantic
+    // is a union (BM25 ∪ cross-encoder), so it always keeps at
+    // least the BM25 matches.
+
+    #[test]
+    fn filter_semantic_empty_query() {
+        let blocks = vec![para("Some content"), para("Other content")];
+        let (kept, fell_back) = filter_semantic(&blocks, "", &en());
+        assert!(!fell_back);
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn filter_semantic_keeps_bm25_matches() {
+        let blocks = vec![
+            para("Machine learning is a subset of artificial intelligence"),
+            para("The weather is nice today"),
+            para("Deep learning uses neural networks"),
+        ];
+        let (kept, fell_back) = filter_semantic(&blocks, "machine learning", &en());
+        assert!(!fell_back);
+        assert!(kept.len() >= 1);
+        assert!(kept.iter().any(|b| b.text().contains("Machine learning")));
+    }
+
+    #[test]
+    fn filter_semantic_union_property() {
+        // filter_semantic is a union: it keeps at least every
+        // block that filter (BM25-only) keeps.
+        let blocks = vec![
+            para("Machine learning is a subset of artificial intelligence"),
+            para("The weather is nice today"),
+            para("Deep learning uses neural networks"),
+        ];
+        let (bm25_kept, _) = filter(&blocks, "machine learning", &en());
+        let (sem_kept, _) = filter_semantic(&blocks, "machine learning", &en());
+        assert!(sem_kept.len() >= bm25_kept.len());
+    }
+
+    #[test]
+    fn filter_semantic_preserves_doc_order() {
+        let blocks = vec![
+            para("Alpha block about machine learning"),
+            para("Beta block about weather"),
+            para("Gamma block about neural networks"),
+        ];
+        let (kept, _) = filter_semantic(&blocks, "machine learning", &en());
+        // Kept blocks should be in document order (by index).
+        for w in kept.windows(2) {
+            assert!(
+                blocks.iter().position(|b| std::ptr::eq(b, w[0]))
+                    <= blocks.iter().position(|b| std::ptr::eq(b, w[1]))
+            );
+        }
     }
 }

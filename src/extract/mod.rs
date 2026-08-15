@@ -679,7 +679,7 @@ fn downstream(
     // Focus: BM25 block filter. fell_back = query matched
     // nothing → full content returned, MUST be signaled.
     let (kept, focus_fell_back): (Vec<&blocks::Block>, bool) = match &opts.focus {
-        Some(q) => focus::filter(&all_blocks, q, &lang_info),
+        Some(q) => focus::filter_semantic(&all_blocks, q, &lang_info),
         None => (all_blocks.iter().collect(), false),
     };
     let blocks_shown = kept.len();
