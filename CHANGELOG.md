@@ -5,9 +5,10 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.2.0] - 2026-08-16
 
-Security hardening — 8 live-proven vulnerabilities fixed.
+Security hardening — full audit by GLM 5.3 found 8 live-proven
+vulnerabilities. All patched, PoC-verified against the release binary.
 
 ### Security
 
@@ -32,6 +33,7 @@ Security hardening — 8 live-proven vulnerabilities fixed.
 
 - npm installer uses `execFileSync` instead of `execSync` (no shell, no string interpolation), caps redirects at 5 hops, and refuses http:// downgrade redirects.
 - 404 tests (was 401).
+- Added more bugs to fix later.
 
 ## [1.1.1] - 2026-08-15
 
