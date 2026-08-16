@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-08-16
+
+### Added
+
+- **Pi agent TUI rendering** — custom `renderCall` and `renderResult` for all 3 tools in the pi extension. Tool calls show a clean amber icon + tool name + key arg (URL or query). Results show a compact status line (✓/✗ glyph, tool name, metadata) plus a one-line preview. No more raw content dumps in the TUI — the LLM still gets full content, the user sees a clean summary card. Amber theme matching DonSeTch's identity (#ffb200).
+
 ## [2.1.1] - 2026-08-16
 
 ### Added

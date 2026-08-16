@@ -13,17 +13,38 @@
  * Auto-download: if the binary is missing (e.g. postinstall was
  * blocked by npm 10+), the extension runs install.js at session_start
  * to fetch it from GitHub Releases.
+ *
+ * Custom TUI: each tool has clean renderCall/renderResult showing
+ * a compact summary card — not the full raw output. The LLM still
+ * receives complete content; the user sees a minimal status line +
+ * one-line preview. Amber theme matching DonSeTch's identity.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
+import { Text, visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 
 // ── Constants ──
 const INIT_TIMEOUT_MS = 10_000;
-const CALL_TIMEOUT_MS = 120_000; // fetch/crawl can take a while
+const CALL_TIMEOUT_MS = 120_000;
 const SHUTDOWN_GRACE_MS = 2_000;
+
+// ── Color palette — DonSeTch amber theme ──
+const C_AMBER = "\x1b[38;2;255;178;0m";
+const C_GREEN = "\x1b[38;2;100;200;100m";
+const C_RED   = "\x1b[38;2;229;115;115m";
+const C_DIM   = "\x1b[38;2;130;130;140m";
+const C_CREAM = "\x1b[38;2;240;230;210m";
+const RESET   = "\x1b[0m";
+
+// ── Tool icons ──
+const ICONS: Record<string, string> = {
+  web_fetch:  "\u{1F310}",  // 🌐
+  web_search: "\u{1F50E}",  // 🔎
+  web_crawl:  "\u{1F577}\u{FE0F}",  // 🕷️
+};
 
 // ── MCP client state ──
 let proc: ChildProcess | null = null;
@@ -47,8 +68,6 @@ function ensureBinary(): string {
   const binaryPath = getBinaryPath();
   if (existsSync(binaryPath)) return binaryPath;
 
-  // Binary missing — postinstall was likely blocked. Run install.js
-  // to download from GitHub Releases.
   const installScript = join(__dirname, "install.js");
   if (!existsSync(installScript)) {
     throw new Error(
@@ -129,7 +148,6 @@ function startServer(): Promise<void> {
       }
     });
 
-    // Drain stderr to prevent pipe buffer deadlock; route to our stderr for debugging.
     proc.stderr?.on("data", (chunk: Buffer) => {
       process.stderr.write(chunk);
     });
@@ -154,7 +172,6 @@ function startServer(): Promise<void> {
       pending.clear();
     });
 
-    // MCP handshake: initialize → notifications/initialized
     sendRequest(
       "initialize",
       {
@@ -209,9 +226,7 @@ function killServer(): void {
       proc.kill("SIGTERM");
       const p = proc;
       setTimeout(() => {
-        try {
-          p.kill("SIGKILL");
-        } catch {}
+        try { p.kill("SIGKILL"); } catch {}
       }, SHUTDOWN_GRACE_MS);
     } catch {}
     proc = null;
@@ -227,6 +242,48 @@ function killServer(): void {
 
 function isAlive(): boolean {
   return proc !== null && !proc.killed && proc.stdin?.writable === true;
+}
+
+// ── TUI helpers ──
+
+/** Extract a clean preview line from markdown content. */
+function getPreview(text: string, maxLen = 72): string {
+  const lines = text.split("\n");
+  for (const line of lines) {
+    let clean = line.replace(/^#+\s*/, "").replace(/\*\*([^*]+)\*\*/g, "$1").trim();
+    if (clean.length > 0 && !clean.startsWith("{") && !clean.startsWith("[")) {
+      return truncateToWidth(clean, maxLen, "\u2026");
+    }
+  }
+  return "";
+}
+
+/** Count numbered search results in text. */
+function countSearchResults(text: string): number {
+  const matches = text.match(/^\d+\.\s/gm);
+  return matches ? matches.length : 0;
+}
+
+/** Extract first search result title. */
+function getFirstResultTitle(text: string): string {
+  const match = text.match(/^\d+\.\s+\*\*(.+?)\*\*/m);
+  return match ? match[1] : "";
+}
+
+/** Count pages from crawl output (## headings or numbered pages). */
+function countCrawlPages(text: string): number {
+  const matches = text.match(/^##\s/gm);
+  return matches ? matches.length : 0;
+}
+
+/** Extract domain from URL for display. */
+function shortUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.hostname + (u.pathname !== "/" ? u.pathname.slice(0, 30) : "");
+  } catch {
+    return truncateToWidth(url, 50, "\u2026");
+  }
 }
 
 // ── Extension ──
@@ -261,17 +318,15 @@ export default function (pi: ExtensionAPI) {
 
       const description = mcpTool.description || mcpTool.name;
       const inputSchema = mcpTool.inputSchema || { type: "object", properties: {} };
-
-      // Capture name for closure
       const toolName = name;
+      const icon = ICONS[toolName] ?? "\u25C6";
 
       pi.registerTool({
         name: toolName,
         label: toolName,
         description,
         parameters: Type.Unsafe(inputSchema) as any,
-        async execute(_toolCallId, params, signal) {
-          // Check if server is still alive, restart if dead
+        async execute(_toolCallId, params, _signal) {
           if (!isAlive()) {
             try {
               await startServer();
@@ -285,18 +340,96 @@ export default function (pi: ExtensionAPI) {
 
           try {
             const result = await callMcpTool(toolName, params);
+            const text = result?.content?.[0]?.text ?? "";
+            const isErr = result?.isError ?? false;
+
+            // Build details for TUI rendering
+            const details: any = {
+              mcpTool: toolName,
+              isError: isErr,
+              chars: text.length,
+            };
+
+            if (toolName === "web_search") {
+              details.results = countSearchResults(text);
+              details.topResult = getFirstResultTitle(text);
+            } else if (toolName === "web_crawl") {
+              details.pages = countCrawlPages(text);
+            }
+
+            // For errors, extract error text
+            if (isErr) {
+              details.error = getPreview(text, 60);
+            } else {
+              details.preview = getPreview(text);
+            }
+
             return {
               content: result?.content ?? [{ type: "text", text: "No output" }],
-              details: { mcpTool: toolName, isError: result?.isError ?? false },
-              isError: result?.isError ?? false,
+              details,
+              isError: isErr,
             };
           } catch (err: any) {
             return {
               content: [{ type: "text", text: `donsetch MCP call failed: ${err.message}` }],
-              details: { error: err.message, mcpTool: toolName },
+              details: { mcpTool: toolName, isError: true, error: err.message },
               isError: true,
             };
           }
+        },
+
+        renderCall(args: any, _theme: any) {
+          let key = "";
+          if (args?.url) {
+            key = shortUrl(args.url);
+          } else if (args?.query) {
+            key = truncateToWidth(`"${args.query}"`, 50, "\u2026");
+          }
+          return new Text(
+            `${C_AMBER}${icon}${RESET} ${C_CREAM}${toolName}${RESET}  ${C_DIM}${key}${RESET}`,
+            0, 0
+          );
+        },
+
+        renderResult(result: any, opts: any, _theme: any) {
+          if (opts?.isPartial) {
+            return new Text(`${C_AMBER}\u23F3${RESET} ${C_DIM}${toolName} working…${RESET}`, 0, 0);
+          }
+
+          const isErr = result?.isError || result?.details?.isError;
+          const d = result?.details ?? {};
+          const glyph = isErr ? "\u2717" : "\u2713";
+          const color = isErr ? C_RED : C_GREEN;
+
+          // Build metadata string per tool
+          let meta = "";
+          if (toolName === "web_fetch") {
+            const chars = d.chars ?? 0;
+            meta = `${chars.toLocaleString()} chars`;
+          } else if (toolName === "web_search") {
+            const count = d.results ?? 0;
+            meta = `${count} result${count !== 1 ? "s" : ""}`;
+          } else if (toolName === "web_crawl") {
+            const pages = d.pages ?? 0;
+            meta = `${pages} page${pages !== 1 ? "s" : ""}`;
+          }
+
+          // Build line 2: preview or error
+          let line2 = "";
+          if (isErr) {
+            line2 = d.error || "failed";
+          } else if (toolName === "web_search" && d.topResult) {
+            line2 = truncateToWidth(d.topResult, 70, "\u2026");
+          } else if (d.preview) {
+            line2 = d.preview;
+          }
+
+          const line1 = `${color}${glyph}${RESET} ${C_CREAM}${toolName}${RESET} ${C_DIM}\u00B7 ${meta}${RESET}`;
+          const output = line2
+            ? `${line1}\n  ${C_DIM}${line2}${RESET}`
+            : line1;
+
+          return new Text(output, 0, 0);
         },
       });
     }
