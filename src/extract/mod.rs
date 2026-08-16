@@ -284,10 +284,8 @@ pub fn extract(
     // A "text/plain" body that is actually HTML (misconfigured
     // servers, raw git URLs): parse it as HTML, not as literal
     // text full of angle brackets.
-    let plain_is_html = !ct.is_empty()
-        && !ct.contains("html")
-        && !is_pdf
-        && body_starts_with_html(body);
+    let plain_is_html =
+        !ct.is_empty() && !ct.contains("html") && !is_pdf && body_starts_with_html(body);
 
     if !ct.is_empty() && !ct.contains("html") && !is_pdf && !plain_is_html {
         let text = String::from_utf8_lossy(body);
@@ -773,8 +771,7 @@ fn downstream(
     // to pass as non-thin). Zero blocks or a >50KB page with
     // almost nothing are shells at any size. Skeleton markers
     // stay a secondary signal for borderline yields.
-    let thin = (full.len() < 800
-        && (thin_flag || raw_len > 5_000 || blocks_total == 0))
+    let thin = (full.len() < 800 && (thin_flag || raw_len > 5_000 || blocks_total == 0))
         || (thin_flag && has_skeletons && full.len() < 4000);
     if thin {
         full = format!(

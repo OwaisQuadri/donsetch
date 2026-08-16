@@ -105,9 +105,13 @@ fn extract_xml_feed(text: &str, url: &str, opts: &ExtractOptions) -> Option<Extr
             .or_else(|| child_text(*item, &["rsslink"]))
             .or_else(|| child_text(*item, &["guid"]))
             .unwrap_or_default();
-        let date = child_text(*item, &["pubdate", "published", "updated", "dc:date"]).unwrap_or_default();
-        let summary_raw = child_text(*item, &["description", "summary", "content:encoded", "content"])
-            .unwrap_or_default();
+        let date =
+            child_text(*item, &["pubdate", "published", "updated", "dc:date"]).unwrap_or_default();
+        let summary_raw = child_text(
+            *item,
+            &["description", "summary", "content:encoded", "content"],
+        )
+        .unwrap_or_default();
         let summary = clean_html(&summary_raw);
         let summary: String = summary.chars().take(SUMMARY_CAP).collect();
 
@@ -174,7 +178,10 @@ fn extract_json_feed(text: &str, url: &str, opts: &ExtractOptions) -> Option<Ext
 
     let mut shown = 0usize;
     for item in items.iter().take(MAX_ITEMS) {
-        let title = item.get("title").and_then(Value::as_str).unwrap_or_default();
+        let title = item
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let link = item
             .get("url")
             .or_else(|| item.get("external_url"))
@@ -274,11 +281,7 @@ fn child_text(el: scraper::ElementRef<'_>, names: &[&str]) -> Option<String> {
 }
 
 /// Direct-child element matching any tag name → attribute value.
-fn child_attr(
-    el: scraper::ElementRef<'_>,
-    names: &[&str],
-    attr: &str,
-) -> Option<String> {
+fn child_attr(el: scraper::ElementRef<'_>, names: &[&str], attr: &str) -> Option<String> {
     for child in el.children() {
         if let Some(c) = scraper::ElementRef::wrap(child)
             && names.contains(&c.value().name())
@@ -371,8 +374,12 @@ mod tests {
             <pubDate>Sun, 16 Aug 2026 19:00:00 GMT</pubDate>
           </item>
         </channel></rss>"#;
-        let ex = extract(rss.as_bytes(), "https://feeds.example/rss.xml", &ExtractOptions::default())
-            .expect("rss extracts");
+        let ex = extract(
+            rss.as_bytes(),
+            "https://feeds.example/rss.xml",
+            &ExtractOptions::default(),
+        )
+        .expect("rss extracts");
         assert!(ex.markdown.contains("# BBC News"), "{}", ex.markdown);
         assert!(ex.markdown.contains("[Envoy meets Hamas leader]("));
         assert!(ex.markdown.contains("Sun, 16 Aug 2026"));
@@ -398,17 +405,28 @@ mod tests {
             <summary>Atom summary text.</summary>
           </entry>
         </feed>"#;
-        let ex = extract(atom.as_bytes(), "https://example.com/feed.atom", &ExtractOptions::default())
-            .expect("atom extracts");
-        assert!(ex.markdown.contains("[Atom Post](https://example.com/atom-post)"));
+        let ex = extract(
+            atom.as_bytes(),
+            "https://example.com/feed.atom",
+            &ExtractOptions::default(),
+        )
+        .expect("atom extracts");
+        assert!(
+            ex.markdown
+                .contains("[Atom Post](https://example.com/atom-post)")
+        );
         assert!(ex.markdown.contains("2026-08-01"));
     }
 
     #[test]
     fn extracts_json_feed() {
         let jf = r#"{"version":"https://jsonfeed.org/version/1.1","title":"My Feed","home_page_url":"https://example.com","items":[{"id":"1","title":"Item One","url":"https://example.com/1","date_published":"2026-08-15T00:00:00Z","content_text":"Item one body text."}]}"#;
-        let ex = extract(jf.as_bytes(), "https://example.com/feed.json", &ExtractOptions::default())
-            .expect("json feed extracts");
+        let ex = extract(
+            jf.as_bytes(),
+            "https://example.com/feed.json",
+            &ExtractOptions::default(),
+        )
+        .expect("json feed extracts");
         assert!(ex.markdown.contains("# My Feed"));
         assert!(ex.markdown.contains("[Item One](https://example.com/1)"));
         assert!(ex.markdown.contains("Item one body text."));

@@ -265,6 +265,13 @@ impl GhostState {
                         profile.wall_vendor = None;
                         changed = true;
                     }
+                    // Pre-v2.2 warm-stale learning clamped lifetimes
+                    // to as low as 1s (single-failure, unfloored).
+                    // Those observations are garbage — drop them.
+                    if profile.observed_lifetime.is_some_and(|o| o < 120) {
+                        profile.observed_lifetime = None;
+                        changed = true;
+                    }
                 }
                 // Cap renders to RENDER_MAX (old state files may
                 // have hundreds of cached renders).
@@ -534,6 +541,12 @@ impl GhostState {
         p.needs_tier2 = true;
         p.warm_fail_streak = 0;
         p.replay_ok = replay_ok;
+        // A fresh solve restarts the lifetime observation window —
+        // stale pre-fix lifetimes (the 1-second clamp bug) must
+        // not outlive the solve that invalidated them.
+        if p.observed_lifetime.is_some_and(|o| o < 120) {
+            p.observed_lifetime = None;
+        }
         if let Some(v) = vendor {
             p.wall_vendor = Some(v.to_string());
         }
@@ -892,7 +905,10 @@ mod tests {
         s.record_warm_stale("hard.com");
         let p = &s.profiles["hard.com"];
         assert!(!p.cookies.is_empty(), "first failure keeps cookies");
-        assert!(p.observed_lifetime.is_none(), "no learning on first failure");
+        assert!(
+            p.observed_lifetime.is_none(),
+            "no learning on first failure"
+        );
         assert!(p.replay_ok);
         // Still Warm-routable (cookies alive).
         assert!(matches!(s.route_for("hard.com"), RouteDecision::Warm(_)));

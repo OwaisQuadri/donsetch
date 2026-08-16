@@ -794,15 +794,12 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // (JS shell) means the clearance bought nothing. A body with
     // rich visible text that extracts thin is a DonSift gap —
     // killing valid cookies for it is the gallery-page bug.
-    let shell_warm = is_warm
-        && ex_thin
-        && {
-            let o = out.as_ref().unwrap();
-            o.body.len() > 20_000
-                && (crate::detect::walls::visible_text_count(&o.body) as f64
-                    / o.body.len() as f64)
-                    < 0.02
-        };
+    let shell_warm = is_warm && ex_thin && {
+        let o = out.as_ref().unwrap();
+        o.body.len() > 20_000
+            && (crate::detect::walls::visible_text_count(&o.body) as f64 / o.body.len() as f64)
+                < 0.02
+    };
     if shell_warm {
         daemon.state.lock().await.record_warm_stale(&host);
     }
@@ -893,49 +890,49 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
             }
         }
 
-    match ghost_escalate(
-        daemon,
-        &url,
-        &host,
-        &opts,
-        challenge || shell_warm || skip_tier1,
-        shot,
-        &mut trace,
-    )
-    .await
-    {
-        Ok((e, tier2, status, furl)) => {
-            final_ex = Some(e);
-            final_tier = tier2;
-            final_status = status;
-            final_url = furl;
-            // Ghost beat the challenge — the verdict should reflect
-            // the actual content, not the tier-1 wall that was
-            // bypassed. Without this, a successfully rendered page
-            // shows "Challenge(DataDome)" in the verdict field.
-            final_verdict = "ContentOk".to_string();
-        }
-        Err((msg, kind)) => {
-            // A ghost failure on a warm-routed fetch means the
-            // cookies no longer clear the wall — count it as the
-            // second warm failure so the vault clears (first was
-            // the tier-1 challenge that triggered escalation).
-            if is_warm {
-                daemon.state.lock().await.record_warm_stale(&host);
+        match ghost_escalate(
+            daemon,
+            &url,
+            &host,
+            &opts,
+            challenge || shell_warm || skip_tier1,
+            shot,
+            &mut trace,
+        )
+        .await
+        {
+            Ok((e, tier2, status, furl)) => {
+                final_ex = Some(e);
+                final_tier = tier2;
+                final_status = status;
+                final_url = furl;
+                // Ghost beat the challenge — the verdict should reflect
+                // the actual content, not the tier-1 wall that was
+                // bypassed. Without this, a successfully rendered page
+                // shows "Challenge(DataDome)" in the verdict field.
+                final_verdict = "ContentOk".to_string();
             }
-            return tool_error_structured(
-                msg,
-                kind,
-                Some(json!({
-                    "url": url,
-                    "status": final_status,
-                    "verdict": final_verdict,
-                    "next_action": next_action_for(out.as_ref().map(|o| o.verdict), final_status, kind),
-                    "escalation": trace.value(),
-                })),
-            );
+            Err((msg, kind)) => {
+                // A ghost failure on a warm-routed fetch means the
+                // cookies no longer clear the wall — count it as the
+                // second warm failure so the vault clears (first was
+                // the tier-1 challenge that triggered escalation).
+                if is_warm {
+                    daemon.state.lock().await.record_warm_stale(&host);
+                }
+                return tool_error_structured(
+                    msg,
+                    kind,
+                    Some(json!({
+                        "url": url,
+                        "status": final_status,
+                        "verdict": final_verdict,
+                        "next_action": next_action_for(out.as_ref().map(|o| o.verdict), final_status, kind),
+                        "escalation": trace.value(),
+                    })),
+                );
+            }
         }
-    }
     }
 
     let Some(ex) = final_ex else {
@@ -1096,10 +1093,7 @@ async fn ghost_escalate(
         )
     {
         let kind = verdict_kind(r.verdict, r.status);
-        return Err((
-            verdict_error(r.verdict, r.status, &r.url),
-            kind,
-        ));
+        return Err((verdict_error(r.verdict, r.status, &r.url), kind));
     }
 
     // Candidates: retry bytes (cheap path) and the ghost's own
@@ -1431,12 +1425,11 @@ async fn fetch_with_actions(
     {
         daemon.fetcher.import_cookies(&cookies).await;
         if page.vendor.is_some() {
-            daemon.state.lock().await.record_solved(
-                host,
-                &cookies,
-                page.vendor.as_deref(),
-                false,
-            );
+            daemon
+                .state
+                .lock()
+                .await
+                .record_solved(host, &cookies, page.vendor.as_deref(), false);
         }
     }
 

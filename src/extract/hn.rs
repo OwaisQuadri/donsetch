@@ -51,12 +51,8 @@ pub fn extract(html: &str, url: &str, opts: &ExtractOptions) -> Option<Extracted
 /// Comment permalink: `table.fatitem` with one comment (comhead +
 /// div.commtext), plus "on: <story>" context. 2026 HN shape.
 fn extract_permalink(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Extracted> {
-    let fat = doc
-        .select(&Selector::parse("table.fatitem").ok()?)
-        .next()?;
-    let commtext = fat
-        .select(&Selector::parse("div.commtext").ok()?)
-        .next()?;
+    let fat = doc.select(&Selector::parse("table.fatitem").ok()?).next()?;
+    let commtext = fat.select(&Selector::parse("div.commtext").ok()?).next()?;
     let text = inline::markdown(commtext, url, opts).0;
     if text.trim().is_empty() {
         return None;
@@ -140,6 +136,7 @@ fn extract_permalink(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Ext
     })
 }
 
+#[derive(Clone)]
 struct Comment {
     depth: usize,
     author: String,
@@ -155,7 +152,12 @@ fn extract_thread(
 ) -> Option<Extracted> {
     // ── Story header ──
     let title = doc
-        .select(&Selector::parse("tr.athing.submission td.title a.title-link, tr.athing td.title:last-child a").ok()?)
+        .select(
+            &Selector::parse(
+                "tr.athing.submission td.title a.title-link, tr.athing td.title:last-child a",
+            )
+            .ok()?,
+        )
         .next()
         .map(|a| inline::plain(a))
         .filter(|t| !t.is_empty())
@@ -179,9 +181,7 @@ fn extract_thread(
         .unwrap_or_else(|| url.to_string());
 
     // Subtext: points · author · age · comment count.
-    let subtext = doc
-        .select(&Selector::parse("td.subtext").ok()?)
-        .next();
+    let subtext = doc.select(&Selector::parse("td.subtext").ok()?).next();
     let points = subtext
         .and_then(|s| s.select(&Selector::parse("span.score").ok()?).next())
         .map(|p| inline::plain(p))
@@ -284,6 +284,38 @@ fn extract_thread(
         });
     }
 
+    // Focus filter: a 700-comment thread with a focus query must
+    // surface the RELEVANT comments, not the first N. Keep comments
+    // matching any query term; no matches → full thread + notice
+    // (same contract as the generic pipeline).
+    let mut focus_missed = false;
+    if let Some(q) = opts.focus.as_ref().filter(|q| !q.trim().is_empty()) {
+        let terms: Vec<String> = q
+            .to_lowercase()
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        let matched: Vec<Comment> = parsed_comments
+            .iter()
+            .filter(|c| {
+                let hay = c.text.to_lowercase();
+                terms.iter().any(|t| hay.contains(t))
+            })
+            .cloned()
+            .collect();
+        if matched.is_empty() {
+            focus_missed = true;
+        } else {
+            let kept = matched.len();
+            md.push_str(&format!(
+                "*(focus \"{}\": showing {kept} of {} comments)*\n\n",
+                q,
+                parsed_comments.len()
+            ));
+            parsed_comments = matched;
+        }
+    }
+
     if !parsed_comments.is_empty() {
         md.push_str("## Discussion\n\n");
         for c in &parsed_comments {
@@ -309,6 +341,10 @@ fn extract_thread(
             "*(thread truncated at {MAX_COMMENTS} comments of {})*\n",
             comments.len()
         ));
+    }
+
+    if focus_missed && let Some(q) = &opts.focus {
+        md = format!("*(focus \"{q}\": no matches — showing full thread)*\n\n{md}");
     }
 
     let total = md.len();
@@ -378,9 +414,17 @@ mod tests {
 
     #[test]
     fn extracts_full_comment_text() {
-        let ex = extract(THREAD, "https://news.ycombinator.com/item?id=123", &ExtractOptions::default())
-            .expect("thread extracts");
-        assert!(ex.markdown.contains("end of this sentence"), "{}", ex.markdown);
+        let ex = extract(
+            THREAD,
+            "https://news.ycombinator.com/item?id=123",
+            &ExtractOptions::default(),
+        )
+        .expect("thread extracts");
+        assert!(
+            ex.markdown.contains("end of this sentence"),
+            "{}",
+            ex.markdown
+        );
         // The 120-char truncation would have cut here:
         assert!(ex.markdown.contains("destroyed it entirely"));
         assert!(ex.markdown.contains("**bob** · 5 hours ago"));
@@ -392,16 +436,24 @@ mod tests {
 
     #[test]
     fn reply_depth_is_indented() {
-        let ex = extract(THREAD, "https://news.ycombinator.com/item?id=123", &ExtractOptions::default())
-            .unwrap();
+        let ex = extract(
+            THREAD,
+            "https://news.ycombinator.com/item?id=123",
+            &ExtractOptions::default(),
+        )
+        .unwrap();
         // Carol is at depth 1 → two-space indent on her header.
         assert!(ex.markdown.contains("\n  **carol**"), "{}", ex.markdown);
     }
 
     #[test]
     fn story_header_rendered() {
-        let ex = extract(THREAD, "https://news.ycombinator.com/item?id=123", &ExtractOptions::default())
-            .unwrap();
+        let ex = extract(
+            THREAD,
+            "https://news.ycombinator.com/item?id=123",
+            &ExtractOptions::default(),
+        )
+        .unwrap();
         assert!(ex.markdown.contains("# Example Discussion Post"));
         assert!(ex.markdown.contains("542 points"));
         assert!(ex.markdown.contains("https://example.com/post"));
@@ -409,18 +461,21 @@ mod tests {
 
     #[test]
     fn non_item_page_falls_through() {
-        assert!(extract(
-            THREAD,
-            "https://news.ycombinator.com/",
-            &ExtractOptions::default()
-        )
-        .is_none());
-        assert!(extract(
-            THREAD,
-            "https://example.com/item?id=1",
-            &ExtractOptions::default()
-        )
-        .is_none());
+        assert!(
+            extract(
+                THREAD,
+                "https://news.ycombinator.com/",
+                &ExtractOptions::default()
+            )
+            .is_none()
+        );
+        assert!(
+            extract(
+                THREAD,
+                "https://example.com/item?id=1",
+                &ExtractOptions::default()
+            )
+            .is_none()
+        );
     }
 }
-

@@ -519,10 +519,7 @@ fn is_prose_table(el: ElementRef<'_>) -> bool {
     let mut max_cell = 0usize;
     let mut rows = 0usize;
     let mut max_cols = 0usize;
-    for tr in el
-        .select(&scraper::Selector::parse("tr").unwrap())
-        .take(40)
-    {
+    for tr in el.select(&scraper::Selector::parse("tr").unwrap()).take(40) {
         rows += 1;
         let mut cols = 0usize;
         for cell in tr.select(&scraper::Selector::parse("td,th").unwrap()) {

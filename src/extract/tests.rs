@@ -1695,7 +1695,11 @@ fn wiki_math_inline_recovered_live_shape() {
         &crate::extract::ExtractOptions::default(),
     )
     .unwrap();
-    assert!(ex.markdown.contains("$"), "no inline math rendered: {}", ex.markdown);
+    assert!(
+        ex.markdown.contains("$"),
+        "no inline math rendered: {}",
+        ex.markdown
+    );
     assert!(ex.markdown.contains("softmax"), "{}", ex.markdown);
     assert!(ex.markdown.contains("d_{k}"), "{}", ex.markdown);
 }
@@ -1711,8 +1715,13 @@ fn hn_extractor_fires_on_live_thread_shape() {
         )
         .unwrap();
         if !ex.markdown.contains("## Discussion") {
-            panic!("PIPELINE MISMATCH. first 300: {}\n\ntotal={} blocks={} kind={:?}", &ex.markdown[..300.min(ex.markdown.len())], ex.total_chars, ex.blocks_total, ex.content_kind);
+            panic!(
+                "PIPELINE MISMATCH. first 300: {}\n\ntotal={} blocks={} kind={:?}",
+                &ex.markdown[..300.min(ex.markdown.len())],
+                ex.total_chars,
+                ex.blocks_total,
+                ex.content_kind
+            );
         }
     }
 }
-

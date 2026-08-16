@@ -90,7 +90,10 @@ fn serialize(el: ElementRef<'_>) -> String {
             if kids.len() == 2 {
                 format!("({})/({})", serialize(kids[0]), serialize(kids[1]))
             } else {
-                kids.iter().map(|k| serialize(*k)).collect::<Vec<_>>().join(" ")
+                kids.iter()
+                    .map(|k| serialize(*k))
+                    .collect::<Vec<_>>()
+                    .join(" ")
             }
         }
         "msqrt" => {
@@ -161,10 +164,7 @@ fn serialize_inline_of(el: ElementRef<'_>) -> String {
 /// positional children: base, sub, sup.
 fn serialize_scripted(el: ElementRef<'_>, name: &str) -> String {
     let kids = element_children(el);
-    let base = kids
-        .first()
-        .map(|k| serialize(*k))
-        .unwrap_or_default();
+    let base = kids.first().map(|k| serialize(*k)).unwrap_or_default();
     let (sub, sup) = match name {
         "msub" => (kids.get(1).map(|k| serialize(*k)), None),
         "msup" => (None, kids.get(1).map(|k| serialize(*k))),
@@ -193,9 +193,7 @@ fn serialize_scripted(el: ElementRef<'_>, name: &str) -> String {
 
 /// Direct element children (skipping whitespace text nodes).
 fn element_children(el: ElementRef<'_>) -> Vec<ElementRef<'_>> {
-    el.children()
-        .filter_map(ElementRef::wrap)
-        .collect()
+    el.children().filter_map(ElementRef::wrap).collect()
 }
 
 /// All descendant text, whitespace-collapsed (fallback for
