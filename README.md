@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/herobanner.png" width="640" style="border-radius: 12px" alt="DonSeTch — The web, for AI agents">
+<img src="assets/herobanner.png" width="640" alt="DonSeTch — The web, for AI agents">
 
 **$0. No keys, no accounts. Built from scratch in Rust.**
 
@@ -320,7 +320,7 @@ When warm cookies go stale, the system learns the real lifetime: `observed_lifet
 
 <div align="center">
 
-<img src="assets/owlsearch.png" style="border-radius: 12px" alt="DonSeTch Search">
+<img src="assets/owlsearch.png" alt="DonSeTch Search">
 
 </div>
 
@@ -366,7 +366,7 @@ Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**. Key ro
 
 <div align="center">
 
-<img src="assets/fetch.png" style="border-radius: 12px" alt="DonSeTch Fetch">
+<img src="assets/fetch.png" alt="DonSeTch Fetch">
 
 </div>
 
@@ -402,7 +402,7 @@ Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**. Key ro
 
 <div align="center">
 
-<img src="assets/crawl.png" style="border-radius: 12px" alt="DonSeTch Crawl">
+<img src="assets/crawl.png" alt="DonSeTch Crawl">
 
 </div>
 
