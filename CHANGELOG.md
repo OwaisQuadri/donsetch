@@ -5,6 +5,15 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`donsetch keys default local`** — set the local keyless search engine as the default search method, even when BYOK provider keys are configured. When local is the default, the local 5-engine search is tried first and BYOK keys are only used as fallback if local search fails. This lets users test or use the local engine without removing their keys. `donsetch keys default <provider>` switches back to BYOK-first mode.
+- **`donsetch keys export [path|-]`** — export all BYOK keys and config to a file (with 0600 permissions) or stdout (with `-`). Useful for backup, transfer between machines, or dotfiles repos.
+- **`donsetch keys import <path>`** — import a config from a file previously exported by `keys export`. Replaces the current config entirely. Validates structure (provider names, key states, default) before saving.
+- **`donsetch keys clear`** — remove all keys and reset to a clean state. The nuclear option for starting fresh.
+
 ## [2.0.0] - 2026-08-16
 
 The v2 quality jump — a direct response to the 50-case

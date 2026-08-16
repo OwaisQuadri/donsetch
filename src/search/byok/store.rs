@@ -152,6 +152,45 @@ impl ByokConfig {
         self.providers.iter().any(|p| !p.keys.is_empty())
     }
 
+    /// Serialize to JSON string (for export).
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".into())
+    }
+
+    /// Deserialize from JSON (for import). Validates structure.
+    pub fn from_json(json: &str) -> Result<Self, String> {
+        let cfg: ByokConfig = serde_json::from_str(json)
+            .map_err(|e| format!("invalid config: {e}"))?
+        ;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    /// Validate: provider names must be known, keys non-empty,
+    /// default must be "local" or a configured provider.
+    pub fn validate(&self) -> Result<(), String> {
+        for p in &self.providers {
+            if !PROVIDERS.contains(&p.name.as_str()) {
+                return Err(format!("unknown provider: {}", p.name));
+            }
+            for k in &p.keys {
+                if k.key.trim().is_empty() {
+                    return Err(format!("provider {} has an empty key", p.name));
+                }
+            }
+        }
+        if !self.default.is_empty()
+            && self.default != "local"
+            && !self.providers.iter().any(|p| p.name == self.default)
+        {
+            return Err(format!(
+                "default '{}' is not a configured provider",
+                self.default
+            ));
+        }
+        Ok(())
+    }
+
     /// Add a key to a provider. Creates the provider if new.
     /// If this is the first key ever, sets it as default.
     pub fn add_key(&mut self, provider: &str, key: &str) {
@@ -209,14 +248,26 @@ impl ByokConfig {
         removed
     }
 
-    /// Set the default provider. No-op if provider not configured.
+    /// Set the default search method. Accepts "local" (use the
+    /// keyless engine first, BYOK as fallback) or a configured
+    /// provider name. Returns false only for an unknown provider.
     pub fn set_default(&mut self, provider: &str) -> bool {
+        if provider == "local" {
+            self.default = "local".to_string();
+            return true;
+        }
         if self.providers.iter().any(|p| p.name == provider) {
             self.default = provider.to_string();
             true
         } else {
             false
         }
+    }
+
+    /// True if "local" is the default search method (local-first,
+    /// BYOK fallback). When false, BYOK is tried first.
+    pub fn is_local_default(&self) -> bool {
+        self.default == "local"
     }
 
     /// Reset key states to active. If provider is None, resets all.
@@ -359,6 +410,11 @@ impl ByokStore {
         self.config.lock().unwrap().is_configured()
     }
 
+    /// True if "local" is the default search method.
+    pub fn is_local_default(&self) -> bool {
+        self.config.lock().unwrap().is_local_default()
+    }
+
     pub fn pick_key_skipping(
         &self,
         skip: &std::collections::HashSet<(String, String)>,
@@ -410,6 +466,21 @@ pub fn render_list(cfg: &ByokConfig) {
 
     cli::print_title("BYOK Search Providers");
     println!();
+
+    // Show "local" as the active default when set.
+    if cfg.default == "local" {
+        println!(
+            "  {} {} {}",
+            cli::green("\u{25C6}"),
+            cli::bold("local"),
+            cli::dim("(default)")
+        );
+        println!(
+            "    {} keyless 5-engine search (local-first, BYOK fallback)",
+            cli::dim("")
+        );
+        println!();
+    }
 
     for p in &cfg.providers {
         let is_default = p.name == cfg.default;
@@ -619,5 +690,148 @@ mod tests {
         cfg.reset_states(Some("tavily"));
         assert_eq!(cfg.providers[0].keys[0].state, KeyState::Active);
         assert_eq!(cfg.providers[1].keys[0].state, KeyState::Invalid);
+    }
+
+    // ── local-default tests ──────────────────────────────
+
+    #[test]
+    fn set_default_local_without_keys() {
+        let mut cfg = ByokConfig::empty();
+        assert!(cfg.set_default("local"));
+        assert_eq!(cfg.default, "local");
+        assert!(cfg.is_local_default());
+    }
+
+    #[test]
+    fn set_default_local_with_keys() {
+        let mut cfg = ByokConfig::empty();
+        cfg.add_key("tavily", "tvly-key1");
+        assert_eq!(cfg.default, "tavily");
+        assert!(cfg.set_default("local"));
+        assert_eq!(cfg.default, "local");
+        assert!(cfg.is_local_default());
+    }
+
+    #[test]
+    fn set_default_local_back_to_provider() {
+        let mut cfg = ByokConfig::empty();
+        cfg.add_key("tavily", "tvly-key1");
+        cfg.set_default("local");
+        assert!(cfg.is_local_default());
+        assert!(cfg.set_default("tavily"));
+        assert!(!cfg.is_local_default());
+        assert_eq!(cfg.default, "tavily");
+    }
+
+    #[test]
+    fn add_key_preserves_local_default() {
+        let mut cfg = ByokConfig::empty();
+        cfg.set_default("local");
+        cfg.add_key("tavily", "tvly-key1");
+        // Default should stay "local", not switch to tavily.
+        assert_eq!(cfg.default, "local");
+        assert!(cfg.is_local_default());
+        assert_eq!(cfg.providers.len(), 1);
+    }
+
+    #[test]
+    fn pick_key_skipping_works_with_local_default() {
+        let mut cfg = ByokConfig::empty();
+        cfg.add_key("tavily", "tvly-key1");
+        cfg.add_key("exa", "exa-key1");
+        cfg.set_default("local");
+        // pick_key_skipping should still find keys — "local" is
+        // not a provider, so it's skipped and providers are tried
+        // in config order.
+        let skip = std::collections::HashSet::new();
+        let (provider, _) = cfg.pick_key_skipping(&skip).unwrap();
+        // First in config order (not "local" since it's not a provider).
+        assert_eq!(provider, "tavily");
+    }
+
+    #[test]
+    fn remove_keys_preserves_local_default() {
+        let mut cfg = ByokConfig::empty();
+        cfg.add_key("tavily", "tvly-key1");
+        cfg.add_key("exa", "exa-key1");
+        cfg.set_default("local");
+        // Remove exa — default should stay "local".
+        cfg.remove_keys("exa", None);
+        assert_eq!(cfg.default, "local");
+        assert!(cfg.is_local_default());
+        assert_eq!(cfg.providers.len(), 1);
+    }
+
+    #[test]
+    fn remove_all_keys_with_local_default() {
+        let mut cfg = ByokConfig::empty();
+        cfg.add_key("tavily", "tvly-key1");
+        cfg.set_default("local");
+        cfg.remove_keys("tavily", None);
+        // Default stays "local" (not reset to empty) because
+        // the removed provider wasn't the default.
+        assert_eq!(cfg.default, "local");
+        assert!(!cfg.is_configured());
+    }
+
+    #[test]
+    fn is_local_default_false_for_provider() {
+        let mut cfg = ByokConfig::empty();
+        cfg.add_key("tavily", "tvly-key1");
+        assert!(!cfg.is_local_default());
+    }
+
+    #[test]
+    fn is_local_default_false_for_empty() {
+        let cfg = ByokConfig::empty();
+        assert!(!cfg.is_local_default());
+    }
+
+    // ── export/import tests ──────────────────────────────
+
+    #[test]
+    fn to_json_round_trip() {
+        let mut cfg = ByokConfig::empty();
+        cfg.add_key("tavily", "tvly-key1");
+        cfg.add_key("exa", "exa-key1");
+        cfg.set_default("local");
+        let json = cfg.to_json();
+        let restored = ByokConfig::from_json(&json).unwrap();
+        assert_eq!(restored.default, "local");
+        assert_eq!(restored.providers.len(), 2);
+        assert_eq!(restored.providers[0].name, "tavily");
+        assert_eq!(restored.providers[0].keys[0].key, "tvly-key1");
+        assert_eq!(restored.providers[1].name, "exa");
+    }
+
+    #[test]
+    fn from_json_rejects_unknown_provider() {
+        let json = r#"{"default":"","providers":[{"name":"unknown","keys":[{"key":"x","state":"active","ts":0}]}]}"#;
+        assert!(ByokConfig::from_json(json).is_err());
+    }
+
+    #[test]
+    fn from_json_rejects_invalid_default() {
+        let json = r#"{"default":"ghost","providers":[{"name":"tavily","keys":[{"key":"x","state":"active","ts":0}]}]}"#;
+        assert!(ByokConfig::from_json(json).is_err());
+    }
+
+    #[test]
+    fn from_json_accepts_local_default() {
+        let json = r#"{"default":"local","providers":[{"name":"tavily","keys":[{"key":"x","state":"active","ts":0}]}]}"#;
+        let cfg = ByokConfig::from_json(json).unwrap();
+        assert!(cfg.is_local_default());
+    }
+
+    #[test]
+    fn from_json_rejects_empty_key() {
+        let json = r#"{"default":"","providers":[{"name":"tavily","keys":[{"key":"","state":"active","ts":0}]}]}"#;
+        assert!(ByokConfig::from_json(json).is_err());
+    }
+
+    #[test]
+    fn from_json_rejects_malformed() {
+        assert!(ByokConfig::from_json("not json").is_err());
+        assert!(ByokConfig::from_json("{}").is_err());
     }
 }

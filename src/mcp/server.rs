@@ -1477,10 +1477,19 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // all providers are exhausted (rate-limited, credits
     // depleted, invalid keys).
     //
+    // If "local" is set as the default (donsetch keys default
+    // local), the order is flipped: local search is tried
+    // first, BYOK is the fallback. This lets users test the
+    // local engine without removing their keys.
+    //
     // Reload from disk first — picks up keys added/removed
     // via CLI while the daemon was running.
     daemon.byok.reload();
-    if daemon.byok.is_configured() {
+    let byok_configured = daemon.byok.is_configured();
+    let local_first = daemon.byok.is_local_default();
+
+    // BYOK-first mode: try providers, fall back to local.
+    if byok_configured && !local_first {
         match daemon.byok.search(&query, max, intent).await {
             Ok(out) => {
                 let md = search::render_markdown(&out, &query);
@@ -1499,6 +1508,7 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         }
     }
 
+    // Local search (primary in local-first mode, fallback in BYOK-first).
     match daemon.searcher.search(&query, max, intent).await {
         Ok(out) => {
             let md = search::render_markdown(&out, &query);
@@ -1508,7 +1518,33 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 "structuredContent": meta,
             })
         }
-        Err(e) => tool_error_kind(format!("search: {e}"), "transient"),
+        Err(e) => {
+            // Local failed — if BYOK is configured and we're in
+            // local-first mode, try BYOK as a last resort.
+            if byok_configured && local_first {
+                if std::env::var_os("DONSEEK_DEBUG").is_some() {
+                    eprintln!("[byok] local search failed, trying BYOK fallback: {e}");
+                }
+                match daemon.byok.search(&query, max, intent).await {
+                    Ok(out) => {
+                        let md = search::render_markdown(&out, &query);
+                        let meta = search::render_meta(&out);
+                        json!({
+                            "content": [{ "type": "text", "text": md }],
+                            "structuredContent": meta,
+                        })
+                    }
+                    Err(e2) => {
+                        tool_error_kind(
+                            format!("search: local ({e}); byok ({e2})"),
+                            "transient",
+                        )
+                    }
+                }
+            } else {
+                tool_error_kind(format!("search: {e}"), "transient")
+            }
+        }
     }
 }
 

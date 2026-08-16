@@ -114,6 +114,11 @@ impl ByokSearcher {
         self.store.is_configured()
     }
 
+    /// True if "local" is the default search method.
+    pub fn is_local_default(&self) -> bool {
+        self.store.is_local_default()
+    }
+
     /// Reload config from disk (picks up CLI key changes live).
     pub fn reload(&self) {
         self.store.reload();
