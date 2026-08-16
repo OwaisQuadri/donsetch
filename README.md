@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🌐 DonSeTch
+<img src="assets/Logo.png" width="120" height="120" alt="DonSeTch">
+
+# DonSeTch
 
 **Give your AI agent the web. $0. No keys, no accounts. Built from scratch in Rust.**
 
@@ -20,6 +22,14 @@ One binary · Chrome's own TLS · headless browser escalation · zero Python
 [![CI](https://img.shields.io/github/actions/workflow/status/dondai44423/donsetch/ci.yml?label=CI&style=flat-square)](https://github.com/dondai44423/donsetch/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/donsetch?color=cb3837&style=flat-square)](https://www.npmjs.com/package/donsetch)
 [![Stars](https://img.shields.io/github/stars/dondai44423/donsetch?color=ff9f43&style=flat-square)](https://github.com/dondai44423/donsetch)
+
+</div>
+
+<br>
+
+<div align="center">
+
+<img src="assets/herobanner.png" width="800" alt="DonSeTch — The web, for AI agents">
 
 </div>
 
@@ -160,7 +170,9 @@ donsetch update
 | `search <query>` | Web search — 10+ keyless engines merged + reranked, or your API keys. |
 | `crawl <url>` | Crawl a site into markdown. Sitemap-aware, focus-ranked, resumable. |
 | `mcp` | Start MCP server (JSON-RPC on stdio). |
-| `keys` | Manage BYOK search provider keys (`add`, `remove`, `list`, `default`, `reset`). |
+| `keys` | Manage BYOK search provider keys (`add`, `remove`, `list`, `default`, `reset`, `export`, `import`, `clear`). |
+| `proxy` | Manage proxy configuration (`add`, `remove`, `list`, `check`, `clear`, `test`, `import`, `export`). |
+| `status` | Quick status overview — version, keys, proxies, cache, health. |
 | `doctor` | Health check with auto-fix. |
 | `update` | Self-update from GitHub Releases. |
 | `rollback` | Revert to previous version. |
@@ -312,6 +324,12 @@ When warm cookies go stale, the system learns the real lifetime: `observed_lifet
 
 ---
 
+<div align="center">
+
+<img src="assets/owlsearch.png" width="700" alt="DonSeTch Search">
+
+</div>
+
 ## 🔎 Keyless search
 
 No API key, no account, no third-party service. 10+ keyless backends in parallel on your machine, merged, deduped, ranked.
@@ -333,9 +351,30 @@ donsetch keys add serper ...
 donsetch keys add exa ...
 ```
 
+Prefer the local engine but want keys as fallback? Set local as default:
+
+```bash
+donsetch keys default local       # local first, BYOK fallback
+donsetch keys default exa          # BYOK first, local fallback
+```
+
+Back up, transfer, or wipe your keys:
+
+```bash
+donsetch keys export ~/donsetch-keys.json
+donsetch keys import ~/donsetch-keys.json
+donsetch keys clear
+```
+
 Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**. Key rotation, rate-limit cooldown, credit-depletion detection, and local fallback all automatic.
 
 ---
+
+<div align="center">
+
+<img src="assets/fetch.png" width="700" alt="DonSeTch Fetch">
+
+</div>
 
 ## 🌐 Fetch
 
@@ -366,6 +405,12 @@ Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**. Key ro
 </details>
 
 ---
+
+<div align="center">
+
+<img src="assets/crawl.png" width="700" alt="DonSeTch Crawl">
+
+</div>
 
 ## 🕷️ Crawl
 
@@ -436,7 +481,7 @@ Every layer built in Rust. No dependency on existing OSS web tooling.
 | 📄 **DonSheet** | PDF extraction — PDFium FFI, pixel-truth fusion, OCR arbitration cascade, forms | `src/pdf/` |
 | 🔌 **MCP daemon** | stdio server — JSON-RPC 2.0, 3 tools | `src/mcp/` |
 
-**388 tests. Zero clippy warnings.** `cargo clippy --release -- -Dwarnings` is the law.
+**442 tests. Zero clippy warnings.** `cargo clippy --release -- -Dwarnings` is the law.
 
 ---
 
