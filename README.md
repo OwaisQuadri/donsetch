@@ -57,6 +57,7 @@ Works with every MCP client: Claude Code, Cursor, OpenCode, Pi, anything that sp
 | 🔑 **Keyless search** | 10+ backends in parallel, fused by cross-engine consensus. No API keys, no accounts, no billing. $0 forever. BYOK optional. |
 | 📄 **Pixel-fusion PDF** | Glyphs + rendered pixels from the same stream, fused deterministically. No hallucination. Per-region trust audit. Scanned PDFs auto-OCR'd. |
 | 🧬 **Built from scratch** | Own HTTP/2 (HPACK, flow control), own extraction engine, own PDF parser, own search aggregator, own crawl engine. Zero dependency on existing OSS web tooling. |
+| 🪶 **2,363 tokens** | Three tools, 2,363 tokens total in the MCP context — measured with tiktoken (GPT-4o tokenizer). No bloat, no redundancy, every token earns its place. |
 
 ---
 
