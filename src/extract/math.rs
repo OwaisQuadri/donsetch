@@ -53,8 +53,10 @@ pub fn latex(el: ElementRef<'_>) -> String {
 /// to the clean formula the agent actually wants to read.
 fn strip_displaystyle(s: &str) -> String {
     let mut t = s.trim();
-    if t.starts_with("{\\displaystyle ") && t.ends_with('}') {
-        t = t["{\\displaystyle ".len()..].trim_end_matches('}').trim();
+    if let Some(rest) = t.strip_prefix("{\\displaystyle ") {
+        // Strip exactly ONE closing brace — trim_end_matches would
+        // eat inner braces too ("W_{Q}}" → "W_{Q").
+        t = rest.strip_suffix('}').unwrap_or(rest).trim();
     } else if let Some(rest) = t.strip_prefix("\\displaystyle ") {
         t = rest.trim();
     }
@@ -212,6 +214,17 @@ mod tests {
         doc.select(&scraper::Selector::parse("math").unwrap())
             .next()
             .expect("math element")
+    }
+
+    #[test]
+    fn displaystyle_wrapper_strips_exactly_one_brace() {
+        // "{\displaystyle W_{Q}}" → "W_{Q}" — never "W_{Q" (the
+        // trim_end_matches bug ate inner braces).
+        let el = math_el(r#"<math alttext="{\displaystyle W_{Q}}"><mi>x</mi></math>"#);
+        assert_eq!(latex(el), "W_{Q}");
+        // Content whose last token legitimately ends in braces:
+        let el2 = math_el(r#"<math alttext="{\displaystyle W_{Q}+W_{K}}"><mi>x</mi></math>"#);
+        assert_eq!(latex(el2), "W_{Q}+W_{K}");
     }
 
     #[test]

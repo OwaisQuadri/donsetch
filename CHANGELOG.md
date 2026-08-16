@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Walls never enter the revalidation cache** — a challenge interstitial carrying an ETag was re-served fresh as content on later fetches; fresh-cache hits also get honest verdicts now instead of hardcoded `ContentOk`.
 - **Warm cookies are no longer killed by extraction gaps** — a warm `ContentOk` that extracts thin is only treated as a shell when the body is big with almost no visible text (real shell evidence); rich-visible-text pages with thin extraction keep their valid cookies.
 - **Turnstile clicks retry** — the checkbox iframe renders late and repositions; the old one-shot click usually fired before it attached. Up to 3 attempts, re-finding geometry each time. (Interactive captchas remain an honest dead end by design.)
+- **Section slices no longer trigger ghost escalation** — a small `section=` result on a huge page computed as "thin" (shell) and escalated to the browser, which returned the FULL page instead of the requested section. A matched section is intentionally small; shell detection is skipped for it.
+- **Math brace fidelity** — the `\displaystyle` wrapper strip removed exactly one closing brace per formula (`W_{Q}` stayed intact; the previous `trim_end_matches` ate inner braces).
+- **HN threads honor `focus`** — relevant comments surface on 700-comment threads (with the standard no-match notice); previously the dedicated extractor ignored the query and returned the first N comments.
+- **Legacy lifetime de-poisoning** — pre-fix `observed_lifetime` values below the 120s floor are dropped at load AND on each new solve; stackoverflow (clamped to 1s by the old bug) rides warm tier 1 again.
 
 ### Added
 

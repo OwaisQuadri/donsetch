@@ -694,6 +694,7 @@ fn downstream(
 
     // Section scope: keep blocks under a matching heading.
     let mut section_missed = false;
+    let mut section_hit = false;
     if let Some(sec) = &opts.section {
         let needle = sec.to_lowercase();
         let mut in_section = false;
@@ -716,6 +717,7 @@ fn downstream(
             }
         }
         if !kept_idx.is_empty() {
+            section_hit = true;
             all_blocks = kept_idx
                 .into_iter()
                 .map(|i| all_blocks[i].clone())
@@ -771,8 +773,13 @@ fn downstream(
     // to pass as non-thin). Zero blocks or a >50KB page with
     // almost nothing are shells at any size. Skeleton markers
     // stay a secondary signal for borderline yields.
-    let thin = (full.len() < 800 && (thin_flag || raw_len > 5_000 || blocks_total == 0))
-        || (thin_flag && has_skeletons && full.len() < 4000);
+    // A matched section is intentionally small — the agent asked for
+    // exactly this slice. Shell detection must not fire on it (a
+    // small section on a 400KB page used to escalate to ghost and
+    // return the full page instead of the section).
+    let thin = !section_hit
+        && ((full.len() < 800 && (thin_flag || raw_len > 5_000 || blocks_total == 0))
+            || (thin_flag && has_skeletons && full.len() < 4000));
     if thin {
         full = format!(
             "*[note: large page rendered almost no content — likely JS-rendered (SPA). Content below may be a shell; use tier=auto to render with a real browser.]*\n\n{full}"
