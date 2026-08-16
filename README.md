@@ -16,15 +16,14 @@ Works with **Claude Code**, **Cursor**, **OpenCode**, **Pi**, **Windsurf**, and 
 
 <div align="center">
 
-[![Release](https://img.shields.io/github/v/release/dondai44423/donsetch?color=ffb200&label=release&style=for-the-badge)](https://github.com/dondai44423/donsetch/releases)
-[![npm](https://img.shields.io/npm/v/donsetch?color=cb3837&label=npm&style=for-the-badge)](https://www.npmjs.com/package/donsetch)
-
-[![CI](https://img.shields.io/github/actions/workflow/status/dondai44423/donsetch/ci.yml?label=CI&style=for-the-badge)](https://github.com/dondai44423/donsetch/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-AGPL%203.0-00d4aa?style=for-the-badge)](LICENSE)
-
-[![Rust](https://img.shields.io/badge/Rust-edition%202024-ce422b?style=for-the-badge)](https://www.rust-lang.org)
-[![Stars](https://img.shields.io/github/stars/dondai44423/donsetch?color=ff9f43&style=for-the-badge)](https://github.com/dondai44423/donsetch)
-[![Tests](https://img.shields.io/badge/tests-442%20passed-00d4aa?style=for-the-badge)](#)
+[![npm](https://img.shields.io/npm/v/donsetch?color=cb3837&logo=npm)](https://www.npmjs.com/package/donsetch)
+[![npm downloads](https://img.shields.io/npm/dm/donsetch?color=cb3837&logo=npm&label=downloads)](https://www.npmjs.com/package/donsetch)
+[![GitHub stars](https://img.shields.io/github/stars/dondai44423/donsetch?style=flat&logo=github&color=e3b341)](https://github.com/dondai44423/donsetch/stargazers)
+[![CI](https://img.shields.io/github/actions/workflow/status/dondai44423/donsetch/ci.yml?branch=master&logo=github&label=CI)](https://github.com/dondai44423/donsetch/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/badge/Rust-edition%202024-ce422b?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![MCP](https://img.shields.io/badge/MCP-server-7c3aed?logo=modelcontextprotocol&logoColor=white)](https://modelcontextprotocol.io)
+[![License](https://img.shields.io/badge/license-AGPL%203.0-2563eb)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-442%20passed-00d4aa)](#)
 
 </div>
 
