@@ -13,6 +13,7 @@
 //! 10 min frozen. The persistent profile dir keeps cookie
 //! warmth across restarts.
 
+pub mod actions;
 pub mod cache;
 pub mod cdp;
 pub mod manager;
@@ -595,6 +596,388 @@ impl Ghost {
         }
         Ok(())
     }
+
+    /// Move the mouse to (x, y) along the human path WITHOUT
+    /// pressing — hover. Reuses the click pre-move geometry.
+    pub async fn hover(&self, x: f64, y: f64) -> Result<(), FetchError> {
+        let mut rng = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let mut rand = move || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng % 1000) as f64 / 1000.0
+        };
+        let sx = x - 160.0 - rand() * 240.0;
+        let sy = y - 80.0 - rand() * 160.0;
+        for i in 1..=10 {
+            let t = i as f64 / 10.0;
+            let e = 1.0 - (1.0 - t).powi(3);
+            let wob = (t * 8.0).sin() * 2.5 * (1.0 - t);
+            self.cdp
+                .call(
+                    Some(&self.session),
+                    "Input.dispatchMouseEvent",
+                    json!({ "type": "mouseMoved", "x": sx + (x - sx) * e + wob, "y": sy + (y - sy) * e + wob * 0.5 }),
+                )
+                .await?;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                10 + (rand() * 16.0) as u64,
+            ))
+            .await;
+        }
+        Ok(())
+    }
+
+    /// Evaluate a JS expression and return the decoded JSON
+    /// result. Caller-invoked Runtime — the same discipline as
+    /// the Turnstile geometry lookups in ops.rs: Runtime.enable
+    /// is NEVER called, so the DataDome console trap stays
+    /// defused. Expression must be an arrow-IIFE returning a
+    /// JSON-serializable value.
+    pub async fn eval_json(&self, expr: &str) -> Result<Value, FetchError> {
+        let res = self
+            .cdp
+            .call(
+                Some(&self.session),
+                "Runtime.evaluate",
+                json!({ "expression": expr, "returnByValue": true, "awaitPromise": false }),
+            )
+            .await?;
+        if let Some(err) = res.get("exceptionDetails") {
+            return Err(FetchError::ghost(format!(
+                "eval: {}",
+                err.get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("exception")
+            )));
+        }
+        Ok(res
+            .get("result")
+            .and_then(|r| r.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+
+    /// Center of the first VISIBLE element matching a CSS
+    /// selector, viewport-relative, scrolled into view.
+    /// None = no match.
+    pub async fn element_center(&self, selector: &str) -> Result<Option<(f64, f64)>, FetchError> {
+        let sel = serde_json::to_string(selector).unwrap_or_default();
+        let v = self
+            .eval_json(&format!(
+                "(()=>{{const el=document.querySelector({sel});if(!el)return null;\
+                 el.scrollIntoView({{block:'center'}});const r=el.getBoundingClientRect();\
+                 return {{x:r.x+r.width/2,y:r.y+r.height/2}};}})()"
+            ))
+            .await?;
+        Ok(parse_point(&v))
+    }
+
+    /// Center of the smallest visible element whose OWN text
+    /// nodes contain `needle` (button/link by label).
+    pub async fn element_center_by_text(
+        &self,
+        needle: &str,
+    ) -> Result<Option<(f64, f64)>, FetchError> {
+        let n = serde_json::to_string(needle).unwrap_or_default();
+        let v = self
+            .eval_json(&format!(
+                "(()=>{{const t={n};const w=document.createTreeWalker(document.body,NodeFilter.SHOW_ELEMENT);\
+                 let el;while((el=w.nextNode())){{\
+                 const own=Array.from(el.childNodes).filter(x=>x.nodeType===3).map(x=>x.textContent).join(' ');\
+                 if(own&&own.includes(t)&&(el.offsetParent!==null||el.tagName==='BODY')){{\
+                 el.scrollIntoView({{block:'center'}});const r=el.getBoundingClientRect();\
+                 return {{x:r.x+r.width/2,y:r.y+r.height/2}};}}}}return null;}})()"
+            ))
+            .await?;
+        Ok(parse_point(&v))
+    }
+
+    /// Does the CSS selector match anything? DOM domain only.
+    pub async fn selector_exists(&self, selector: &str) -> Result<bool, FetchError> {
+        let root = self
+            .cdp
+            .call(Some(&self.session), "DOM.getDocument", json!({}))
+            .await?
+            .get("root")
+            .and_then(|r| r.get("nodeId"))
+            .and_then(Value::as_i64)
+            .ok_or_else(|| FetchError::ghost("no root node"))?;
+        let node = self
+            .cdp
+            .call(
+                Some(&self.session),
+                "DOM.querySelector",
+                json!({ "nodeId": root, "selector": selector }),
+            )
+            .await?
+            .get("nodeId")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        Ok(node != 0)
+    }
+
+    /// Does the rendered body text contain `needle`?
+    pub async fn body_has_text(&self, needle: &str) -> Result<bool, FetchError> {
+        let n = serde_json::to_string(needle).unwrap_or_default();
+        let v = self
+            .eval_json(&format!(
+                "!!(document.body&&document.body.innerText.includes({n}))"
+            ))
+            .await?;
+        Ok(v.as_bool().unwrap_or(false))
+    }
+
+    /// Type text into the focused element with a human cadence —
+    /// log-normal-ish inter-key gaps with rare think-pauses.
+    /// CDP key events are isTrusted=true; the cadence is the
+    /// behavioral cover (a metronome of exactly-50ms keys is the
+    /// tell). ASCII + common Latin-1; non-typable codepoints
+    /// fall back to char events.
+    pub async fn type_text(&self, text: &str) -> Result<(), FetchError> {
+        let mut rng = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as u64 ^ (d.as_millis() as u64) << 12)
+            .unwrap_or(0x9e3779b9);
+        let mut rand = move || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng % 10_000) as f64 / 10_000.0
+        };
+        for ch in text.chars() {
+            let key = ch.to_string();
+            let (code, vk) = key_layout(ch);
+            // keyDown (with text → inserts the char) + keyUp.
+            self.cdp
+                .call(
+                    Some(&self.session),
+                    "Input.dispatchKeyEvent",
+                    json!({
+                        "type": "keyDown",
+                        "key": key,
+                        "code": code,
+                        "windowsVirtualKeyCode": vk,
+                        "nativeVirtualKeyCode": vk,
+                        "text": key,
+                    }),
+                )
+                .await?;
+            self.cdp
+                .call(
+                    Some(&self.session),
+                    "Input.dispatchKeyEvent",
+                    json!({
+                        "type": "keyUp",
+                        "key": key,
+                        "code": code,
+                        "windowsVirtualKeyCode": vk,
+                        "nativeVirtualKeyCode": vk,
+                    }),
+                )
+                .await?;
+            // Human gap: fast baseline, right-skew tail, 4% pauses.
+            let gap = if rand() < 0.04 {
+                170.0 + rand() * 150.0
+            } else {
+                28.0 + rand() * rand() * 140.0
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(gap as u64)).await;
+        }
+        Ok(())
+    }
+
+    /// Press a named non-printable key: Enter, Tab, Escape,
+    /// Backspace, ArrowUp/Down/Left/Right, PageUp/Down, Home, End.
+    pub async fn press_key(&self, key: &str) -> Result<(), FetchError> {
+        let Some((code, vk)) = named_key(key) else {
+            return Err(FetchError::ghost(format!(
+                "unknown key {key:?} — supported: Enter, Tab, Escape, Backspace, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, PageUp, PageDown, Home, End"
+            )));
+        };
+        for ty in ["rawKeyDown", "keyUp"] {
+            self.cdp
+                .call(
+                    Some(&self.session),
+                    "Input.dispatchKeyEvent",
+                    json!({
+                        "type": ty,
+                        "key": key,
+                        "code": code,
+                        "windowsVirtualKeyCode": vk,
+                        "nativeVirtualKeyCode": vk,
+                    }),
+                )
+                .await?;
+            tokio::time::sleep(std::time::Duration::from_millis(45)).await;
+        }
+        Ok(())
+    }
+
+    /// Scroll with trusted mouse-wheel events at the viewport
+    /// center. `to`: "top" | "bottom" | "down" — or a pixel
+    /// amount via scroll_px. Bottom keeps scrolling until the
+    /// page stops growing (lazy-load friendly), bounded.
+    pub async fn scroll(&self, to: &str, px: i64) -> Result<(), FetchError> {
+        match to {
+            "top" => {
+                self.eval_json("window.scrollTo(0,0)").await?;
+            }
+            "bottom" | "down" => {
+                let mut last_y = -1i64;
+                let mut stall = 0u8;
+                for _ in 0..40 {
+                    let y = self
+                        .eval_json("Math.round(window.scrollY)")
+                        .await?
+                        .as_i64()
+                        .unwrap_or(0);
+                    if y == last_y {
+                        stall += 1;
+                        if stall >= 2 {
+                            break; // page stopped moving — done
+                        }
+                    } else {
+                        stall = 0;
+                    }
+                    last_y = y;
+                    self.cdp
+                        .call(
+                            Some(&self.session),
+                            "Input.dispatchMouseEvent",
+                            json!({
+                                "type": "mouseWheel",
+                                "x": 960.0, "y": 540.0,
+                                "deltaX": 0, "deltaY": 700,
+                            }),
+                        )
+                        .await?;
+                    tokio::time::sleep(std::time::Duration::from_millis(140)).await;
+                }
+            }
+            _ => {
+                // Pixel amount, chunked to wheel-sized steps.
+                let mut left = px.max(0);
+                while left > 0 {
+                    let d = left.min(700);
+                    self.cdp
+                        .call(
+                            Some(&self.session),
+                            "Input.dispatchMouseEvent",
+                            json!({
+                                "type": "mouseWheel",
+                                "x": 960.0, "y": 540.0,
+                                "deltaX": 0, "deltaY": d,
+                            }),
+                        )
+                        .await?;
+                    left -= d;
+                    tokio::time::sleep(std::time::Duration::from_millis(90)).await;
+                }
+            }
+        }
+        // Let scroll-triggered rendering settle.
+        tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+        Ok(())
+    }
+}
+
+/// Parse {x, y} from an eval_json result.
+fn parse_point(v: &Value) -> Option<(f64, f64)> {
+    let x = v.get("x")?.as_f64()?;
+    let y = v.get("y")?.as_f64()?;
+    Some((x, y))
+}
+
+/// (code, windowsVirtualKeyCode) for a printable char.
+fn key_layout(ch: char) -> (&'static str, i64) {
+    let lower = ch.to_ascii_lowercase();
+    match ch {
+        'a'..='z' | 'A'..='Z' => {
+            let letter = lower.to_ascii_uppercase();
+            let code = match letter {
+                'A' => "KeyA",
+                'B' => "KeyB",
+                'C' => "KeyC",
+                'D' => "KeyD",
+                'E' => "KeyE",
+                'F' => "KeyF",
+                'G' => "KeyG",
+                'H' => "KeyH",
+                'I' => "KeyI",
+                'J' => "KeyJ",
+                'K' => "KeyK",
+                'L' => "KeyL",
+                'M' => "KeyM",
+                'N' => "KeyN",
+                'O' => "KeyO",
+                'P' => "KeyP",
+                'Q' => "KeyQ",
+                'R' => "KeyR",
+                'S' => "KeyS",
+                'T' => "KeyT",
+                'U' => "KeyU",
+                'V' => "KeyV",
+                'W' => "KeyW",
+                'X' => "KeyX",
+                'Y' => "KeyY",
+                _ => "KeyZ",
+            };
+            (code, letter as i64)
+        }
+        '0'..='9' => (
+            match ch {
+                '0' => "Digit0",
+                '1' => "Digit1",
+                '2' => "Digit2",
+                '3' => "Digit3",
+                '4' => "Digit4",
+                '5' => "Digit5",
+                '6' => "Digit6",
+                '7' => "Digit7",
+                '8' => "Digit8",
+                _ => "Digit9",
+            },
+            ch as i64,
+        ),
+        ' ' => ("Space", 0x20),
+        ',' => ("Comma", 0xBC),
+        '.' => ("Period", 0xBE),
+        '/' => ("Slash", 0xBF),
+        ';' => ("Semicolon", 0xBA),
+        '\'' => ("Quote", 0xDE),
+        '[' => ("BracketLeft", 0xDB),
+        ']' => ("BracketRight", 0xDD),
+        '\\' => ("Backslash", 0xDC),
+        '-' => ("Minus", 0xBD),
+        '=' => ("Equal", 0xBB),
+        '`' => ("Backquote", 0xC0),
+        '\n' | '\r' => ("Enter", 0x0D),
+        '\t' => ("Tab", 0x09),
+        _ => ("", 0),
+    }
+}
+
+/// Named non-printable keys: (code, vk).
+fn named_key(key: &str) -> Option<(&'static str, i64)> {
+    Some(match key {
+        "Enter" | "enter" | "RETURN" => ("Enter", 0x0D),
+        "Tab" | "tab" => ("Tab", 0x09),
+        "Escape" | "Esc" | "esc" => ("Escape", 0x1B),
+        "Backspace" | "backspace" => ("Backspace", 0x08),
+        "ArrowUp" | "up" => ("ArrowUp", 0x26),
+        "ArrowDown" | "down" => ("ArrowDown", 0x28),
+        "ArrowLeft" | "left" => ("ArrowLeft", 0x25),
+        "ArrowRight" | "right" => ("ArrowRight", 0x27),
+        "PageUp" => ("PageUp", 0x21),
+        "PageDown" => ("PageDown", 0x22),
+        "Home" => ("Home", 0x24),
+        "End" => ("End", 0x23),
+        _ => return None,
+    })
 }
 
 /// Kill chrome_crashpad processes belonging to our

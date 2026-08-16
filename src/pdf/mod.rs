@@ -70,6 +70,25 @@ pub struct ParsedPdf {
     pub lang_info: crate::extract::language::LanguageInfo,
     pub images: usize,
     pub fonts: Vec<String>,
+    /// Per-page extraction stats. Block merging deliberately
+    /// flows paragraphs across page breaks for reading
+    /// continuity — this is where page boundaries (and
+    /// per-page text trust) are preserved instead.
+    pub pages_meta: Vec<PageMeta>,
+}
+
+/// One page's extraction outcome, surfaced to the agent.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct PageMeta {
+    /// 0-based page index.
+    pub page: usize,
+    /// Visible chars extracted from this page.
+    pub chars: usize,
+    /// True when the text came from OCR, not the text layer.
+    pub ocr: bool,
+    /// 0.0..1.0 text trust: glyph-layer trust (non-PUA ratio)
+    /// or OCR mean confidence for OCR pages.
+    pub confidence: f32,
 }
 
 /// Normalize a PDF date ("D:20260525080808+00'00'") to YYYY-MM-DD.
@@ -263,6 +282,8 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
     let mut ocr_conf_pages = 0usize;
     let mut ocr_failed = false;
     let mut decided_hint: Option<&'static str> = None;
+    // Per-page OCR confidence for PageMeta (final-text trust).
+    let mut ocr_page_conf: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
     if std::env::var("DONSHEET_DEBUG").is_ok() {
         eprintln!(
             "[ocr] candidates: {:?} (enabled={})",
@@ -299,6 +320,7 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
                             let conf = ocr::mean_confidence(&olines);
                             ocr_conf_sum += conf;
                             ocr_conf_pages += 1;
+                            ocr_page_conf.insert(*pi, conf);
                             let (pw, ph) = (pages[*pi].width, pages[*pi].height);
                             let pc = ocr::lines_to_chars(&olines, *pi, pw, ph);
                             let mut pl = layout::assemble(pc);
@@ -509,6 +531,29 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
         canonical: None,
     };
 
+    // Per-page stats from the FINAL text state (post-OCR):
+    // chars, ocr flag, and the trust of whichever engine
+    // produced the text. Glyph pages without fusion data are
+    // ordinary text pages — trust 1.0.
+    let pages_meta = pages
+        .iter()
+        .map(|p| {
+            let chars: usize = p.lines.iter().map(|l| l.text.chars().count()).sum();
+            let ocr = ocr_page_conf.contains_key(&p.index);
+            let confidence = if ocr {
+                ocr_page_conf[&p.index]
+            } else {
+                p.fusion.as_ref().map(|f| f.garbage_ratio).unwrap_or(1.0)
+            };
+            PageMeta {
+                page: p.index,
+                chars,
+                ocr,
+                confidence: confidence.clamp(0.0, 1.0),
+            }
+        })
+        .collect();
+
     Ok(ParsedPdf {
         blocks: doc_blocks,
         meta,
@@ -519,6 +564,7 @@ pub fn parse(bytes: &[u8]) -> Result<ParsedPdf, PdfFailure> {
         lang_info,
         images,
         fonts: raw.fonts,
+        pages_meta,
     })
 }
 

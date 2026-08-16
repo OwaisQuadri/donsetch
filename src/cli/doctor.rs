@@ -1,9 +1,16 @@
 //! `donsetch --doctor` — health check with auto-fix.
 //!
-//! Nine checks, each with a clean pass/warn/fail icon and a dim
+//! Checks, each with a clean pass/warn/fail icon and a dim
 //! detail string. Auto-fixes what it can (creates missing dirs,
 //! removes stale lock files). Prints instructions for issues that
 //! need manual intervention.
+//!
+//! The browser path must be BORING to install (50-case report):
+//! doctor proves Chromium presence, Xvfb, a REAL browser launch
+//! with fingerprint selftest, and model availability. A tier-2
+//! feature that only works when the user guesses a hidden
+//! prerequisite is not finished, and doctor is where that
+//! prerequisite surfaces.
 
 use std::path::Path;
 
@@ -81,19 +88,33 @@ pub async fn run() {
     // 4. Chrome/Chromium.
     report!("Chrome/Chromium", check_chrome());
 
-    // 5. Ghost profile.
+    // 5. Xvfb (Linux headful stealth prerequisite).
+    report!("Xvfb", check_xvfb());
+
+    // 6. Ghost profile.
     report!("Ghost profile", check_ghost_profile());
 
-    // 6. Cache directory.
+    // 7. Browser launch — the REAL test: launch, fingerprint
+    // selftest, clean kill. Presence checks above are cheap;
+    // this proves tier 2 actually works on this machine.
+    report!("Browser launch", check_browser_launch().await);
+
+    // 8. Cache directory.
     report!("Cache directory", check_cache_dir());
 
-    // 7. PDFium.
+    // 9. State permissions.
+    report!("State permissions", check_state_permissions());
+
+    // 10. PDFium.
     report!("PDFium", check_pdfium());
 
-    // 8. OCR models.
+    // 11. OCR models.
     report!("OCR models", check_ocr_models());
 
-    // 9. Ghost state.
+    // 12. Rerank model.
+    report!("Rerank model", check_rerank_model());
+
+    // 13. Ghost state.
     report!("Ghost state", check_ghost_state());
 
     // ── Summary ──────────────────────────────────────────────
@@ -198,6 +219,161 @@ fn check_chrome() -> CheckResult {
             "not found".into(),
             "Install Chrome/Chromium, or set DONGHOST_CHROME to a browser path".into(),
         ),
+    }
+}
+
+/// Xvfb: the Linux headful-stealth prerequisite. Missing Xvfb
+/// does NOT disable tier 2 — ghost falls back to off-screen
+/// headful on the real display (a window may flash briefly) or
+/// headless on Wayland-only sessions (more detectable). Warn,
+/// not fail — but the user deserves to know.
+fn check_xvfb() -> CheckResult {
+    #[cfg(target_os = "linux")]
+    {
+        if crate::ghost::xvfb::is_available() {
+            // :99 socket alive = daemon's Xvfb will be reused.
+            let reuse = std::path::Path::new("/tmp/.X11-unix/X99").exists();
+            CheckResult::Pass(if reuse {
+                "available, display :99 alive (reused)".into()
+            } else {
+                "available (starts on demand)".into()
+            })
+        } else {
+            CheckResult::Warn(
+                "not installed — tier 2 falls back to headless/off-screen (less stealthy)".into(),
+            )
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        CheckResult::Pass("not needed on this platform".into())
+    }
+}
+
+/// The REAL browser test: launch Chromium exactly as tier 2
+/// would (same flags, same Xvfb dance), run the fingerprint
+/// selftest page, kill. Bounded to 40s. This is what turns
+/// "Chromium found" into "tier 2 proven on this machine" —
+/// the 50-case report's "a feature that works only when the
+/// user guesses the hidden prerequisite is not finished".
+async fn check_browser_launch() -> CheckResult {
+    let inner = async {
+        // Same Xvfb handling as GhostManager: start/reuse :99.
+        let xvfb = crate::ghost::xvfb::Xvfb::start().await.ok();
+        let display = xvfb.as_ref().map(|x| x.display_env());
+        let profile = BrowserProfile::host_default();
+        let t0 = std::time::Instant::now();
+        let mut ghost = match crate::ghost::Ghost::launch(&profile, display.as_deref()).await {
+            Ok(g) => g,
+            Err(e) => {
+                if let Some(x) = xvfb {
+                    x.kill().await;
+                }
+                return CheckResult::Fail(
+                    format!("launch failed: {e}"),
+                    "Tier 2 (browser fallback) will not work. Install Chromium + Xvfb, or set DONGHOST_CHROME".into(),
+                );
+            }
+        };
+        let launch_ms = t0.elapsed().as_millis();
+
+        // Fingerprint selftest: local page reads back
+        // navigator.webdriver and friends from the live browser.
+        let fp = crate::ghost::ops::selftest(&mut ghost).await;
+        ghost.kill().await;
+        if let Some(x) = xvfb {
+            x.kill().await;
+        }
+        match fp {
+            Ok(json_str) => {
+                let v: serde_json::Value = serde_json::from_str(&json_str).unwrap_or_default();
+                let webdriver = v.get("webdriver").and_then(|w| w.as_bool());
+                match webdriver {
+                    Some(false) => CheckResult::Pass(format!(
+                        "launched in {launch_ms}ms, fingerprint clean (webdriver=false)"
+                    )),
+                    Some(true) => CheckResult::Warn(
+                        "launched, but webdriver=true — stealth patches not applied".into(),
+                    ),
+                    None => CheckResult::Pass(format!("launched in {launch_ms}ms, selftest ok")),
+                }
+            }
+            Err(e) => CheckResult::Warn(format!(
+                "launched in {launch_ms}ms, but selftest failed: {e}"
+            )),
+        }
+    };
+    // Hard bound: a wedged browser here must not hang doctor.
+    match tokio::time::timeout(std::time::Duration::from_secs(40), inner).await {
+        Ok(r) => r,
+        Err(_) => CheckResult::Fail(
+            "launch timed out after 40s".into(),
+            "A stale Chromium or Xvfb may be wedged: pkill -f chromium; rm -f /tmp/.X99-lock /tmp/.X11-unix/X99".into(),
+        ),
+    }
+}
+
+/// ghost-state.json holds cookies — it must not be
+/// world-readable.
+fn check_state_permissions() -> CheckResult {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let f = paths::cache_dir().join("ghost-state.json");
+        if !f.exists() {
+            return CheckResult::Pass("no state file yet".into());
+        }
+        match std::fs::metadata(&f) {
+            Ok(m) => {
+                let mode = m.permissions().mode() & 0o777;
+                if mode & 0o077 != 0 {
+                    // Auto-fix: tighten to 0600.
+                    let mut perm = m.permissions();
+                    perm.set_mode(0o600);
+                    if std::fs::set_permissions(&f, perm).is_ok() {
+                        return CheckResult::Fixed(format!(
+                            "tightened ghost-state.json {mode:o} → 600"
+                        ));
+                    }
+                    return CheckResult::Fail(
+                        format!("ghost-state.json is {mode:o} (group/other readable)"),
+                        format!("chmod 600 {}", f.display()),
+                    );
+                }
+                CheckResult::Pass(format!("{mode:o} on ghost-state.json"))
+            }
+            Err(e) => CheckResult::Warn(format!("cannot stat: {e}")),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        CheckResult::Pass("windows ACLs apply".into())
+    }
+}
+
+/// Cross-encoder rerank model cache (semantic search reranking
+/// + focus filter). Missing = downloads on first search.
+fn check_rerank_model() -> CheckResult {
+    let dir = paths::cache_dir().join("rerank");
+    if !dir.exists() {
+        return CheckResult::Warn("not cached (downloads on first search)".into());
+    }
+    let models = std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .is_some_and(|ext| ext == "onnx" || ext == "json" || ext == "txt")
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    if models > 0 {
+        CheckResult::Pass(format!("{models} model files cached"))
+    } else {
+        CheckResult::Warn("not cached (downloads on first search)".into())
     }
 }
 

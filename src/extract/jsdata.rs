@@ -275,6 +275,7 @@ pub fn extract(html: &str, url: &str, opts: &ExtractOptions) -> Option<Extracted
         content_kind: ContentKind::Page,
         lang: guess_lang(&md),
         quality: 0.7,
+        pdf_pages: None,
     })
 }
 

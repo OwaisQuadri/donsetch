@@ -240,48 +240,87 @@ pub async fn discover(fetch: &PageFetcher, host: &str, cap: usize) -> (Robots, V
 
     let mut entries = Vec::new();
     let mut fetched = 0usize;
+    let mut first = true;
     while !queue.is_empty() && entries.len() < cap && fetched < 32 {
-        let loc = queue.remove(0);
-        fetched += 1;
-        let page = fetch(loc, "direct".to_string(), None).await;
-        if page.status != 200 {
-            continue;
-        }
-        let body = maybe_gunzip(&page.body);
-        let Ok(text) = String::from_utf8(body) else {
-            continue;
-        };
-        let mut here = Vec::new();
-        if text.trim_start().starts_with("<") {
-            // XML sitemap.
-            parse_sitemap(&text, &mut here, 10_000);
-        } else {
-            // Plain-text sitemap: one URL per line (doc.rust-lang
-            // publishes sitemap.txt).
-            for line in text.lines().take(10_000) {
-                let u = line.trim();
-                if u.starts_with("http") {
-                    here.push(SitemapEntry {
-                        loc: u.to_string(),
-                        lastmod: None,
-                        priority: None,
-                        is_index: false,
-                    });
-                }
+        if first {
+            // Wave 1: the highest-confidence candidate alone.
+            // Robots-declared sitemaps and /sitemap.xml cover the
+            // large majority of sites — one request, exactly like
+            // the serial v1 loop's best case.
+            first = false;
+            let loc = queue.remove(0);
+            fetched += 1;
+            if let Some(text) = fetch_sitemap_text(fetch, &loc).await {
+                absorb(text, &mut queue, &mut entries);
             }
+            continue;
         }
-        // Child sitemaps recurse; pages go straight to the map.
-        for e in here {
-            if e.is_index {
-                if queue.len() < 128 {
-                    queue.push(e.loc);
-                }
-            } else {
-                entries.push(e);
+        // Wave 2+: remaining candidates IN PARALLEL (bounded 8).
+        // Sitemap-less sites used to pay every candidate as a
+        // serial 404 round-trip (~1-3s of pure latency); now the
+        // whole miss-set resolves in one round. Child sitemap
+        // indexes discovered later are also waved — they are
+        // metadata probes, not page fetches, and the governor's
+        // page-fetch pacing is untouched.
+        let wave: Vec<String> = queue.drain(..queue.len().min(8)).collect();
+        fetched += wave.len();
+        let futs = wave.iter().map(|loc| fetch_sitemap_text(fetch, loc));
+        let texts = futures_util::future::join_all(futs).await;
+        for text in texts {
+            if entries.len() >= cap {
+                break;
+            }
+            if let Some(text) = text {
+                absorb(text, &mut queue, &mut entries);
             }
         }
     }
     (robots, entries)
+}
+
+/// Fetch one sitemap candidate and decode it to text.
+/// None = non-200, binary, or undecodable.
+async fn fetch_sitemap_text(fetch: &PageFetcher, loc: &str) -> Option<String> {
+    let page = fetch(loc.to_string(), "direct".to_string(), None).await;
+    if page.status != 200 {
+        return None;
+    }
+    let body = maybe_gunzip(&page.body);
+    String::from_utf8(body).ok()
+}
+
+/// Parse one sitemap body: child indexes go back to the queue,
+/// page entries join the map.
+fn absorb(text: String, queue: &mut Vec<String>, entries: &mut Vec<SitemapEntry>) {
+    let mut here = Vec::new();
+    if text.trim_start().starts_with("<") {
+        // XML sitemap.
+        parse_sitemap(&text, &mut here, 10_000);
+    } else {
+        // Plain-text sitemap: one URL per line (doc.rust-lang
+        // publishes sitemap.txt).
+        for line in text.lines().take(10_000) {
+            let u = line.trim();
+            if u.starts_with("http") {
+                here.push(SitemapEntry {
+                    loc: u.to_string(),
+                    lastmod: None,
+                    priority: None,
+                    is_index: false,
+                });
+            }
+        }
+    }
+    // Child sitemaps recurse; pages go straight to the map.
+    for e in here {
+        if e.is_index {
+            if queue.len() < 128 {
+                queue.push(e.loc);
+            }
+        } else {
+            entries.push(e);
+        }
+    }
 }
 
 #[cfg(test)]

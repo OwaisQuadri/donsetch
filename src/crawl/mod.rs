@@ -636,10 +636,18 @@ impl Crawler {
                     } else {
                         match (page.status, &page.verdict) {
                             (200, Verdict::ContentOk) => {
-                                // Dwell time: proportional to page size,
-                                // capped at 2s. A human reads a 50KB
-                                // article slower than a 2KB snippet.
-                                let dwell = (page.body.len() / 4).min(2000) as u64;
+                                // Skim dwell: proportional to page size,
+                                // capped at 300ms. v1 used up to 2s/page
+                                // ("a human reads a 50KB article") — but
+                                // an agent skims for extraction, not
+                                // reading, and the dwell's real job is
+                                // anti-metronome entropy, which jitter +
+                                // this small size-proportional term
+                                // already provide. 2s/page of pure sleep
+                                // was the single biggest crawl latency
+                                // cost (6.29s median in the 50-case
+                                // benchmark).
+                                let dwell = (page.body.len() / 32).min(300) as u64;
                                 governor.on_success(host, &lane.id, page.latency, dwell)
                             }
                             (429, _) | (503, _) => {

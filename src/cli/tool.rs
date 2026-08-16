@@ -352,6 +352,11 @@ fn render_json_envelope(result: &Value, url: &str) -> Value {
             "ok": false,
             "error": {"kind": kind, "message": content},
         });
+        // Errors carry structure too (next_action, escalation
+        // trace, url, status) — surface it, don't drop it.
+        if !sc.is_null() {
+            envelope["meta"] = sc;
+        }
         if !url.is_empty() {
             envelope["url"] = json!(url);
         }

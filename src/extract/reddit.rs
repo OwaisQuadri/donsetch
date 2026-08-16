@@ -164,6 +164,7 @@ fn extract_listing(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Extra
         content_kind: ContentKind::Listing,
         lang: "en".to_string(),
         quality: 0.9,
+        pdf_pages: None,
     })
 }
 
@@ -248,6 +249,7 @@ fn extract_thread(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Extrac
         content_kind: ContentKind::Forum,
         lang: "en".to_string(),
         quality: 0.95,
+        pdf_pages: None,
     })
 }
 

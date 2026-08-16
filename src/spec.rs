@@ -39,6 +39,9 @@ pub enum ParamKind {
     /// JSON boolean; CLI flag whose presence sets `false`
     /// (negating flags like --any-host for same_host).
     SetFalse,
+    /// JSON value passed through as-is (array of objects);
+    /// CLI takes a JSON string and parses it.
+    JsonStr,
 }
 
 /// How the parameter appears on the CLI.
@@ -166,6 +169,14 @@ const FETCH_PARAMS: &[ParamSpec] = &[
         cli: CliKind::Flag,
         required: false,
         help: "Include image alt text and sources. Default false.",
+    },
+    ParamSpec {
+        name: "actions",
+        flag: "actions",
+        kind: ParamKind::JsonStr,
+        cli: CliKind::Flag,
+        required: false,
+        help: "Browser steps to run BEFORE extraction — page control inside fetch: [{\"do\":\"click\",\"selector\":\"#load-more\"},{\"do\":\"type\",\"selector\":\"input[q]\",\"text\":\"query\"},{\"do\":\"press\",\"key\":\"Enter\"},{\"do\":\"wait_text\",\"text\":\"results\"}]. Steps: wait {ms}, wait_selector {selector,timeout_ms}, wait_text {text,timeout_ms}, click {selector OR text}, hover, type {selector?,text}, press {key: Enter|Tab|Escape|Backspace|ArrowDown|...}, scroll {to: top|bottom|down | px}. Max 16 steps. Actions run in the headless browser (tier auto/2, never 1); after them the page is extracted normally — focus/section/toc still apply. First failing step aborts honestly with per-step results in structuredContent.actions; fix that step and re-run.",
     },
     ParamSpec {
         name: "shot",
@@ -322,13 +333,14 @@ pub static TOOLS: &[ToolSpec] = &[
         name: "web_fetch",
         cli_cmd: "fetch",
         summary: "Fetch a URL as clean markdown (auto bot-wall bypass, PDF, JS render)",
-        description: "Fetch one URL as clean markdown — use when you have a specific URL to read. For finding URLs, use web_search; for multi-page sites, use web_crawl.\n\nAuto-escalation: fast HTTP first; on bot-wall or JS-only page, opens a headless browser, solves the challenge, downgrades back. PDFs auto-detected (content-type or magic bytes) and parsed by DonSheet — text extraction + OCR for scanned pages, up to 100MB. Non-HTML (JSON/XML/text) passes through.\n\nToken efficiency — use focus: the focus parameter returns ONLY blocks relevant to your question, cutting tokens 50-80% on long pages. It uses hybrid keyword + semantic matching, so it catches blocks even when the page uses different vocabulary than your query. If nothing matches, it returns the full page with a notice — so it's always safe to try. ALWAYS set focus when you know what you're looking for. links and images are also stripped by default (enable with links=true, media=true).\n\nLong-page workflow: toc=true → heading outline, then section=\"heading\" → that section only. Or use focus to get relevant blocks.\n\nPagination: if structuredContent.next_offset is present, call again with offset=that value.\n\nResponse: content[0].text = markdown; structuredContent = {status, tier, verdict, thin, content_kind, title, byline, published, site, blocks_shown, blocks_total, total_chars, next_offset, tokens_est, url}. thin=true = JS shell (content may be incomplete). content_kind: Article|Listing|Forum|Docs|Table|Page. isError=true on failure (blocked, captcha, network).",
+        description: "Fetch one URL as clean markdown — use when you have a specific URL to read. For finding URLs, use web_search; for multi-page sites, use web_crawl.\n\nAuto-escalation: fast HTTP first; on bot-wall or JS-only page, opens a headless browser, solves the challenge, downgrades back. PDFs auto-detected (content-type or magic bytes) and parsed by DonSheet — text extraction + OCR for scanned pages, up to 100MB. Non-HTML (JSON/XML/text) passes through.\n\nPage interaction (actions): pass actions=[{...}] to click, type, press, scroll, or wait inside the real page before extraction — form submits, search boxes, load-more buttons, lazy-load scrolls. Deterministic waits (wait_selector/wait_text) beat blind sleeps. After actions, extraction runs normally (focus/section/toc apply).\n\nToken efficiency — use focus: the focus parameter returns ONLY blocks relevant to your question, cutting tokens 50-80% on long pages. It uses hybrid keyword + semantic matching, so it catches blocks even when the page uses different vocabulary than your query. If nothing matches, it returns the full page with a notice — so it's always safe to try. ALWAYS set focus when you know what you're looking for. links and images are also stripped by default (enable with links=true, media=true).\n\nLong-page workflow: toc=true → heading outline, then section=\"heading\" → that section only. Or use focus to get relevant blocks.\n\nPagination: if structuredContent.next_offset is present, call again with offset=that value.\n\nResponse: content[0].text = markdown; structuredContent = {status, tier, verdict, content_ok, thin, content_kind, quality (0-1), lang, title, byline, published, site, blocks_shown, blocks_total, total_chars, next_offset, tokens_est, escalation (what was tried, per-step with ms), pdf ({pages, per_page:[{page,chars,ocr,confidence}]} for PDFs), actions (per-step results when actions used), url}. content_ok=false or thin=true = content may be a JS shell. content_kind: Article|Listing|Forum|Docs|Table|Page. isError=true on failure with structuredContent {url, status, verdict, next_action, escalation} — next_action tells you exactly what to do next.",
         params: FETCH_PARAMS,
         examples: &[
             "donsetch fetch https://example.com/article",
             "donsetch fetch https://long-docs-page --focus \"error handling\"",
             "donsetch fetch https://long-docs-page --offset 16000",
             "donsetch fetch https://a.com/x https://b.com/y   # bulk fetch",
+            "donsetch fetch https://site.com/search --actions '[{\"do\":\"type\",\"selector\":\"input[q]\",\"text\":\"rust async\"},{\"do\":\"press\",\"key\":\"Enter\"},{\"do\":\"wait_text\",\"text\":\"results\"}]'",
         ],
     },
     ToolSpec {
@@ -379,7 +391,7 @@ pub fn mcp_schema(tool: &ToolSpec) -> Value {
         let ty = match p.kind {
             ParamKind::Str | ParamKind::Enum(_) => "string",
             ParamKind::Usize => "integer",
-            ParamKind::StrList => "array",
+            ParamKind::StrList | ParamKind::JsonStr => "array",
             ParamKind::SetTrue | ParamKind::SetFalse => "boolean",
         };
         schema.insert("type".into(), json!(ty));
@@ -388,6 +400,9 @@ pub fn mcp_schema(tool: &ToolSpec) -> Value {
         }
         if p.kind == ParamKind::StrList {
             schema.insert("items".into(), json!({ "type": "string" }));
+        }
+        if p.kind == ParamKind::JsonStr {
+            schema.insert("items".into(), json!({ "type": "object" }));
         }
         schema.insert("description".into(), json!(p.help));
         props.insert(p.name.into(), Value::Object(schema));
@@ -459,6 +474,7 @@ fn cli_arg(p: &ParamSpec) -> Arg {
                             variants.iter().copied(),
                         ))
                 }
+                ParamKind::JsonStr => arg.value_name("JSON"),
                 ParamKind::StrList => arg
                     .value_name("GLOB")
                     .action(ArgAction::Append)
@@ -495,6 +511,13 @@ pub fn matches_to_json(tool: &ToolSpec, m: &clap::ArgMatches) -> Value {
                 ParamKind::Str | ParamKind::Enum(_) => {
                     if let Some(v) = m.get_one::<String>(p.name) {
                         map.insert(p.name.into(), json!(v));
+                    }
+                }
+                ParamKind::JsonStr => {
+                    if let Some(v) = m.get_one::<String>(p.name)
+                        && let Ok(parsed) = serde_json::from_str::<Value>(v)
+                    {
+                        map.insert(p.name.into(), parsed);
                     }
                 }
                 ParamKind::Usize => {

@@ -175,9 +175,29 @@ donsetch update
 
 | Tool | One-liner |
 |------|-----------|
-| 🌐 **`web_fetch`** | Fetch any URL as clean markdown. HTTP first, escalates to headless browser if blocked. PDFs with OCR, `focus` for token savings, `toc`/`section`, pagination. |
-| 🔎 **`web_search`** | Keyless multi-engine web search. 10+ backends in parallel, consensus + semantic reranking. Returns URLs + snippets, not content. |
-| 🕷️ **`web_crawl`** | Best-first same-domain crawl. Sitemap + frontier, adaptive pacing, resume tokens. `focus` for budget management. |
+| 🌐 **`web_fetch`** | Fetch any URL as clean markdown. HTTP first, escalates to headless browser if blocked. PDFs with OCR + per-page confidence, `focus` for token savings, `toc`/`section`, pagination, `actions` for in-page browser control (click/type/press/scroll/wait). |
+| 🔎 **`web_search`** | Keyless multi-engine web search. 10+ backends in parallel, consensus + semantic reranking, query-aware official-source placement. Returns URLs + snippets, not content. |
+| 🕷️ **`web_crawl`** | Best-first same-domain crawl. Sitemap + frontier, elastic pacing, resume tokens. `focus` for budget management. |
+
+---
+
+## 🖱️ Browser actions — page control inside fetch (v2)
+
+`web_fetch` accepts an `actions` array executed in the real headless browser **before** extraction:
+
+```json
+{
+  "url": "https://duckduckgo.com",
+  "actions": [
+    { "do": "type", "selector": "input[name=q]", "text": "rust async tokio" },
+    { "do": "press", "key": "Enter" },
+    { "do": "wait_text", "text": "tokio" }
+  ],
+  "focus": "tokio"
+}
+```
+
+Steps: `wait`, `wait_selector`, `wait_text` (deterministic waits — no blind sleeps), `click` (by CSS selector or visible text), `hover`, `type` (human-cadence keystrokes), `press`, `scroll`. Up to 16 steps. After the script runs, the normal extraction pipeline works on the final DOM — `focus`, `section`, `toc` all apply to the interacted-with page. Per-step results come back in `structuredContent.actions`; the first failing step aborts honestly with everything that succeeded, so you fix one step and re-run. Form submits, search flows, load-more buttons, lazy-load scrolls — one call, no separate browser tool.
 
 ---
 

@@ -79,6 +79,11 @@ pub struct Extracted {
     /// decide if content is trustworthy.
     #[allow(dead_code)]
     pub quality: f32,
+    /// PDF only: per-page extraction stats (chars, ocr flag,
+    /// confidence). Block merging intentionally flows paragraphs
+    /// across page breaks for reading continuity — page
+    /// boundaries are preserved HERE instead.
+    pub pdf_pages: Option<Vec<crate::pdf::PageMeta>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +285,7 @@ pub fn extract(
             content_kind: ContentKind::Page,
             lang: "unknown".to_string(),
             quality: 0.0,
+            pdf_pages: None,
         });
     }
 
@@ -295,6 +301,7 @@ pub fn extract(
                     false,
                     parsed.notes,
                     parsed.lang_info,
+                    Some(parsed.pages_meta),
                     url,
                     opts,
                     max_chars,
@@ -378,6 +385,7 @@ pub fn extract(
         has_skeletons,
         Vec::new(),
         lang_info,
+        None,
         url,
         opts,
         max_chars,
@@ -479,6 +487,7 @@ pub fn text_fallback(
         content_kind: ContentKind::Page,
         lang: "unknown".to_string(),
         quality: 0.3, // lower quality than block-based extraction
+        pdf_pages: None,
     })
 }
 
@@ -585,6 +594,7 @@ fn empty_pdf(url: &str, reason: &str) -> Extracted {
         content_kind: ContentKind::Page,
         lang: "unknown".to_string(),
         quality: 0.0,
+        pdf_pages: None,
     }
 }
 
@@ -601,6 +611,7 @@ fn downstream(
     has_skeletons: bool,
     notes: Vec<String>,
     lang_info: language::LanguageInfo,
+    pdf_pages: Option<Vec<crate::pdf::PageMeta>>,
     url: &str,
     opts: &ExtractOptions,
     max_chars: usize,
@@ -637,6 +648,7 @@ fn downstream(
             content_kind: ContentKind::Page,
             lang: lang_info.code.clone(),
             quality: 0.0,
+            pdf_pages: None,
         });
     }
 
@@ -752,6 +764,7 @@ fn downstream(
         content_kind,
         lang: lang_info.code.clone(),
         quality,
+        pdf_pages,
     })
 }
 

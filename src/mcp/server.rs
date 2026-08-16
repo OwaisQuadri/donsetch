@@ -11,7 +11,7 @@ use futures_util::FutureExt;
 
 use crate::crawl::real as crawl_real;
 use crate::crawl::{CrawlMode, CrawlOptions, Crawler};
-use crate::detect::walls::Verdict;
+use crate::detect::walls::{Vendor, Verdict};
 use crate::error::FetchError;
 use crate::extract::{self, ExtractOptions};
 use crate::fetch::client::Fetcher;
@@ -552,6 +552,36 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     let tier = args.get("tier").and_then(Value::as_str).unwrap_or("auto");
     let shot = args.get("shot").and_then(Value::as_str);
 
+    // === v2: fetch-actions — browser control INSIDE fetch ===
+    // A non-empty `actions` array routes the whole call to the
+    // ghost with an action executor: navigate → act → extract.
+    // Parsing/validation happens before any browser time is
+    // spent; a typo in step 5 must not burn a launch on step 1.
+    let actions = match args.get("actions") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(v) => match crate::ghost::actions::parse(v) {
+            Ok(a) => a,
+            Err(e) => return tool_error(format!("fetch: {e}")),
+        },
+    };
+    if !actions.is_empty() {
+        if is_pdf_url_like(&url) {
+            return tool_error(
+                "fetch: actions cannot run on PDFs — fetch the PDF directly instead",
+            );
+        }
+        if tier == "1" {
+            return tool_error(
+                "fetch: actions need the browser — use tier=auto (default) or tier=2",
+            );
+        }
+        let host = url::Url::parse(&url)
+            .ok()
+            .and_then(|u| u.host_str().map(String::from))
+            .unwrap_or_default();
+        return fetch_with_actions(daemon, &url, &host, &opts, &actions, shot).await;
+    }
+
     let host = url::Url::parse(&url)
         .ok()
         .and_then(|u| u.host_str().map(String::from))
@@ -603,14 +633,44 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         tier_used = "2-direct";
     }
 
+    let mut trace = Trace::default();
+    let route_name = match &route {
+        RouteDecision::Cold => "cold",
+        RouteDecision::Warm(_) => "warm",
+        RouteDecision::SkipToSolve => "skip-to-solve",
+        RouteDecision::RecheckCold => "recheck-cold",
+    };
+    trace.step("route", "domain-profile", route_name, 0);
+
     // === Fetch (tier 1, unless skipped) ===
     let mut out: Option<crate::fetch::client::FetchOutcome> = None;
 
     if !skip_tier1 {
-        out = Some(match daemon.fetcher.fetch(&url).await {
+        let t0 = std::time::Instant::now();
+        let fetched = match daemon.fetcher.fetch(&url).await {
             Ok(o) => o,
-            Err(e) => return tool_error_kind(friendly_fetch_error(&e), fetch_error_kind(&e)),
-        });
+            Err(e) => {
+                return tool_error_structured(
+                    friendly_fetch_error(&e),
+                    fetch_error_kind(&e),
+                    Some(json!({
+                        "url": url,
+                        "status": 0,
+                        "next_action": next_action_for(None, 0, fetch_error_kind(&e)),
+                        "escalation": trace.value(),
+                    })),
+                );
+            }
+        };
+        let ms = t0.elapsed().as_millis();
+        let verdict_str = format!("{:?}", fetched.verdict);
+        trace.step(
+            "1",
+            "http-fetch",
+            &format!("{} status={}", verdict_str, fetched.status),
+            ms,
+        );
+        out = Some(fetched);
 
         // === Observe the outcome ===
         // Every fetch teaches the domain profile something.
@@ -650,7 +710,17 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
             Verdict::Challenge(_) if tier != "1" => {}
             v => {
                 let kind = verdict_kind(v, o.status);
-                return tool_error_kind(verdict_error(v, o.status, &o.url), kind);
+                return tool_error_structured(
+                    verdict_error(v, o.status, &o.url),
+                    kind,
+                    Some(json!({
+                        "url": o.url,
+                        "status": o.status,
+                        "verdict": format!("{:?}", v),
+                        "next_action": next_action_for(Some(v), o.status, kind),
+                        "escalation": trace.value(),
+                    })),
+                );
             }
         }
     }
@@ -727,6 +797,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         {
             final_ex = Some(e3);
             final_tier = "1(links)";
+            trace.step("1", "links-extract", "ok", 0);
         }
     }
 
@@ -782,13 +853,25 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
             let cached_verdict = crate::detect::walls::detect_dom_smart(rc.html.as_bytes());
             if !matches!(cached_verdict, crate::detect::walls::Verdict::Challenge(_)) {
                 let vstr = format!("{:?}", cached_verdict);
-                let mut res = finish_result(&e2, "render-cache", final_status, &vstr, &final_url);
+                trace.step("cache", "render-hit", "ok", 0);
+                let mut res =
+                    finish_result(&e2, "render-cache", final_status, &vstr, &final_url, &trace);
                 res["_meta"] = json!({ "ttlMs": 300_000, "cacheScope": "session" });
                 return res;
             }
         }
 
-        match ghost_escalate(daemon, &url, &host, &opts, challenge || shell_warm, shot).await {
+        match ghost_escalate(
+            daemon,
+            &url,
+            &host,
+            &opts,
+            challenge || shell_warm,
+            shot,
+            &mut trace,
+        )
+        .await
+        {
             Ok((e, tier2, status, furl)) => {
                 final_ex = Some(e);
                 final_tier = tier2;
@@ -801,13 +884,32 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 final_verdict = "ContentOk".to_string();
             }
             Err((msg, kind)) => {
-                return tool_error_kind(msg, kind);
+                return tool_error_structured(
+                    msg,
+                    kind,
+                    Some(json!({
+                        "url": url,
+                        "status": final_status,
+                        "verdict": final_verdict,
+                        "next_action": next_action_for(out.as_ref().map(|o| o.verdict), final_status, kind),
+                        "escalation": trace.value(),
+                    })),
+                );
             }
         }
     }
 
     let Some(ex) = final_ex else {
-        return tool_error("all fetch tiers exhausted — no response received");
+        return tool_error_structured(
+            "all fetch tiers exhausted — no response received",
+            "permanent",
+            Some(json!({
+                "url": url,
+                "status": 0,
+                "next_action": "retry — if repeated, the site may be down",
+                "escalation": trace.value(),
+            })),
+        );
     };
 
     // Small 404 page: if we didn't escalate to ghost (is_small_404)
@@ -815,12 +917,29 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // This is honest — the page exists (HTTP 200) but has no content.
     // Could be a non-existent product, a deleted page, or a soft 404.
     if is_small_404 {
-        return tool_error(format!(
-            "not found: {url} — page returned no content (may not exist or requires JavaScript)"
-        ));
+        return tool_error_structured(
+            format!(
+                "not found: {url} — page returned no content (may not exist or requires JavaScript)"
+            ),
+            "permanent",
+            Some(json!({
+                "url": url,
+                "status": final_status,
+                "verdict": "SoftNotFound",
+                "next_action": next_action_for(Some(Verdict::SoftNotFound), final_status, "permanent"),
+                "escalation": trace.value(),
+            })),
+        );
     }
 
-    finish_result(&ex, final_tier, final_status, &final_verdict, &final_url)
+    finish_result(
+        &ex,
+        final_tier,
+        final_status,
+        &final_verdict,
+        &final_url,
+        &trace,
+    )
 }
 
 /// Unified tier-2: ghost render + cookie harvest + tier-1 retry,
@@ -835,12 +954,16 @@ async fn ghost_escalate(
     opts: &ExtractOptions,
     learn: bool,
     shot: Option<&str>,
+    trace: &mut Trace,
 ) -> Result<(extract::Extracted, &'static str, u16, String), (String, &'static str)> {
+    let t0 = std::time::Instant::now();
     let mut g = daemon
         .ghost_mgr
         .acquire(&daemon.profile)
         .await
         .map_err(|e| (format!("browser launch failed: {e}"), "permanent"))?;
+    trace.step("2", "browser-launch", "ok", t0.elapsed().as_millis());
+    let t1 = std::time::Instant::now();
     let page = match ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(20)).await {
         Ok(p) => p,
         Err(e) => {
@@ -855,6 +978,12 @@ async fn ghost_escalate(
                 .map_err(|e| (format!("browser automation error: {e}"), "permanent"))?
         }
     };
+    trace.step(
+        "2",
+        "ghost-render",
+        &format!("captcha={} dom={}KB", page.captcha, page.html.len() / 1024),
+        t1.elapsed().as_millis(),
+    );
     if std::env::var_os("DONGHOST_DEBUG").is_some() {
         let safe: String = host
             .chars()
@@ -884,8 +1013,20 @@ async fn ghost_escalate(
     }
     // Retry tier 1 with fresh cookies — the cheap path back to
     // normal HTTP when the gate was cookie-driven.
+    let t2 = std::time::Instant::now();
     let retry = if !page.cookies.is_empty() {
-        daemon.fetcher.fetch(url).await.ok()
+        let r = daemon.fetcher.fetch(url).await.ok();
+        trace.step(
+            "1",
+            "http-retry-with-ghost-cookies",
+            &format!(
+                "cookies={} status={}",
+                page.cookies.len(),
+                r.as_ref().map(|o| o.status).unwrap_or(0)
+            ),
+            t2.elapsed().as_millis(),
+        );
+        r
     } else {
         None
     };
@@ -1043,21 +1184,262 @@ async fn ghost_escalate(
     ))
 }
 
+/// PDF-shaped URL check for the actions guard (before the main
+/// flow computes its own is_pdf_url). Covers both the .pdf
+/// suffix convention and the /pdf/ path convention (arXiv:
+/// arxiv.org/pdf/1706.03762 serves a PDF with no extension).
+fn is_pdf_url_like(url: &str) -> bool {
+    let path = url.split('?').next().unwrap_or(url).to_lowercase();
+    if path.ends_with(".pdf") {
+        return true;
+    }
+    // Path-segment "/pdf/" or trailing "/pdf" (arXiv, IACR,
+    // many journal endpoints).
+    let no_scheme = path
+        .strip_prefix("https://")
+        .or_else(|| path.strip_prefix("http://"))
+        .unwrap_or(&path);
+    let path_part = no_scheme.split_once('/').map(|(_, p)| p).unwrap_or("");
+    let segs: Vec<&str> = path_part.split('/').filter(|s| !s.is_empty()).collect();
+    segs.contains(&"pdf") || path_part.ends_with("/pdf")
+}
+
+/// v2: fetch with an action script — navigate, act (click /
+/// type / press / scroll / wait), then run the NORMAL DonSift
+/// extraction over the final DOM. focus/section/toc all work
+/// on the interacted-with page. One call replaces hound's
+/// navigate→act→act→read round-trips.
+async fn fetch_with_actions(
+    daemon: &Arc<Daemon>,
+    url: &str,
+    host: &str,
+    opts: &ExtractOptions,
+    actions: &[crate::ghost::actions::Action],
+    shot: Option<&str>,
+) -> Value {
+    let mut trace = Trace::default();
+    trace.step("route", "actions", "browser-script", 0);
+
+    let t0 = std::time::Instant::now();
+    let mut g = match daemon.ghost_mgr.acquire(&daemon.profile).await {
+        Ok(g) => g,
+        Err(e) => {
+            return tool_error_structured(
+                format!("browser launch failed: {e}"),
+                "permanent",
+                Some(json!({
+                    "url": url,
+                    "status": 0,
+                    "next_action": "run `donsetch doctor` — the browser path is broken on this machine",
+                    "escalation": trace.value(),
+                })),
+            );
+        }
+    };
+    trace.step("2", "browser-launch", "ok", t0.elapsed().as_millis());
+
+    // Initial render through the standard ghost oracle: navigate,
+    // settle, challenge handling, content checks.
+    let t1 = std::time::Instant::now();
+    let page = match ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(25)).await {
+        Ok(p) => p,
+        Err(e) => {
+            // One transient retry, same as ghost_escalate.
+            match ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(25)).await {
+                Ok(p) => p,
+                Err(e2) => {
+                    return tool_error_structured(
+                        format!("browser automation error: {e} / {e2}"),
+                        "permanent",
+                        Some(json!({
+                            "url": url,
+                            "status": 0,
+                            "escalation": trace.value(),
+                        })),
+                    );
+                }
+            }
+        }
+    };
+    trace.step(
+        "2",
+        "ghost-render",
+        &format!("captcha={} dom={}KB", page.captcha, page.html.len() / 1024),
+        t1.elapsed().as_millis(),
+    );
+    if page.captcha {
+        if let Some(p) = shot {
+            let _ = g.screenshot(p).await;
+        }
+        return tool_error_structured(
+            format!(
+                "blocked at {url} — interactive captcha before actions could run. Use an Agent browser to browse sites like these"
+            ),
+            "walled",
+            Some(json!({
+                "url": url,
+                "status": 200,
+                "verdict": "Challenge",
+                "next_action": next_action_for(Some(Verdict::Challenge(Vendor::Generic)), 200, "walled"),
+                "escalation": trace.value(),
+            })),
+        );
+    }
+
+    // Run the script.
+    let t2 = std::time::Instant::now();
+    let outcomes = match crate::ghost::actions::run(&mut g, actions).await {
+        Ok(o) => {
+            trace.step(
+                "2",
+                "actions",
+                &format!("{} steps ok", o.len()),
+                t2.elapsed().as_millis(),
+            );
+            o
+        }
+        Err((step, reason, partial)) => {
+            for o in &partial {
+                trace.step("2", &format!("action[{}]", o.step), &o.outcome, o.ms);
+            }
+            if let Some(p) = shot {
+                let _ = g.screenshot(p).await;
+            }
+            let steps_json: Vec<Value> = partial
+                .iter()
+                .map(|o| json!({"step": o.step, "action": o.action, "outcome": o.outcome, "ms": o.ms}))
+                .collect();
+            return tool_error_structured(
+                format!(
+                    "actions[{step}] failed: {reason} — steps before it succeeded (see structuredContent.actions); fix the step and re-run"
+                ),
+                "permanent",
+                Some(json!({
+                    "url": url,
+                    "status": 200,
+                    "actions": steps_json,
+                    "escalation": trace.value(),
+                    "next_action": "inspect the page with a plain fetch (no actions), correct the failing step's selector/text, re-run",
+                })),
+            );
+        }
+    };
+
+    // Post-action DOM + optional screenshot for visual debugging.
+    let html = match g.outer_html().await {
+        Ok(h) => h,
+        Err(e) => {
+            return tool_error_structured(
+                format!("post-action DOM read failed: {e}"),
+                "transient",
+                Some(json!({
+                    "url": url,
+                    "status": 200,
+                    "escalation": trace.value(),
+                })),
+            );
+        }
+    };
+    if let Some(p) = shot {
+        let _ = g.screenshot(p).await;
+    }
+
+    // Cookie write-back — same discipline as ghost_escalate:
+    // the browser's clearance cookies flow to tier 1 for future
+    // plain-HTTP fetches of this domain. record_solved ONLY when
+    // a challenge was actually cleared (page.vendor set) —
+    // marking a never-walled domain needs_tier2 would poison its
+    // route to skip-to-solve forever (the v1.1 reddit-poisoning
+    // bug class).
+    if let Ok(cookies) = g.cookies().await
+        && !cookies.is_empty()
+    {
+        daemon.fetcher.import_cookies(&cookies).await;
+        if page.vendor.is_some() {
+            daemon
+                .state
+                .lock()
+                .await
+                .record_solved(host, &cookies, page.vendor.as_deref());
+        }
+    }
+
+    // Standard extraction over the final DOM, with the same
+    // candidate ladder as ghost_escalate: prose → links-keeping
+    // → raw text. A shell after actions is still a shell.
+    let mut best: Option<extract::Extracted> = None;
+    if let Ok(e) = extract::extract(html.as_bytes(), "text/html", url, opts)
+        && !e.thin
+    {
+        best = Some(e);
+    }
+    if best.is_none() {
+        let mut lopts = opts.clone();
+        lopts.include_links = true;
+        if let Ok(e2) = extract::extract(html.as_bytes(), "text/html", url, &lopts)
+            && !e2.thin
+        {
+            best = Some(e2);
+        }
+    }
+    let Some(ex) = best else {
+        return tool_error_structured(
+            format!(
+                "actions succeeded but the resulting page yielded no extractable content ({}KB DOM) — the site may still be loading; add a wait step and re-run",
+                html.len() / 1024
+            ),
+            "walled",
+            Some(json!({
+                "url": url,
+                "status": 200,
+                "escalation": trace.value(),
+                "next_action": "add {\"do\":\"wait_text\",\"text\":\"<expected>\"} or {\"do\":\"wait\",\"ms\":2000} before extraction",
+            })),
+        );
+    };
+
+    // Cache the action-recovered DOM for future plain fetches.
+    let dom_verdict = crate::detect::walls::detect_dom_smart(html.as_bytes());
+    if !matches!(dom_verdict, crate::detect::walls::Verdict::Challenge(_)) {
+        daemon.state.lock().await.record_render(url, &html);
+    }
+
+    let steps_json: Vec<Value> = outcomes
+        .iter()
+        .map(|o| json!({"step": o.step, "action": o.action, "outcome": o.outcome, "ms": o.ms}))
+        .collect();
+    let mut res = finish_result(&ex, "2-actions", 200, "ContentOk", url, &trace);
+    res["structuredContent"]["actions"] = Value::Array(steps_json);
+    res
+}
+
 fn finish_result(
     ex: &extract::Extracted,
     tier: &str,
     status: u16,
     verdict: &str,
     url: &str,
+    trace: &Trace,
 ) -> Value {
+    // PDF per-page stats: chars, ocr flag, per-page confidence —
+    // page boundaries preserved (the 50-case report's ask).
+    let pdf = ex.pdf_pages.as_ref().map(|pages| {
+        json!({
+            "pages": pages.len(),
+            "per_page": pages,
+        })
+    });
     json!({
         "content": [{ "type": "text", "text": ex.markdown }],
         "structuredContent": {
             "status": status,
             "tier": tier,
             "verdict": verdict,
+            "content_ok": !ex.thin && verdict == "ContentOk",
             "thin": ex.thin,
             "content_kind": format!("{:?}", ex.content_kind),
+            "quality": ex.quality,
+            "lang": ex.lang,
             "title": ex.title,
             "byline": ex.byline,
             "published": ex.published,
@@ -1067,6 +1449,8 @@ fn finish_result(
             "total_chars": ex.total_chars,
             "next_offset": ex.next_offset,
             "tokens_est": ex.tokens_est,
+            "escalation": trace.value(),
+            "pdf": pdf,
             "url": url,
         },
     })
@@ -1137,11 +1521,89 @@ fn tool_error(message: impl Into<String>) -> Value {
 /// "walled". MCP clients ignore the extra field; the CLI uses it
 /// to choose exit 1 / 2 / 3.
 fn tool_error_kind(message: impl Into<String>, kind: &str) -> Value {
-    json!({
+    tool_error_structured(message, kind, None)
+}
+
+/// Error with structure: the 50-case report asked for honest
+/// machine-readable failure state — status, verdict, url,
+/// next_action, and the escalation trace — so an agent can
+/// decide its fallback without parsing prose. Human message
+/// stays in content[0].text exactly as before.
+fn tool_error_structured(
+    message: impl Into<String>,
+    kind: &str,
+    structured: Option<Value>,
+) -> Value {
+    let mut v = json!({
         "content": [{ "type": "text", "text": message.into() }],
         "isError": true,
         "errorKind": kind
-    })
+    });
+    if let Some(s) = structured {
+        v["structuredContent"] = s;
+    }
+    v
+}
+
+/// What should the agent DO next, given this failure? One line,
+/// actionable, derived from verdict + kind. The report's core
+/// ask: "make failures unambiguous."
+fn next_action_for(verdict: Option<Verdict>, status: u16, kind: &str) -> String {
+    match verdict {
+        Some(Verdict::AuthWall) => {
+            "requires login credentials — no keyless automated path; use an interactive browser with your session".into()
+        }
+        Some(Verdict::Paywall) => {
+            "paid content — no automated path; look for an open preprint/copy via web_search".into()
+        }
+        Some(Verdict::SoftNotFound) => {
+            "verify the URL (typo? deleted page?) — or web_search the page title to find the moved copy".into()
+        }
+        Some(Verdict::Challenge(_)) if kind == "walled" => {
+            "tier 2 browser could not solve it — interactive verification needed; no automated path (by design DonSeTch does not solve captchas)".into()
+        }
+        Some(Verdict::Challenge(_)) => {
+            "retry with tier=2 (or tier=auto) — the headless browser solves most JS/cookie challenges".into()
+        }
+        Some(Verdict::Blocked) => match status {
+            429 => "rate limited — wait 30-60s and retry".into(),
+            403 => "access denied — retry later or from a different network; this server refuses bots".into(),
+            _ => "server rejected the request — retrying later sometimes works".into(),
+        },
+        _ if kind == "transient" => {
+            "transient network failure — safe to retry immediately".into()
+        }
+        _ if kind == "walled" => {
+            "no extractable content behind the wall — use an interactive agent browser for this site".into()
+        }
+        _ => "check the URL and retry; if repeated, the site may be down or blocking".into(),
+    }
+}
+
+/// Escalation trace: the ordered record of what DonSeTch tried —
+/// HTTP → browser → OCR-style fallbacks — with tier, action,
+/// outcome and per-step latency. Surfaced as
+/// structuredContent.escalation on successes AND errors, so the
+/// agent sees exactly why a fetch took its path (and what a
+/// 20s latency was spent on) without re-deriving it.
+#[derive(Default)]
+struct Trace {
+    steps: Vec<Value>,
+}
+
+impl Trace {
+    fn step(&mut self, tier: &str, action: &str, outcome: &str, ms: u128) {
+        self.steps.push(json!({
+            "tier": tier,
+            "action": action,
+            "outcome": outcome,
+            "ms": ms,
+        }));
+    }
+
+    fn value(&self) -> Value {
+        Value::Array(self.steps.clone())
+    }
 }
 
 /// Classify a wall verdict into an errorKind for CLI exit codes.

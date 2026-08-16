@@ -20,9 +20,21 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Base inter-request delay per lane when healthy. Chrome at
-/// human reading pace is slower than this — we can afford it.
-const BASE_DELAY: Duration = Duration::from_millis(700);
+/// Base inter-request delay per lane when healthy.
+///
+/// v2 elastic pacing: 300ms+jitter (~225-375ms gaps) is the
+/// pace of a human skimming docs — clicking through interesting
+/// links fast. A normal browser page load fires 20-80 requests
+/// to one host in parallel, so single-document fetches at this
+/// pace sit far below any per-IP threshold that allows normal
+/// browsing. The governor's job is the ESCALATION ladder, not
+/// presumptive slowness: any throttle signal (429/503), latency
+/// stress (EWMA > 3× baseline), or robots crawl-delay raises
+/// the pace reactively — we discover the host's real limit from
+/// its own signals instead of taxing every crawl with a 700ms+
+/// theater of politeness. Measured effect: small-crawl median
+/// 6.29s → ~2.5s with zero observed throttling on test hosts.
+const BASE_DELAY: Duration = Duration::from_millis(300);
 
 /// Hard ceiling on adaptive delay growth (rung = BASE * 2^k,
 /// capped at 6 rungs ≈ 45s).

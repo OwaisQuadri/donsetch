@@ -34,7 +34,6 @@ pub struct Merged {
     pub sources: Vec<(String, usize)>,
     pub score: f64,
     /// News vertical fills this; freshness ranking reads it.
-    #[allow(dead_code)]
     pub published: Option<String>,
 }
 
@@ -273,6 +272,14 @@ pub fn merge(
     // be fully overridden — "binary tree" ≠ "B-tree" no matter
     // how similar the cross-encoder thinks they are.
     crate::search::coverage::penalize(query, &mut results);
+
+    // Authority decisiveness: the post-rerank top-placement
+    // layer. Recall puts the right result IN the list; this
+    // puts it FIRST — query-aware official domains, title
+    // entity coverage, news freshness. Multipliers act on the
+    // final blended score (post min-max normalization), so
+    // they self-limit: near-zero semantic misses stay down.
+    crate::search::authority::apply(query, intent, &mut results);
 
     results.sort_by(|a, b| b.score.total_cmp(&a.score));
 

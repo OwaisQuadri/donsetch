@@ -54,6 +54,18 @@ pub fn detect(status: u16, headers: &[(String, String)], body: &[u8]) -> Verdict
     }
 
     if (200..300).contains(&status) {
+        // Binary bodies (PDFs, images, archives) never carry HTML
+        // challenge markers — marker-scanning their lossy-decoded
+        // bytes is how an arXiv PDF behind Cloudflare ("attention
+        // required" occurring inside the paper text, plus a cf-ray
+        // header) got false-flagged as Blocked at HTTP 200. Bot
+        // walls speak HTML; if the body is a PDF or another binary
+        // format, wall detection has nothing to say. Honest
+        // verdicts for these come from the binary guard (reject)
+        // or DonSheet (PDF parse) downstream.
+        if body.starts_with(b"%PDF-") || crate::fetch::guards::is_binary_body(body) {
+            return Verdict::ContentOk;
+        }
         // Interstitials dressed as 200. Body markers only
         // count on SMALL pages: interstitials are tiny,
         // while real pages (a Bing SERP, an article about
@@ -345,6 +357,21 @@ fn classify_wall(
     if text.len() < 16_384 && text.contains("javascript is disabled") && text.contains("robot") {
         return Verdict::Challenge(Vendor::Generic);
     }
+    // Cloudflare's bare JS-shell 200: "Enable JavaScript and
+    // cookies to continue". The 50-case report's exact example
+    // of a response that must never count as successful. The
+    // "cookies to continue" co-marker keeps normal <noscript>
+    // advice ("enable JavaScript for the best experience") out.
+    if text.len() < 16_384
+        && text.contains("enable javascript")
+        && text.contains("cookies to continue")
+    {
+        return Verdict::Challenge(if is_cf {
+            Vendor::Cloudflare
+        } else {
+            Vendor::Generic
+        });
+    }
     Verdict::ContentOk
 }
 
@@ -520,5 +547,84 @@ mod tests {
             matches!(v, Verdict::ContentOk),
             "got {v:?} — bare 'turnstile' word must not trigger challenge"
         );
+    }
+
+    #[test]
+    fn pdf_body_with_wall_markers_is_content() {
+        // The live arXiv bug: an HTTP 200 PDF behind Cloudflare
+        // (cf-ray header present, so is_cf=true) whose paper text
+        // contains "attention required" — the ONLY path to
+        // Blocked on a 200 — must parse as content. Body is
+        // deliberately < 32KB so the marker scan WOULD run were
+        // the binary gate absent.
+        let mut body = Vec::new();
+        body.extend_from_slice(b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n");
+        body.extend_from_slice(
+            b"1 0 obj << /Type /Catalog >> endobj\nstream\nattention required | cloudflare ray id ",
+        );
+        body.extend_from_slice(b"captcha verification robot challenge just a moment\nendstream");
+        let headers = vec![
+            ("server".to_string(), "cloudflare".to_string()),
+            ("cf-ray".to_string(), "8fa1deadbeef".to_string()),
+        ];
+        let v = detect(200, &headers, &body);
+        assert!(
+            matches!(v, Verdict::ContentOk),
+            "got {v:?} — a real PDF must never be wall-classified"
+        );
+    }
+
+    #[test]
+    fn binary_image_body_with_captcha_metadata_is_content() {
+        // Same class of false positive: a PNG whose EXIF/text
+        // chunk mentions "captcha" + "verification" on a 200
+        // must not be Challenge. (Null-byte heuristic also
+        // covers arbitrary binaries.)
+        let mut body = Vec::new();
+        body.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        body.extend_from_slice(&[0u8; 64]);
+        body.extend_from_slice(b"captcha verification are you a robot");
+        let v = detect(200, &[], &body);
+        assert!(
+            matches!(v, Verdict::ContentOk),
+            "got {v:?} — binary bodies are not wall pages"
+        );
+    }
+
+    #[test]
+    fn pdf_status_403_still_classifies_as_wall() {
+        // The gate only applies to 2xx: a PDF-flavored body on a
+        // 403 is still a wall/block decision (e.g. a CDN serving
+        // an error PDF).
+        let body = b"%PDF-1.5 denied";
+        let v = detect(403, &[], body);
+        assert!(
+            !matches!(v, Verdict::ContentOk),
+            "got {v:?} — non-2xx must not become content via the binary gate"
+        );
+    }
+
+    #[test]
+    fn cf_enable_javascript_cookies_shell_is_challenge() {
+        // The 50-case report: "Do not call a response successful
+        // when it only contains 'Enable JavaScript and cookies
+        // to continue'". Cloudflare 200 shell.
+        let body = b"<html><body><h1>Please Enable JavaScript and Cookies to continue</h1><p>This site requires JavaScript and cookies to run.</p></body></html>";
+        let headers = vec![("server".to_string(), "cloudflare".to_string())];
+        let v = detect(200, &headers, body);
+        assert!(
+            matches!(v, Verdict::Challenge(Vendor::Cloudflare)),
+            "got {v:?} — JS-only shell must never be ContentOk"
+        );
+    }
+
+    #[test]
+    fn noscript_advice_is_still_content() {
+        // Ordinary <noscript> "enable JavaScript for the best
+        // experience" advice on a real page stays content — the
+        // "cookies to continue" co-marker is required.
+        let body = b"<html><head><noscript>For the best experience enable JavaScript in your browser settings.</noscript></head><body><h1>Real Article</h1><p>Substantial real body text that is definitely present on this actual page and makes it a real page with content on it.</p></body></html>";
+        let v = detect(200, &[], body);
+        assert!(matches!(v, Verdict::ContentOk), "got {v:?}");
     }
 }

@@ -13,6 +13,8 @@ pub mod rank;
 pub mod rerank;
 pub mod verticals;
 
+mod authority;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -579,7 +581,7 @@ impl Searcher {
     /// version. Works even when SERP parsers return empty
     /// snippets. Dead links that rank well are demoted.
     async fn enrich_results(&self, results: &mut [Merged]) {
-        const ENRICH_TOP: usize = 3;
+        const ENRICH_TOP: usize = 5;
         const ENRICH_TIMEOUT: Duration = Duration::from_secs(4);
 
         let n = results.len().min(ENRICH_TOP);
