@@ -85,11 +85,7 @@ fn cmd_add(args: &[String]) {
                 bold(&provider)
             );
         } else {
-            println!(
-                "  {} added key to {}",
-                green("\u{2713}"),
-                bold(&provider)
-            );
+            println!("  {} added key to {}", green("\u{2713}"), bold(&provider));
         }
     } else if is_new {
         println!(
@@ -201,7 +197,11 @@ fn cmd_default(args: &[String]) {
                 "{} usage: donsetch keys default <provider|local>",
                 red("\u{2717}")
             );
-            eprintln!("   providers: {} or {}", dim(&PROVIDERS.join(", ")), green("local"));
+            eprintln!(
+                "   providers: {} or {}",
+                dim(&PROVIDERS.join(", ")),
+                green("local")
+            );
             std::process::exit(1);
         }
     };
@@ -298,10 +298,7 @@ fn cmd_export(args: &[String]) {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(
-                            p,
-                            std::fs::Permissions::from_mode(0o600),
-                        );
+                        let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600));
                     }
                     let n_providers = cfg.providers.len();
                     let n_keys: usize = cfg.providers.iter().map(|p| p.keys.len()).sum();
@@ -327,11 +324,11 @@ fn cmd_import(args: &[String]) {
     let path = match args.get(3) {
         Some(p) if !p.trim().is_empty() => p,
         _ => {
+            eprintln!("{} usage: donsetch keys import <path>", red("\u{2717}"));
             eprintln!(
-                "{} usage: donsetch keys import <path>",
-                red("\u{2717}")
+                "   import a config exported by {}",
+                green("donsetch keys export")
             );
-            eprintln!("   import a config exported by {}", green("donsetch keys export"));
             std::process::exit(1);
         }
     };
@@ -455,7 +452,10 @@ fn print_help() {
     println!();
     println!("  {}", bold("Default:"));
     println!("    Set a provider as default → BYOK is tried first, local is fallback.");
-    println!("    Set {} as default → local is tried first, BYOK is fallback.", green("local"));
+    println!(
+        "    Set {} as default → local is tried first, BYOK is fallback.",
+        green("local")
+    );
     println!("    Lets you test local search without removing your keys.");
     println!();
     println!("  {}", bold("Stacking:"));

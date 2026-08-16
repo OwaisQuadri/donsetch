@@ -159,9 +159,8 @@ impl ByokConfig {
 
     /// Deserialize from JSON (for import). Validates structure.
     pub fn from_json(json: &str) -> Result<Self, String> {
-        let cfg: ByokConfig = serde_json::from_str(json)
-            .map_err(|e| format!("invalid config: {e}"))?
-        ;
+        let cfg: ByokConfig =
+            serde_json::from_str(json).map_err(|e| format!("invalid config: {e}"))?;
         cfg.validate()?;
         Ok(cfg)
     }

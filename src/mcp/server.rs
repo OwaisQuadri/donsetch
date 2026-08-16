@@ -1535,10 +1535,7 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                         })
                     }
                     Err(e2) => {
-                        tool_error_kind(
-                            format!("search: local ({e}); byok ({e2})"),
-                            "transient",
-                        )
+                        tool_error_kind(format!("search: local ({e}); byok ({e2})"), "transient")
                     }
                 }
             } else {
