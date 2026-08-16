@@ -521,20 +521,20 @@ Both are local-first web tools for AI agents. Both are keyless and open source. 
 | | **DonSeTch** | **wigolo** |
 |---|---|---|
 | **Install** | `npm install -g donsetch` — done | `npx wigolo init` — downloads ~1.5 GB (ML models + browser), then config wizard |
-| **Startup time** | 0.3s | ~13s (ML model loading on every cold start) |
+| **Startup time** | 0.3s | ~13s cold start (ML model + browser + module initialization) |
 | **Search latency** | 6.1s avg | 23.5s avg (fetches page content during search for ML reranking) |
-| **Search engines** | 5-8 keyless + intent verticals (GitHub, HN, Scholar, StackExchange, MDN) | 2 (DuckDuckGo + Marginalia) |
-| **Bot-wall bypass** | Auto-escalation with Chrome-true TLS — bypasses Cloudflare on StackOverflow, Amazon, BBC, Guardian | No bypass. Stealth mode times out after 120s. Completely blocked on StackOverflow and Reddit |
-| **Crawl** | Topic filter, sitemap discovery, per-page quality scoring, resume tokens | No topic filter, no quality scores, no resume. Wastes budget on single large pages |
+| **Search engines** | 5 keyless + intent verticals (GitHub, HN, Scholar, StackExchange, MDN) — 5-8 effective per query | 18 adapters total; 4-5 in default keyless mode (Bing, DDG, Wikipedia, Marginalia, Mojeek) |
+| **Bot-wall bypass** | Auto-escalation with Chrome-true TLS (BoringSSL) — bypasses Cloudflare on StackOverflow, Amazon, BBC, Guardian | TLS impersonation + stealth browser mode exist, but in testing: blocked on StackOverflow, timed out on Reddit (120s) |
+| **Crawl** | Semantic topic filter, sitemap discovery, per-page quality scoring, resume tokens | URL pattern filtering (regex), sitemap strategy, but no semantic topic ranking, no quality scores, no resume |
 | **Token efficiency** | 5.7 KB per search, `focus` cuts fetch tokens 50-80% | 11.4 KB per search, 40% is scoring metadata |
-| **Dependencies** | 0 npm packages. Single 36 MB Rust binary | 28+ npm packages, Playwright (~300 MB), ML model (~80 MB), SQLite cache |
-| **Setup steps** | 1 (`npm install -g donsetch`) | 3+ (`npx wigolo init` → model download → browser download → optional LLM env vars) |
+| **Dependencies** | 0 npm packages. Single 36 MB Rust binary | 28 npm packages, Playwright browser, ML models, SQLite cache (~1.5 GB total per wigolo docs) |
+| **Setup steps** | 1 (`npm install -g donsetch`) | 1-2 (`npx wigolo init` downloads ~1.5 GB, then optional agent wiring + LLM env vars) |
 | **Config** | Zero. Works immediately | Init wizard, env vars for LLM provider, optional hybrid search config |
 | **Pi agent** | `pi install npm:donsetch` — native extension, zero config | Not available |
 | **Fetch success rate** | 87.5% (14/16 tested sites) | 67% (10/15 tested sites) |
-| **Cold-start failure points** | Binary | ML model, Playwright, SQLite, 28+ dependency tree |
+| **Cold-start failure points** | Binary, search engines | ML model, Playwright, SQLite, 28-package dependency tree |
 
-DonSeTch is install and use. wigolo is install, download models, download browsers, configure, then wait 13s every time you start it.
+DonSeTch is install and use. wigolo is install, download ~1.5 GB of models and browsers, configure, then wait ~13s on every cold start.
 
 ---
 
