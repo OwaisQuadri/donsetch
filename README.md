@@ -1,10 +1,8 @@
 <div align="center">
 
-<img src="assets/Logo.png" width="120" height="120" alt="DonSeTch">
+<img src="assets/herobanner.png" alt="DonSeTch — The web, for AI agents">
 
-# DonSeTch
-
-**Give your AI agent the web. $0. No keys, no accounts. Built from scratch in Rust.**
+**$0. No keys, no accounts. Built from scratch in Rust.**
 
 Fetch · search · crawl · bypass bot walls · read PDFs (even scanned) · semantic reranking
 
@@ -22,14 +20,6 @@ One binary · Chrome's own TLS · headless browser escalation · zero Python
 [![CI](https://img.shields.io/github/actions/workflow/status/dondai44423/donsetch/ci.yml?label=CI&style=flat-square)](https://github.com/dondai44423/donsetch/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/donsetch?color=cb3837&style=flat-square)](https://www.npmjs.com/package/donsetch)
 [![Stars](https://img.shields.io/github/stars/dondai44423/donsetch?color=ff9f43&style=flat-square)](https://github.com/dondai44423/donsetch)
-
-</div>
-
-<br>
-
-<div align="center">
-
-<img src="assets/herobanner.png" width="800" alt="DonSeTch — The web, for AI agents">
 
 </div>
 
@@ -326,7 +316,7 @@ When warm cookies go stale, the system learns the real lifetime: `observed_lifet
 
 <div align="center">
 
-<img src="assets/owlsearch.png" width="700" alt="DonSeTch Search">
+<img src="assets/owlsearch.png" alt="DonSeTch Search">
 
 </div>
 
@@ -372,7 +362,7 @@ Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**. Key ro
 
 <div align="center">
 
-<img src="assets/fetch.png" width="700" alt="DonSeTch Fetch">
+<img src="assets/fetch.png" alt="DonSeTch Fetch">
 
 </div>
 
@@ -408,7 +398,7 @@ Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**. Key ro
 
 <div align="center">
 
-<img src="assets/crawl.png" width="700" alt="DonSeTch Crawl">
+<img src="assets/crawl.png" alt="DonSeTch Crawl">
 
 </div>
 
