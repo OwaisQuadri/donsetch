@@ -77,7 +77,17 @@ Downloads the prebuilt binary for your platform from GitHub Releases with SHA256
 | macOS arm64 | `donsetch-darwin-arm64.tar.gz` |
 | Windows x86_64 | `donsetch-win32-x64.tar.gz` |
 
-### Option 2 — Build from source
+### Option 2 — Pi agent (native extension)
+
+```bash
+pi install npm:donsetch
+```
+
+Installs DonSeTch as a native pi extension. The donsetch MCP binary spawns at session start, discovers its 3 tools dynamically, and registers them as native pi tools — no MCP adapter, no proxy, no config. Tools stay in sync with the binary automatically (zero maintenance). If the binary is missing, the extension auto-downloads it from GitHub Releases.
+
+Update with `pi update --extensions` — both the binary and extension update together.
+
+### Option 3 — Build from source
 
 | Dependency | Why | Linux | macOS | Windows |
 |---|---|---|---|---|
