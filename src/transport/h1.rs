@@ -11,9 +11,14 @@ pub struct H1Response {
     pub body: Vec<u8>,
 }
 
+/// Hard cap on an HTTP/1.1 response body (matches the
+/// decompression cap — bombs must fail before they allocate).
+const MAX_BODY: usize = 64 << 20;
+
 /// Generic over any async stream — works for both TLS
 /// (`SslStream<TcpStream>`) and raw plaintext `TcpStream`
 /// (the http:// path).
+
 pub async fn get<S>(
     stream: &mut S,
     path: &str,
@@ -22,6 +27,18 @@ pub async fn get<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    // Header values are synthesized partly from response data
+    // (cookies). A CR/LF/NUL inside one would split the request
+    // on the wire — refuse to send instead.
+    for (n, v) in headers {
+        if !crate::fetch::guards::valid_header_value(n)
+            || !crate::fetch::guards::valid_header_value(v)
+        {
+            return Err(FetchError::Http(
+                "h1: invalid header value (CR/LF/NUL) — refused to send".into(),
+            ));
+        }
+    }
     let mut req = format!("GET {path} HTTP/1.1\r\n");
     for (n, v) in headers {
         req.push_str(&format!("{n}: {v}\r\n"));
@@ -76,6 +93,12 @@ where
     if is_chunked {
         body = read_chunked(stream, body).await?;
     } else if let Some(cl) = content_len {
+        // A lying Content-Length must not turn into a giant alloc.
+        if cl > MAX_BODY {
+            return Err(FetchError::Http(format!(
+                "h1: content-length {cl} exceeds body cap"
+            )));
+        }
         while body.len() < cl {
             let n = stream.read(&mut tmp).await?;
             if n == 0 {
@@ -85,13 +108,16 @@ where
         }
         body.truncate(cl);
     } else {
-        // Read to close.
+        // Read to close — still capped.
         loop {
             let n = stream.read(&mut tmp).await?;
             if n == 0 {
                 break;
             }
             body.extend_from_slice(&tmp[..n]);
+            if body.len() > MAX_BODY {
+                return Err(FetchError::Http("h1: body exceeds cap".into()));
+            }
         }
     }
 
@@ -136,6 +162,9 @@ where
         let size_str = String::from_utf8_lossy(&raw[..line_end]);
         let size = usize::from_str_radix(size_str.split(';').next().unwrap_or("").trim(), 16)
             .map_err(|_| FetchError::Http(format!("h1: bad chunk size: {size_str}")))?;
+        if size > MAX_BODY {
+            return Err(FetchError::Http("h1: chunk size exceeds cap".into()));
+        }
         let mut rest = raw.split_off(line_end + 2);
         if size == 0 {
             // Trailer section ends with empty line.
@@ -158,6 +187,9 @@ where
                 return Err(FetchError::Http("h1: eof in chunk data".into()));
             }
             rest.extend_from_slice(&tmp[..n]);
+        }
+        if out.len() + size > MAX_BODY {
+            return Err(FetchError::Http("h1: chunked body exceeds cap".into()));
         }
         out.extend_from_slice(&rest[..size]);
         raw = rest.split_off(size + 2);

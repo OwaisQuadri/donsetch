@@ -317,7 +317,30 @@ impl GhostState {
             }
             if let Ok(s) = serde_json::to_string(self) {
                 let tmp = p.with_extension("json.tmp");
-                if std::fs::write(&tmp, &s).is_ok() {
+                // 0600 BEFORE content lands on disk: the state file
+                // carries harvested cookies (clearance / session
+                // identifiers) and must not be world-readable, even
+                // transiently on the tmp file.
+                let write_ok = {
+                    #[cfg(unix)]
+                    {
+                        use std::io::Write;
+                        use std::os::unix::fs::OpenOptionsExt;
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .truncate(true)
+                            .mode(0o600)
+                            .open(&tmp)
+                            .and_then(|mut f| f.write_all(s.as_bytes()))
+                            .is_ok()
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        std::fs::write(&tmp, &s).is_ok()
+                    }
+                };
+                if write_ok {
                     let _ = std::fs::rename(&tmp, &p);
                 }
             }

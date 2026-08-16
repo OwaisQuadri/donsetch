@@ -110,7 +110,29 @@ impl ByokConfig {
         match serde_json::to_string_pretty(self) {
             Ok(json) => {
                 let tmp = path.with_extension("tmp");
-                if std::fs::write(&tmp, json).is_ok() {
+                // Create the tmp file 0600 BEFORE writing key
+                // material — the old write-then-chmod path left a
+                // world-readable file behind on any crash.
+                let write_ok = {
+                    #[cfg(unix)]
+                    {
+                        use std::io::Write;
+                        use std::os::unix::fs::OpenOptionsExt;
+                        std::fs::OpenOptions::new()
+                            .write(true)
+                            .create(true)
+                            .truncate(true)
+                            .mode(0o600)
+                            .open(&tmp)
+                            .and_then(|mut f| f.write_all(json.as_bytes()))
+                            .is_ok()
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        std::fs::write(&tmp, json).is_ok()
+                    }
+                };
+                if write_ok {
                     let _ = std::fs::rename(&tmp, &path);
                     // Restrict permissions: only owner can read.
                     #[cfg(unix)]

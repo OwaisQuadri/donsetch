@@ -15,8 +15,14 @@ use std::net::IpAddr;
 /// Happy Eyeballs will resolve and connect; private IPs
 /// from DNS are an accepted risk for a client-side tool.
 pub fn is_ssrf_host(host: &str) -> bool {
+    // url::Url::host_str() keeps brackets on IPv6 literals —
+    // strip them so the IP parser actually sees an IP.
+    let unbracketed = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
     // Literal IP?
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    if let Ok(ip) = unbracketed.parse::<IpAddr>() {
         return is_private_ip(&ip);
     }
     // Well-known localhost names.
@@ -26,6 +32,15 @@ pub fn is_ssrf_host(host: &str) -> bool {
         || h.ends_with(".localhost")
         || h == "0.0.0.0"
         || h == "[::1]"
+        || h == "::1"
+}
+
+/// IP-level SSRF check for post-resolution validation.
+/// A hostname that resolves to a private address is just as
+/// dangerous as a literal one (DNS pinning closes the
+/// hostname/rebinding bypass).
+pub fn is_ssrf_ip(ip: &IpAddr) -> bool {
+    is_private_ip(ip)
 }
 
 fn is_private_ip(ip: &IpAddr) -> bool {
@@ -40,6 +55,11 @@ fn is_private_ip(ip: &IpAddr) -> bool {
                 || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 0x40)
         }
         IpAddr::V6(v6) => {
+            // IPv4-mapped (::ffff:a.b.c.d) is the v4 address —
+            // check it as v4 or it slips past every v6 rule.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_private_ip(&IpAddr::V4(v4));
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
                 // Link-local: fe80::/10
@@ -48,6 +68,13 @@ fn is_private_ip(ip: &IpAddr) -> bool {
                 || (v6.segments()[0] & 0xfe00) == 0xfc00
         }
     }
+}
+
+/// Header values must never carry CR/LF/NUL: a value smuggled
+/// from a response (e.g. a cookie) into a request line would
+/// split/inject headers on the wire (request splitting).
+pub fn valid_header_value(v: &str) -> bool {
+    !v.contains('\r') && !v.contains('\n') && !v.contains('\0')
 }
 
 /// True if the content-type header indicates binary (non-text)
@@ -179,6 +206,34 @@ mod tests {
     fn ssrf_carrier_grade_nat() {
         assert!(is_ssrf_host("100.64.0.1"));
         assert!(!is_ssrf_host("100.128.0.1"));
+    }
+
+    #[test]
+    fn ssrf_blocks_ipv4_mapped_v6() {
+        // url::Url::host_str() keeps brackets; the guard must see
+        // through them and treat mapped addresses as their v4 self.
+        assert!(is_ssrf_host("[::ffff:127.0.0.1]"));
+        assert!(is_ssrf_host("[::ffff:169.254.169.254]"));
+        assert!(is_ssrf_host("[::ffff:10.0.0.1]"));
+        assert!(is_ssrf_host("[fd12:3456::1]"));
+        assert!(is_ssrf_host("[fe80::1]"));
+    }
+
+    #[test]
+    fn ssrf_ip_level_check() {
+        use std::net::IpAddr;
+        let ip: IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        assert!(is_ssrf_ip(&ip));
+        let ip: IpAddr = "::ffff:8.8.8.8".parse().unwrap();
+        assert!(!is_ssrf_ip(&ip));
+    }
+
+    #[test]
+    fn header_value_validation() {
+        assert!(valid_header_value("plain value; charset=utf-8"));
+        assert!(!valid_header_value("a\r\nX-Evil: 1"));
+        assert!(!valid_header_value("a\nb"));
+        assert!(!valid_header_value("a\0b"));
     }
 
     #[test]

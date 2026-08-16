@@ -211,6 +211,17 @@ impl Fetcher {
                         out.redirects = redirects;
                         return Ok(out);
                     }
+                    // SSRF guard on EVERY hop: a public URL that
+                    // redirects into a private network must not
+                    // be followed (the initial-URL-only check is
+                    // trivially bypassable otherwise).
+                    if let Some(h) = next.host_str()
+                        && crate::fetch::guards::is_ssrf_host(h)
+                    {
+                        return Err(FetchError::Http(format!(
+                            "redirect to private/loopback address blocked: {h} — SSRF guard"
+                        )));
+                    }
                     current = next.to_string();
                 }
                 _ => {
@@ -323,6 +334,18 @@ impl Fetcher {
                 .position(|(n, _)| n == "accept-encoding")
                 .unwrap_or(req_headers.len());
             req_headers.insert(pos, ("referer".into(), ref_val));
+        }
+
+        // Reject header values carrying CR/LF/NUL before they can
+        // reach the wire: values synthesized from response data
+        // (cookies, referer) must never split the request.
+        if req_headers
+            .iter()
+            .any(|(n, v)| !crate::fetch::guards::valid_header_value(n) || !crate::fetch::guards::valid_header_value(v))
+        {
+            return Err(FetchError::Http(
+                "invalid header value (CR/LF/NUL) — refused to send".into(),
+            ));
         }
 
         // 1) Try a pooled h2 connection for this origin.

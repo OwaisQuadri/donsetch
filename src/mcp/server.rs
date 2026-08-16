@@ -315,6 +315,23 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     }
     let resume = args.get("resume").and_then(Value::as_str).map(String::from);
 
+    // SSRF guard on the seed — the fetch tool has one, the crawl
+    // tool must too (it fetches just as hard).
+    if !url.is_empty() {
+        match url::Url::parse(&url) {
+            Ok(u) => {
+                if let Some(host) = u.host_str()
+                    && crate::fetch::guards::is_ssrf_host(host)
+                {
+                    return tool_error(format!(
+                        "blocked: {host} is a private/loopback address — SSRF guard"
+                    ));
+                }
+            }
+            Err(_) => return tool_error(format!("invalid URL: {url}")),
+        }
+    }
+
     // Ghost-warm: if this host was tier-2 solved recently, the
     // clearance cookies ride tier 1 from page one.
     if let Some(host) = url::Url::parse(&url)

@@ -20,6 +20,30 @@ pub async fn happy_connect(host: &str, port: u16) -> Result<TcpStream, FetchErro
         return Err(FetchError::Http(format!("dns: no address for {host}")));
     }
 
+    // DNS pinning (SSRF): a hostname that resolves to a
+    // private/loopback address is treated exactly like a
+    // literal one. Checking the addresses we are about to
+    // dial — not the name — also closes rebinding TOCTOU.
+    // Escape hatch for deliberate local-egress use (CLI
+    // power users, tests): DONSETCH_ALLOW_PRIVATE_EGRESS=1.
+    let addrs: Vec<SocketAddr> = if std::env::var_os("DONSETCH_ALLOW_PRIVATE_EGRESS").is_some() {
+        addrs
+    } else {
+        let blocked: Vec<&SocketAddr> = addrs
+            .iter()
+            .filter(|a| crate::fetch::guards::is_ssrf_ip(&a.ip()))
+            .collect();
+        if blocked.len() == addrs.len() {
+            return Err(FetchError::Http(format!(
+                "dns: {host} resolves to a private/loopback address — SSRF guard"
+            )));
+        }
+        addrs
+            .into_iter()
+            .filter(|a| !crate::fetch::guards::is_ssrf_ip(&a.ip()))
+            .collect()
+    };
+
     let mut v6: Vec<SocketAddr> = addrs.iter().filter(|a| a.is_ipv6()).copied().collect();
     let mut v4: Vec<SocketAddr> = addrs.iter().filter(|a| a.is_ipv4()).copied().collect();
     // Chrome prefers IPv6.

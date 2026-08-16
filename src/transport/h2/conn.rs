@@ -11,6 +11,12 @@ use crate::profile::BrowserProfile;
 
 const PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
+/// Hard cap on the decoded response body (matches h1/decompress).
+const MAX_BODY: usize = 64 << 20;
+/// Hard cap on the accumulated (possibly CONTINUATION-chained)
+/// header block. Unbounded chaining is a trivial memory DoS.
+const MAX_HEADER_BLOCK: usize = 256 << 10;
+
 pub struct H2Response {
     pub status: u16,
     pub headers: Vec<(String, String)>,
@@ -160,11 +166,26 @@ impl H2Conn {
                         }
                         header_frag = payload.get(off..).unwrap_or(&[]).to_vec();
                     } else {
+                        if header_frag.len() + payload.len() > MAX_HEADER_BLOCK {
+                            return Err(FetchError::Http(
+                                "h2: header block exceeds cap (CONTINUATION flood?)".into(),
+                            ));
+                        }
                         header_frag.extend_from_slice(&payload);
                     }
                     if hdr.flags & FLAG_END_HEADERS != 0 {
                         let decoded = self.decoder.decode(&header_frag)?;
                         for (n, v) in decoded {
+                            // RFC 9113 §8.2.2: CR/LF in field values is
+                            // malformed. Such a value must never reach the
+                            // cookie jar — it would split later h1 requests.
+                            if !crate::fetch::guards::valid_header_value(&n)
+                                || !crate::fetch::guards::valid_header_value(&v)
+                            {
+                                return Err(FetchError::Http(
+                                    "h2: header name/value contains CR/LF/NUL — malformed".into(),
+                                ));
+                            }
                             if n == ":status" {
                                 status = v.parse().unwrap_or(0);
                             } else if !n.starts_with(':') {
@@ -187,6 +208,9 @@ impl H2Conn {
                         &payload[..]
                     };
                     body.extend_from_slice(data);
+                    if body.len() > MAX_BODY {
+                        return Err(FetchError::Http("h2: response body exceeds cap".into()));
+                    }
                     stream_window -= data.len() as i64;
                     self.conn_window -= data.len() as i64;
                     // Replenish flow-control windows at half consumption.

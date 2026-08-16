@@ -309,6 +309,15 @@ impl Decoder {
             } else if b & 0xe0 == 0x20 {
                 // Dynamic table size update.
                 let new_max = decode_int(block, &mut pos, 5)? as usize;
+                // RFC 7541 §4.2: must not exceed what we advertised
+                // (Chrome's HEADER_TABLE_SIZE = 65536). An uncapped
+                // update lets a hostile server balloon our decoder
+                // table without bound.
+                if new_max > DYNAMIC_MAX {
+                    return Err(FetchError::Http(format!(
+                        "hpack: table size update {new_max} exceeds {DYNAMIC_MAX}"
+                    )));
+                }
                 self.dyn_table.max = new_max;
                 while self.dyn_table.size > self.dyn_table.max && !self.dyn_table.entries.is_empty()
                 {

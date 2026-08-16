@@ -34,7 +34,11 @@ pub async fn read_frame<R: AsyncReadExt + Unpin>(
     let mut hdr = [0u8; 9];
     r.read_exact(&mut hdr).await?;
     let len = u32::from_be_bytes([0, hdr[0], hdr[1], hdr[2]]);
-    if len > 1 << 24 {
+    // 1 MiB cap: 16 MiB frames are accepted pre-SETTINGS today,
+    // which is a cheap per-connection memory amplifier. Real
+    // servers send SETTINGS_MAX_FRAME_SIZE ≤ 16 KiB and never
+    // need anything close to 1 MiB.
+    if len > 1 << 20 {
         return Err(FetchError::Http(format!("h2 frame too large: {len}")));
     }
     let header = FrameHeader {

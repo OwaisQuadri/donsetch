@@ -18,7 +18,7 @@ const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const REPO = 'dondai44423/donsetch';
 const VERSION = require('./package.json').version;
@@ -61,15 +61,27 @@ const baseUrl = `https://github.com/${REPO}/releases/download/${TAG}`;
 const assetUrl = `${baseUrl}/${plat.asset}`;
 const checksumUrl = `${baseUrl}/${plat.asset}.sha256`;
 
-// ── download with redirect following ────────────────────────────
+// ── download with redirect following (max 5 hops) ───────────────
 function download(url, dest) {
   return new Promise((resolve, reject) => {
-    function get(u) {
+    const MAX_REDIRECTS = 5;
+    function get(u, hops) {
+      if (hops > MAX_REDIRECTS) {
+        reject(new Error(`too many redirects for ${url}`));
+        return;
+      }
       const opts = { headers: { 'Accept': 'application/octet-stream', 'User-Agent': 'donsetch-npm-installer' } };
       https.get(u, opts, (res) => {
         if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
           res.resume();
-          get(res.headers.location);
+          const loc = res.headers.location;
+          if (!loc) { reject(new Error(`redirect without Location from ${u}`)); return; }
+          // Stay on https: never follow a downgrade to cleartext.
+          if (loc.startsWith('http://')) {
+            reject(new Error(`refusing http:// downgrade redirect to ${loc}`));
+            return;
+          }
+          get(loc, hops + 1);
           return;
         }
         if (res.statusCode !== 200) {
@@ -86,7 +98,7 @@ function download(url, dest) {
         });
       }).on('error', reject);
     }
-    get(url);
+    get(url, 0);
   });
 }
 
@@ -119,7 +131,9 @@ async function main() {
 
   // 4. Extract (tar is built into Linux, macOS, and Windows 10+)
   console.log('donsetch: extracting...');
-  execSync(`tar xzf "${tarball}" -C "${binDir}"`, { stdio: 'inherit' });
+  // execFileSync: no shell, no string interpolation — the install
+  // path (which can contain quotes/spaces) is passed as argv.
+  execFileSync('tar', ['xzf', tarball, '-C', binDir], { stdio: 'inherit' });
 
   // 5. Cleanup
   try { fs.unlinkSync(tarball); } catch (_) {}
