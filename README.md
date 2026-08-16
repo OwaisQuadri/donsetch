@@ -8,18 +8,23 @@ Fetch · search · crawl · bypass bot walls · read PDFs (even scanned) · sema
 
 One binary · Chrome's own TLS · headless browser escalation · zero Python
 
+Works with **Claude Code**, **Cursor**, **OpenCode**, **Pi**, **Windsurf**, and any MCP client.
+
 </div>
 
 <br>
 
 <div align="center">
 
-[![Release](https://img.shields.io/github/v/release/dondai44423/donsetch?color=00d4aa&label=release&style=flat-square)](https://github.com/dondai44423/donsetch/releases)
-[![Rust](https://img.shields.io/badge/Rust-edition%202024-ce422b?style=flat-square)](https://www.rust-lang.org)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-00d4aa?style=flat-square)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/dondai44423/donsetch/ci.yml?label=CI&style=flat-square)](https://github.com/dondai44423/donsetch/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/donsetch?color=cb3837&style=flat-square)](https://www.npmjs.com/package/donsetch)
-[![Stars](https://img.shields.io/github/stars/dondai44423/donsetch?color=ff9f43&style=flat-square)](https://github.com/dondai44423/donsetch)
+[![Release](https://img.shields.io/github/v/release/dondai44423/donsetch?color=ffb200&label=release&style=for-the-badge)](https://github.com/dondai44423/donsetch/releases)
+[![npm](https://img.shields.io/npm/v/donsetch?color=cb3837&label=npm&style=for-the-badge)](https://www.npmjs.com/package/donsetch)
+
+[![CI](https://img.shields.io/github/actions/workflow/status/dondai44423/donsetch/ci.yml?label=CI&style=for-the-badge)](https://github.com/dondai44423/donsetch/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-AGPL%203.0-00d4aa?style=for-the-badge)](LICENSE)
+
+[![Rust](https://img.shields.io/badge/Rust-edition%202024-ce422b?style=for-the-badge)](https://www.rust-lang.org)
+[![Stars](https://img.shields.io/github/stars/dondai44423/donsetch?color=ff9f43&style=for-the-badge)](https://github.com/dondai44423/donsetch)
+[![Tests](https://img.shields.io/badge/tests-442%20passed-00d4aa?style=for-the-badge)](#)
 
 </div>
 
