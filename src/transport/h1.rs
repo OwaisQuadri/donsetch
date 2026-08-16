@@ -18,7 +18,6 @@ const MAX_BODY: usize = 64 << 20;
 /// Generic over any async stream — works for both TLS
 /// (`SslStream<TcpStream>`) and raw plaintext `TcpStream`
 /// (the http:// path).
-
 pub async fn get<S>(
     stream: &mut S,
     path: &str,
