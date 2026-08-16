@@ -2,19 +2,30 @@
 
 ## Reporting a vulnerability
 
-If you discover a security vulnerability in DonSeTch, please report it privately.
+If you discover a security vulnerability in DonSeTch, **use GitHub's private vulnerability reporting** — do not open a public issue.
 
-**Do not open a public GitHub issue.**
+**[Report a vulnerability →](https://github.com/dondai44423/donsetch/security/advisories/new)**
 
-Email: bishesh.bhandari.contact@gmail.com
+This creates a private security advisory that only the maintainer can see. You can include details, reproduction steps, and severity assessment directly in the form. GitHub notifies the maintainer immediately.
 
-Include:
+Include in your report:
+
 - A description of the vulnerability and its impact.
 - Steps to reproduce, or a proof of concept.
 - The DonSeTch version (`donsetch --version`).
-- Your assessment of severity.
+- Your assessment of severity (low / medium / high / critical).
 
-You will receive a response within 72 hours. If the vulnerability is confirmed, a fix will be released and you will be credited (unless you prefer otherwise).
+## Response timeline
+
+| Stage | Target |
+|---|---|
+| Acknowledgment | Within 72 hours of report |
+| Triage and severity assessment | Within 7 days |
+| Fix development | Within 30 days (severity-dependent) |
+| Patch release | Coordinated with reporter |
+| Public disclosure | After patch is available |
+
+If the vulnerability is confirmed, a fix will be released and you will be credited in the advisory (unless you prefer to remain anonymous).
 
 ## Scope
 
@@ -32,23 +43,17 @@ DonSeTch is a local MCP server that fetches web pages, searches the web, and cra
 - Rate-limiting or blocking by search engines (expected behavior, not a vulnerability).
 - Captcha-solving (intentionally not implemented — not a vulnerability).
 
-## Disclosure timeline
-
-1. You report privately.
-2. We confirm and triage within 72 hours.
-3. A fix is developed and tested.
-4. A patch release is published.
-5. The vulnerability is disclosed publicly after the fix is available.
-
 ## Security posture
 
 DonSeTch runs locally as a stdio process. It does not:
+
 - Open a network port (stdio only).
 - Store credentials (no API keys, no accounts).
 - Phone home or telemetry.
 - Execute arbitrary code from fetched pages.
 
 DonSeTch does:
+
 - Download model files (OCR, reranker) from HuggingFace on first use, cached locally.
 - Download PDFium static libraries at build time.
 - Launch a headless browser process on tier 2 escalation.
