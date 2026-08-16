@@ -10,11 +10,14 @@
 
 pub mod blocks;
 pub mod charset;
+pub mod feed;
 pub mod focus;
+pub mod hn;
 pub mod inline;
 pub mod jsdata;
 pub mod junk;
 pub mod language;
+pub mod math;
 pub mod metadata;
 pub mod reddit;
 pub mod render;
@@ -267,7 +270,26 @@ pub fn extract(
     // Non-HTML passthrough (json/text/xml): no extraction lies.
     let ct = content_type.to_lowercase();
     let is_pdf = body.len() >= 5 && body.starts_with(b"%PDF-") || ct.contains("pdf");
-    if !ct.is_empty() && !ct.contains("html") && !is_pdf {
+
+    // Feeds (RSS/Atom/JSON Feed): structured rendering, never a
+    // raw XML blob. Checked BEFORE passthrough — feed content
+    // types (text/xml, application/rss+xml…) never say "html".
+    if !is_pdf
+        && feed::is_feed(&ct, body)
+        && let Some(ex) = feed::extract(body, url, opts)
+    {
+        return Ok(ex);
+    }
+
+    // A "text/plain" body that is actually HTML (misconfigured
+    // servers, raw git URLs): parse it as HTML, not as literal
+    // text full of angle brackets.
+    let plain_is_html = !ct.is_empty()
+        && !ct.contains("html")
+        && !is_pdf
+        && body_starts_with_html(body);
+
+    if !ct.is_empty() && !ct.contains("html") && !is_pdf && !plain_is_html {
         let text = String::from_utf8_lossy(body);
         let (slice, next) = paginate(&text, opts.offset, max_chars);
         return Ok(Extracted {
@@ -345,6 +367,13 @@ pub fn extract(
         return Ok(extracted);
     }
 
+    // Hacker News dedicated extractor: the comment tree is a
+    // table layout the generic pipeline mangles. Full comment
+    // text with authors and reply depth.
+    if let Some(extracted) = hn::extract(&html_text, url, opts) {
+        return Ok(extracted);
+    }
+
     let doc = Html::parse_document(&html_text);
     let base = metadata::base_url(&doc).unwrap_or_else(|| url.to_string());
     let meta = metadata::metadata(&doc);
@@ -418,9 +447,22 @@ pub fn extract(
     Ok(extracted)
 }
 
+/// Does the body start (after BOM/whitespace) with an HTML
+/// doctype or `<html` tag? Used to catch HTML served as
+/// text/plain.
+fn body_starts_with_html(body: &[u8]) -> bool {
+    let mut s = body;
+    if s.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        s = &s[3..];
+    }
+    let s = String::from_utf8_lossy(&s[..s.len().min(256)]);
+    let t = s.trim_start().to_lowercase();
+    t.starts_with("<!doctype html") || t.starts_with("<html")
+}
+
 /// Raw text fallback: strip tags and return visible text as
-/// markdown paragraphs. Used when DonSift's block-based
-/// extraction pipeline fails on complex DOMs. Preserves heading
+/// markdown paragraphs. Used when DonSift's block-based extraction
+/// pipeline fails on complex DOMs. Preserves heading
 /// structure (h1-h6 → # ## ###) and paragraph breaks. Skips
 /// script/style/nav/footer/header/aside/form elements.
 ///
@@ -725,19 +767,14 @@ fn downstream(
     // fetch escalates to the browser itself — this note
     // only surfaces on an explicit tier=1 request.
     //
-    // Thinness: the extraction yield is the truth. If we
-    // got < 800 chars from a large page or a page with zero
-    // blocks, it's a shell. Also catches medium JS shells
-    // (5-50KB) that have 1-2 blocks from title/meta tags —
-    // these are JS-only SPAs (Instagram, YouTube) that
-    // produce a handful of blocks from boilerplate but
-    // no real content. Skeleton markers in CSS class
-    // names (Amazon, React apps) are NOT evidence of an
-    // un-hydrated SPA — the extraction yield is. Only use
-    // skeleton markers as a secondary signal when the yield
-    // is borderline (< 4000 chars from a > 50KB page).
+    // Thinness: the extraction yield is the truth. Any page over
+    // 5KB that yields < 800 chars is a shell (the 27KB-challenge-
+    // page-with-250-chars class — three boilerplate blocks used
+    // to pass as non-thin). Zero blocks or a >50KB page with
+    // almost nothing are shells at any size. Skeleton markers
+    // stay a secondary signal for borderline yields.
     let thin = (full.len() < 800
-        && (thin_flag || blocks_total == 0 || (raw_len > 5_000 && blocks_total <= 2)))
+        && (thin_flag || raw_len > 5_000 || blocks_total == 0))
         || (thin_flag && has_skeletons && full.len() < 4000);
     if thin {
         full = format!(
@@ -804,6 +841,11 @@ fn paginate(text: &str, offset: usize, max_chars: usize) -> (String, Option<usiz
         slice.push_str(&format!("\n\n*[truncated — continue with offset={n}]*"));
     }
     (slice, next)
+}
+
+/// Shared pagination for dedicated extractors (reddit, hn).
+pub fn paginate_public(text: &str, offset: usize, max_chars: usize) -> (String, Option<usize>) {
+    paginate(text, offset, max_chars)
 }
 
 fn ceil_char_boundary(text: &str, mut i: usize) -> usize {

@@ -1245,7 +1245,7 @@ mod tests {
     fn bm25_accent_match() {
         let blocks = vec![para("Le café est délicieux"), para("The weather is nice")];
         // Query "cafe" should match "café" via accent folding.
-        let (kept, fell_back) = filter(&blocks, "cafe", &en());
+        let (_kept, fell_back) = filter(&blocks, "cafe", &en());
         assert!(!fell_back);
     }
 

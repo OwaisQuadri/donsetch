@@ -179,8 +179,52 @@ fn walk<'a>(
             }
         }
         "table" => {
-            if let Some(t) = table_block(el, headings) {
+            // Prose tables (forum threads, HN comment trees, layout
+            // tables) must NOT go through the pipe-table renderer —
+            // it clamps cells to 120 chars and destroys the text.
+            // Data tables keep the pipe rendering.
+            if is_prose_table(el) {
+                // Walk children as containers — comment divs inside
+                // the cells become real paragraphs.
+                let loose = loose_text(el, base, opts);
+                if !loose.0.is_empty() {
+                    push_block(
+                        Block::Para {
+                            md: loose.0,
+                            link_density: loose.1,
+                            path: current_path(headings),
+                        },
+                        out,
+                    );
+                }
+                for child in el.children() {
+                    let Some(child_el) = ElementRef::wrap(child) else {
+                        continue;
+                    };
+                    if crate::extract::junk::skip(child_el) {
+                        continue;
+                    }
+                    walk(child_el, base, opts, headings, out, depth + 1);
+                }
+            } else if let Some(t) = table_block(el, headings) {
                 push_block(t, out);
+            }
+        }
+        "math" => {
+            // Formula as its own block: `$$LaTeX$$`. alttext (the
+            // original LaTeX) when present, MathML serialization
+            // otherwise. Math elements must never vanish — that
+            // guts technical pages.
+            let l = super::math::latex(el);
+            if !l.is_empty() {
+                push_block(
+                    Block::Para {
+                        md: format!("$${l}$$"),
+                        link_density: 0.0,
+                        path: current_path(headings),
+                    },
+                    out,
+                );
             }
         }
         "pre" => {
@@ -457,6 +501,48 @@ fn def_list_items(dl: ElementRef<'_>, base: &str, opts: &super::ExtractOptions) 
         }
     }
     items
+}
+
+/// Layout/prose table detection. Forums (HN, phpBB), old CMSes,
+/// and email-style pages lay CONTENT out in tables; rendering those
+/// as pipe tables truncates every cell to 120 chars and flattens
+/// paragraphs. A table is prose/layout when:
+/// - it declares `role="presentation"`, or
+/// - any cell holds real paragraph-length text (300+ chars), or
+/// - it is effectively single-column.
+///
+/// Data tables (specs, pricing, comparisons) stay pipe tables.
+fn is_prose_table(el: ElementRef<'_>) -> bool {
+    if el.value().attr("role") == Some("presentation") {
+        return true;
+    }
+    let mut max_cell = 0usize;
+    let mut rows = 0usize;
+    let mut max_cols = 0usize;
+    for tr in el
+        .select(&scraper::Selector::parse("tr").unwrap())
+        .take(40)
+    {
+        rows += 1;
+        let mut cols = 0usize;
+        for cell in tr.select(&scraper::Selector::parse("td,th").unwrap()) {
+            cols += 1;
+            let t = crate::extract::junk::text_size(cell, 400);
+            max_cell = max_cell.max(t);
+        }
+        max_cols = max_cols.max(cols);
+    }
+    if rows == 0 {
+        return false;
+    }
+    // Paragraph-length text in a cell = the table holds prose.
+    if max_cell >= 300 {
+        return true;
+    }
+    // Single-column table of short cells is still layout (indent
+    // spacers, vertical stacks) — but only when it has several rows
+    // (a 1×1 data table is degenerate either way).
+    max_cols <= 1 && rows >= 2
 }
 
 fn table_block(el: ElementRef<'_>, headings: &[(u8, String)]) -> Option<Block> {

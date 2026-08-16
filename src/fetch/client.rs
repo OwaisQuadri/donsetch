@@ -140,6 +140,11 @@ impl Fetcher {
         };
         let conditional = match check {
             CacheCheck::Fresh(body, status, headers) => {
+                // Honest verdict on the cached body: a challenge page
+                // that slipped into the cache must not be re-served
+                // as ContentOk (only non-walls are stored, this is
+                // defense in depth for pre-fix entries).
+                let verdict = walls::detect(status, &headers, &body);
                 return Ok(FetchOutcome {
                     url: url_str.into(),
                     status,
@@ -149,7 +154,7 @@ impl Fetcher {
                     redirects: 0,
                     cache: CacheState::Fresh,
                     used_pool: false,
-                    verdict: Verdict::ContentOk,
+                    verdict,
                     elapsed: started.elapsed(),
                 });
             }
@@ -225,11 +230,17 @@ impl Fetcher {
                     current = next.to_string();
                 }
                 _ => {
-                    {
+                    out.verdict = walls::detect(out.status, &out.headers, &out.body);
+
+                    // Only real content enters the revalidation cache.
+                    // A challenge interstitial with an ETag would
+                    // otherwise be re-served fresh as "content" on
+                    // every later fetch (hardcoded ContentOk made it
+                    // worse). Walls are never cacheable.
+                    if matches!(out.verdict, Verdict::ContentOk) {
                         let mut cache = self.cache.lock().unwrap();
                         cache.store(&current, out.status, &out.headers, &out.body);
                     }
-                    out.verdict = walls::detect(out.status, &out.headers, &out.body);
 
                     // Wall pushed back. If it left a cookie, do ONE
                     // cookie-warm retry (JS-less cookie walls pass on the
@@ -245,7 +256,7 @@ impl Fetcher {
                             jar.store_from_headers(&host, &retry.headers);
                         }
                         retry.verdict = walls::detect(retry.status, &retry.headers, &retry.body);
-                        {
+                        if matches!(retry.verdict, Verdict::ContentOk) {
                             let mut cache = self.cache.lock().unwrap();
                             cache.store(&current, retry.status, &retry.headers, &retry.body);
                         }

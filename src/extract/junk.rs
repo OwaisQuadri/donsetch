@@ -3,6 +3,22 @@
 
 use scraper::ElementRef;
 
+/// Lazily-built `math` selector for the hidden-math exception.
+fn math_sel() -> &'static scraper::Selector {
+    static S: std::sync::OnceLock<scraper::Selector> = std::sync::OnceLock::new();
+    S.get_or_init(|| scraper::Selector::parse("math").unwrap())
+}
+
+/// Hidden containers that wrap `<math>` are the accessibility twin
+/// of a rendered formula image (MediaWiki, MathJax, KaTeX all ship
+/// this shape: visible SVG/PNG + hidden MathML with the LaTeX).
+/// The hidden math is the ONLY machine-readable form of the
+/// formula — skipping it as "hidden content" guts every technical
+/// page. Skip the wrapper visually, never the math inside it.
+fn has_math_descendant(el: ElementRef<'_>) -> bool {
+    el.select(math_sel()).next().is_some()
+}
+
 const SKIP_TAGS: &[&str] = &[
     "script", "style", "noscript", "template", "svg", "canvas", "iframe", "object", "embed",
     "button", "input", "select", "textarea", "option", "nav", "aside",
@@ -29,8 +45,14 @@ const SKIP_ROLES: &[&str] = &[
 /// substring matching on tokens; SHORT fragments (nav, menu)
 /// require exact token match — "flex-nav-upsell" must not kill
 /// a whole page wrapper.
+///
+/// NOTE: "comment" is deliberately NOT here. Discussion threads
+/// (HN, forums, blogs) are primary research content for agents;
+/// treating the class name as boilerplate silently dropped whole
+/// comment sections from main-content scoring. Comment-section
+/// noise on article pages is handled by the score competition
+/// (the article container wins) — not by nuking "comment" nodes.
 const NEGATIVE_SUBSTR: &[&str] = &[
-    "comment",
     "sidebar",
     "widget",
     "footer",
@@ -123,18 +145,25 @@ pub fn skip(el: ElementRef<'_>) -> bool {
     let e = el.value();
     let name = e.name();
     if SKIP_TAGS.contains(&name) {
+        // <svg> can embed MathML-adjacent content, but <math>
+        // itself is never junk — the formula is content.
         return true;
     }
-    if e.attr("hidden").is_some() {
+    if name == "math" {
+        return false;
+    }
+    if e.attr("hidden").is_some() && !has_math_descendant(el) {
         return true;
     }
     if let Some(role) = e.attr("role")
         && SKIP_ROLES.contains(&role)
+        && !has_math_descendant(el)
     {
         return true;
     }
     if e.attr("aria-hidden")
         .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+        && !has_math_descendant(el)
     {
         return true;
     }
@@ -146,14 +175,16 @@ pub fn skip(el: ElementRef<'_>) -> bool {
                 || t.eq_ignore_ascii_case("visually-hidden")
                 || t.eq_ignore_ascii_case("visuallyhidden")
         })
-    }) {
+    }) && !has_math_descendant(el)
+    {
         return true;
     }
     if let Some(style) = e.attr("style") {
         let s: String = style.to_lowercase();
-        if s.contains("display:none")
+        if (s.contains("display:none")
             || s.contains("display: none")
-            || s.contains("visibility:hidden")
+            || s.contains("visibility:hidden"))
+            && !has_math_descendant(el)
         {
             return true;
         }

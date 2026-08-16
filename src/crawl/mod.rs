@@ -121,6 +121,9 @@ pub struct CrawlResult {
     pub elapsed: Duration,
     /// Sitemap map (Map phase) — capped URLs.
     pub map: Vec<String>,
+    /// robots.txt Crawl-delay honored by pacing (seconds). Surfaces
+    /// in the output so a slow crawl explains itself.
+    pub crawl_delay: Option<f64>,
     /// Resume token when stopped early, for `resume=`.
     pub resume: Option<String>,
 }
@@ -365,6 +368,7 @@ impl Crawler {
                 Vec::new()
             };
             return Ok(CrawlResult {
+                crawl_delay: robots.crawl_delay,
                 seed: seed.to_string(),
                 pages: Vec::new(),
                 queued: Vec::new(),
@@ -425,6 +429,7 @@ impl Crawler {
 
         if queue.is_empty() {
             return Ok(CrawlResult {
+                crawl_delay: robots.crawl_delay,
                 seed: seed.to_string(),
                 pages: Vec::new(),
                 queued: Vec::new(),
@@ -1174,6 +1179,7 @@ impl Crawler {
         };
 
         Ok(CrawlResult {
+            crawl_delay: robots.crawl_delay,
             seed: seed.to_string(),
             pages: final_pages,
             queued: queued_entries

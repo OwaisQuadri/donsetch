@@ -1677,3 +1677,42 @@ fn description_capped_at_500() {
         desc.len()
     );
 }
+
+#[test]
+fn wiki_math_inline_recovered_live_shape() {
+    // Exact live shape from en.wikipedia.org: p > span.mwe-math-element
+    // > (visible img fallback) + HIDDEN span (display:none) > math[alttext].
+    // The hidden-math exception in junk::skip must let it through.
+    let alttext = r"{\displaystyle A=\mathrm{softmax}\left(\frac{QK^{T}}{\sqrt{d_{k}}}\right)V}";
+    let html = format!(
+        r#"<html><body><div class="mw-parser-output"><p>The scaled dot-product attention is defined as: <span class="mwe-math-element"><span class="mwe-math-fallback-image-inline"><img src="x.svg" alt="formula"></span><span class="mwe-math-mathml-inline mwe-math-mathml-a11y" style="display: none;"><math xmlns="http://www.w3.org/1998/Math/MathML" alttext="{alt}"><semantics><mrow><mi>A</mi></mrow><annotation encoding="application/x-tex">A</annotation></semantics></math></span></span> where the softmax function is applied.</p></div></body></html>"#,
+        alt = alttext.replace('"', "&quot;")
+    );
+    let ex = crate::extract::extract(
+        html.as_bytes(),
+        "text/html",
+        "https://en.wikipedia.org/wiki/X",
+        &crate::extract::ExtractOptions::default(),
+    )
+    .unwrap();
+    assert!(ex.markdown.contains("$"), "no inline math rendered: {}", ex.markdown);
+    assert!(ex.markdown.contains("softmax"), "{}", ex.markdown);
+    assert!(ex.markdown.contains("d_{k}"), "{}", ex.markdown);
+}
+
+#[test]
+fn hn_extractor_fires_on_live_thread_shape() {
+    if let Ok(html) = std::fs::read_to_string("/tmp/hn_thread.html") {
+        let ex = crate::extract::extract(
+            html.as_bytes(),
+            "text/html",
+            "https://news.ycombinator.com/item?id=41975047",
+            &crate::extract::ExtractOptions::default(),
+        )
+        .unwrap();
+        if !ex.markdown.contains("## Discussion") {
+            panic!("PIPELINE MISMATCH. first 300: {}\n\ntotal={} blocks={} kind={:?}", &ex.markdown[..300.min(ex.markdown.len())], ex.total_chars, ex.blocks_total, ex.content_kind);
+        }
+    }
+}
+

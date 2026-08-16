@@ -250,7 +250,8 @@ pub async fn ghost_fetch(
     // and DataDome challenge solving. The speed cost is small
     // (a few extra KB of fonts/images) vs the reliability gain.
 
-    let mut clicked_challenge = false;
+    let mut clicked_challenge = 0u8; // turnstile clicks spent (max 3)
+    let mut last_click_at = std::time::Instant::now() - Duration::from_secs(10);
     let mut clicked_consent = false;
     let mut kicked = false;
     let mut vendor: Option<String> = None;
@@ -312,12 +313,17 @@ pub async fn ghost_fetch(
                 vendor = Some(format!("{v:?}").to_lowercase());
             }
             settle_streak = 0;
-            if !clicked_challenge
+            // Turnstile widget: the iframe renders LATE (after the
+            // widget JS boots) and repositions per layout — a
+            // one-shot click fired before it attached always missed.
+            // Re-find the geometry and click again every few polls,
+            // up to 3 attempts total.
+            if clicked_challenge < 3
+                && last_click_at.elapsed() > Duration::from_secs(4)
                 && (lower.contains("challenges.cloudflare.com")
                     || lower.contains("turnstile")
                     || lower.contains("verify you are human"))
             {
-                // Find Turnstile iframe position via JS and click center.
                 let turnstile_pos = ghost
                     .cdp
                     .call(
@@ -342,7 +348,8 @@ pub async fn ghost_fetch(
                     (480.0, 420.0)
                 };
                 let _ = ghost.click(x, y).await;
-                clicked_challenge = true;
+                clicked_challenge += 1;
+                last_click_at = std::time::Instant::now();
             }
             prev_len = cur_len;
             continue;

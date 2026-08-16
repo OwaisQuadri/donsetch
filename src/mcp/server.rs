@@ -359,6 +359,15 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         result.stop,
         result.elapsed.as_secs_f64()
     ));
+    // A crawl-delay-pace crawl looks hung without this note —
+    // the site demanded the pace, we honored it, say so.
+    if let Some(cd) = result.crawl_delay
+        && cd > 2.0
+    {
+        text.push_str(&format!(
+            "*robots crawl-delay: {cd:.0}s between requests (site-declared; pass respect_robots=false to override)*\n\n"
+        ));
+    }
     if !result.map.is_empty() {
         text.push_str("## map\n");
         for u in &result.map {
@@ -407,6 +416,7 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         "filtered_out": result.filtered_out,
         "skipped": result.skipped.iter().map(|(u, w)| json!({"url": u, "reason": w})).collect::<Vec<_>>(),
         "stop": format!("{:?}", result.stop),
+        "crawl_delay": result.crawl_delay,
         "elapsed_s": result.elapsed.as_secs_f64(),
         "resume": result.resume,
     });
@@ -591,12 +601,10 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // Ghost can't render PDFs (Chrome's PDF viewer is a JS shell).
     // If the URL looks like a PDF, always fetch raw bytes (tier 1)
     // and route to the DonSheet engine. Never skip tier 1 for PDFs.
-    let is_pdf_url = url
-        .split('?')
-        .next()
-        .unwrap_or(&url)
-        .to_lowercase()
-        .ends_with(".pdf");
+    // Uses the SAME helper as the actions guard — covers both the
+    // `.pdf` suffix and the `/pdf/` path convention (arXiv serves
+    // PDFs at /pdf/1706.03762 with no extension).
+    let is_pdf_url = is_pdf_url_like(&url);
 
     // === Decision: how to route this fetch? ===
     // The self-improving loop: the domain profile decides
@@ -673,30 +681,42 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         out = Some(fetched);
 
         // === Observe the outcome ===
-        // Every fetch teaches the domain profile something.
+        // Every fetch teaches the domain profile something — but
+        // only CHALLENGES say anything about walls. A 404, 429,
+        // paywall, or auth wall is an honest terminal answer from
+        // the origin; recording it as "walled" used to poison easy
+        // domains into permanent skip-to-solve (every later fetch
+        // burned a 20s ghost launch on a 404).
         let o = out.as_ref().unwrap();
-        let walled = !matches!(o.verdict, Verdict::ContentOk);
         {
             let mut state = daemon.state.lock().await;
-            if walled {
-                if is_warm {
-                    // Warm cookies went stale — learn the real lifetime.
-                    state.record_warm_stale(&host);
-                } else {
-                    // Cold (or recheck) was walled — domain needs tier 2.
-                    let vendor = match &o.verdict {
-                        Verdict::Challenge(v) => Some(format!("{v:?}").to_lowercase()),
-                        _ => None,
-                    };
-                    state.record_cold_walled(&host, vendor.as_deref());
+            match o.verdict {
+                Verdict::Challenge(_) => {
+                    if is_warm {
+                        // Warm cookies went stale — learn the real lifetime.
+                        state.record_warm_stale(&host);
+                    } else {
+                        // Cold (or recheck) was challenged — domain needs tier 2.
+                        let vendor = match &o.verdict {
+                            Verdict::Challenge(v) => Some(format!("{v:?}").to_lowercase()),
+                            _ => None,
+                        };
+                        state.record_cold_walled(&host, vendor.as_deref());
+                    }
                 }
-            } else if is_warm {
-                // Warm succeeded — refresh the cookie vault (write-back).
-                let snap = daemon.fetcher.jar_snapshot(&host);
-                state.record_warm_ok(&host, &snap);
-            } else {
-                // Cold (or recheck) succeeded — if was needs_tier2, wall is gone.
-                state.record_cold_ok(&host);
+                Verdict::ContentOk => {
+                    if is_warm {
+                        // Warm succeeded — refresh the cookie vault (write-back).
+                        let snap = daemon.fetcher.jar_snapshot(&host);
+                        state.record_warm_ok(&host, &snap);
+                    } else {
+                        // Cold (or recheck) succeeded — if was needs_tier2, wall is gone.
+                        state.record_cold_ok(&host);
+                    }
+                }
+                // Everything else (404, rate-limit, paywall, auth,
+                // hard block): counters only, no wall inference.
+                _ => state.record_fetch(&host),
             }
         }
     }
@@ -768,9 +788,21 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         .map(|o| matches!(o.verdict, Verdict::Challenge(_)))
         .unwrap_or(false);
 
-    // Warm cookies that only buy a shell are stale cookies:
-    // kill the warm route and let a ghost success re-teach it.
-    let shell_warm = is_warm && ex_thin;
+    // Warm cookies that only buy a SHELL are stale cookies — but
+    // the evidence must be a shell, not an extraction gap. A warm
+    // ContentOk whose body is big yet nearly invisible-text-free
+    // (JS shell) means the clearance bought nothing. A body with
+    // rich visible text that extracts thin is a DonSift gap —
+    // killing valid cookies for it is the gallery-page bug.
+    let shell_warm = is_warm
+        && ex_thin
+        && {
+            let o = out.as_ref().unwrap();
+            o.body.len() > 20_000
+                && (crate::detect::walls::visible_text_count(&o.body) as f64
+                    / o.body.len() as f64)
+                    < 0.02
+        };
     if shell_warm {
         daemon.state.lock().await.record_warm_stale(&host);
     }
@@ -861,42 +893,49 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
             }
         }
 
-        match ghost_escalate(
-            daemon,
-            &url,
-            &host,
-            &opts,
-            challenge || shell_warm,
-            shot,
-            &mut trace,
-        )
-        .await
-        {
-            Ok((e, tier2, status, furl)) => {
-                final_ex = Some(e);
-                final_tier = tier2;
-                final_status = status;
-                final_url = furl;
-                // Ghost beat the challenge — the verdict should reflect
-                // the actual content, not the tier-1 wall that was
-                // bypassed. Without this, a successfully rendered page
-                // shows "Challenge(DataDome)" in the verdict field.
-                final_verdict = "ContentOk".to_string();
-            }
-            Err((msg, kind)) => {
-                return tool_error_structured(
-                    msg,
-                    kind,
-                    Some(json!({
-                        "url": url,
-                        "status": final_status,
-                        "verdict": final_verdict,
-                        "next_action": next_action_for(out.as_ref().map(|o| o.verdict), final_status, kind),
-                        "escalation": trace.value(),
-                    })),
-                );
-            }
+    match ghost_escalate(
+        daemon,
+        &url,
+        &host,
+        &opts,
+        challenge || shell_warm || skip_tier1,
+        shot,
+        &mut trace,
+    )
+    .await
+    {
+        Ok((e, tier2, status, furl)) => {
+            final_ex = Some(e);
+            final_tier = tier2;
+            final_status = status;
+            final_url = furl;
+            // Ghost beat the challenge — the verdict should reflect
+            // the actual content, not the tier-1 wall that was
+            // bypassed. Without this, a successfully rendered page
+            // shows "Challenge(DataDome)" in the verdict field.
+            final_verdict = "ContentOk".to_string();
         }
+        Err((msg, kind)) => {
+            // A ghost failure on a warm-routed fetch means the
+            // cookies no longer clear the wall — count it as the
+            // second warm failure so the vault clears (first was
+            // the tier-1 challenge that triggered escalation).
+            if is_warm {
+                daemon.state.lock().await.record_warm_stale(&host);
+            }
+            return tool_error_structured(
+                msg,
+                kind,
+                Some(json!({
+                    "url": url,
+                    "status": final_status,
+                    "verdict": final_verdict,
+                    "next_action": next_action_for(out.as_ref().map(|o| o.verdict), final_status, kind),
+                    "escalation": trace.value(),
+                })),
+            );
+        }
+    }
     }
 
     let Some(ex) = final_ex else {
@@ -947,6 +986,13 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
 /// when a candidate extracts as real content — a shell is a
 /// failure, never a success. This is the loop the design always
 /// promised: escalate, render, hand cookies back to tier 1.
+///
+/// `learn` = this escalation was WALL-DRIVEN (challenge seen, warm
+/// cookies bought a shell, or the profile routed skip-to-solve).
+/// A wall-driven success records the solve so the next fetch can
+/// ride warm tier 1 — with `replay_ok` set from the tier-1 retry's
+/// actual outcome. A pure SPA render (thin content, no wall) never
+/// touches the domain profile: the site isn't walled, it's JS-only.
 async fn ghost_escalate(
     daemon: &Arc<Daemon>,
     url: &str,
@@ -1031,6 +1077,31 @@ async fn ghost_escalate(
         None
     };
 
+    // Replay verification: cookies are only "warm-worthy" when the
+    // tier-1 retry returned real content with them. A walled or
+    // shell retry means the vendor binds clearance to the browser
+    // fingerprint — record replay_ok=false so route_for never
+    // serves a doomed Warm roundtrip again.
+    let mut replay_content_ok = false;
+
+    // The retry is the oracle of record for TERMINAL verdicts: a
+    // 404/paywall/auth-wall on tier 1 means the ghost spent its
+    // time rendering a dead page (browsers render 404s too). The
+    // ghost's pretty DOM must never launder a dead URL into
+    // ContentOk — the skip-to-solve path has no other gate.
+    if let Some(r) = &retry
+        && matches!(
+            r.verdict,
+            Verdict::SoftNotFound | Verdict::AuthWall | Verdict::Paywall
+        )
+    {
+        let kind = verdict_kind(r.verdict, r.status);
+        return Err((
+            verdict_error(r.verdict, r.status, &r.url),
+            kind,
+        ));
+    }
+
     // Candidates: retry bytes (cheap path) and the ghost's own
     // rendered DOM. Non-thin always beats thin; within a class,
     // bigger yield wins. The old code always preferred the retry
@@ -1050,6 +1121,7 @@ async fn ghost_escalate(
             && let Ok(e) = extract::extract(&r.body, &ct, &r.url, opts)
         {
             let thin = e.thin;
+            replay_content_ok = !thin;
             let better = match &best {
                 None => true,
                 Some((bt, be, ..)) => {
@@ -1110,14 +1182,16 @@ async fn ghost_escalate(
     if let Some((thin, e, t, s, u)) = best
         && !thin
     {
-        // Learning is gated on CONTENT, matching the oracle —
-        // success is "we got content", not "we got HTTP 200".
+        // Learning is gated on WALL-DRIVEN escalation AND gated on
+        // CONTENT — success is "we got content", not "we got HTTP
+        // 200". The replay probe (or its absence) sets replay_ok.
         if learn {
-            daemon
-                .state
-                .lock()
-                .await
-                .record_solved(host, &page.cookies, page.vendor.as_deref());
+            daemon.state.lock().await.record_solved(
+                host,
+                &page.cookies,
+                page.vendor.as_deref(),
+                replay_content_ok,
+            );
         }
         // Don't cache challenge/wall DOMs — defense in depth alongside
         // the ghost_fetch timeout check. A challenge page that has
@@ -1350,17 +1424,19 @@ async fn fetch_with_actions(
     // a challenge was actually cleared (page.vendor set) —
     // marking a never-walled domain needs_tier2 would poison its
     // route to skip-to-solve forever (the v1.1 reddit-poisoning
-    // bug class).
+    // bug class). Replay is unverified in the actions flow (no
+    // tier-1 retry happens) — false until the fetch path proves it.
     if let Ok(cookies) = g.cookies().await
         && !cookies.is_empty()
     {
         daemon.fetcher.import_cookies(&cookies).await;
         if page.vendor.is_some() {
-            daemon
-                .state
-                .lock()
-                .await
-                .record_solved(host, &cookies, page.vendor.as_deref());
+            daemon.state.lock().await.record_solved(
+                host,
+                &cookies,
+                page.vendor.as_deref(),
+                false,
+            );
         }
     }
 

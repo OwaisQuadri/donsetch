@@ -76,6 +76,13 @@ pub fn detect(status: u16, headers: &[(String, String)], body: &[u8]) -> Verdict
         if v != Verdict::ContentOk {
             return v;
         }
+        // Title/structure-based interstitial detection: catches the
+        // modern CF class ("Performing security verification") whose
+        // bodies don't always carry the classic script markers in the
+        // first bytes but always carry the boilerplate title.
+        if let Some(vid) = detect_interstitial(body) {
+            return Verdict::Challenge(vid);
+        }
         return Verdict::ContentOk;
     }
 
@@ -126,6 +133,14 @@ pub fn detect_dom(body: &[u8]) -> Verdict {
 /// Real pages have 80+ visible chars even when they embed
 /// challenge widgets in a small section.
 pub fn detect_dom_smart(body: &[u8]) -> Verdict {
+    // Interstitials first: the ≥80-visible-chars override below
+    // must never whitewash a challenge page. Modern CF interstitials
+    // ("Performing security verification") carry 300-400 chars of
+    // vendor boilerplate — enough to pass the old visible-text gate
+    // and get served as content.
+    if let Some(v) = detect_interstitial(body) {
+        return Verdict::Challenge(v);
+    }
     let visible = visible_text_count(body);
     if visible >= 80 {
         return Verdict::ContentOk;
@@ -133,10 +148,122 @@ pub fn detect_dom_smart(body: &[u8]) -> Verdict {
     detect_dom(body)
 }
 
-/// Fast visible-text estimate: strip tags + script/style bodies,
-/// count non-whitespace characters. No lowercasing, no DOM —
-/// byte scan. Same algorithm as ghost/ops.rs::visible_text_len.
-fn visible_text_count(html: &[u8]) -> usize {
+/// Interstitial titles/phrases that vendor challenge pages use in
+/// `<title>` / `<h1>`. Real pages virtually never title themselves
+/// these — a page ABOUT Cloudflare has its own title.
+const INTERSTITIAL_TITLES: &[&str] = &[
+    "just a moment",
+    "performing security verification",
+    "checking your browser",
+    "attention required",
+    "verify you are human",
+    "verify that you are human",
+    "verifying you are human",
+    "security check",
+    "needs to review the security",
+    "one more step",
+    "checking if the site connection is secure",
+    "please wait...",
+    "access denied",
+];
+
+/// Challenge-page script/iframe markers (URL fragments, not prose).
+const INTERSTITIAL_MARKERS: &[&str] = &[
+    "challenge-platform",
+    "cf-chl",
+    "challenges.cloudflare.com",
+    "captcha-delivery.com",
+    "px-captcha",
+    "_Incapsula_Resource",
+];
+
+/// Strong interstitial detection: a page whose TITLE or first H1 is
+/// vendor challenge boilerplate, or a near-empty DOM (< 400 visible
+/// chars) that loads a challenge script and has no form. Returns the
+/// vendor when the page is an interstitial.
+///
+/// This is the layer that keeps the ghost oracle honest: a rendered
+/// "Just a moment..." page must never satisfy the content-quality
+/// oracle, no matter how many visible chars its boilerplate carries.
+pub fn detect_interstitial(body: &[u8]) -> Option<Vendor> {
+    let scan = &body[..body.len().min(96 * 1024)];
+    let text = String::from_utf8_lossy(scan).to_lowercase();
+
+    // Title/H1 route: strongest signal, immune to visible-text counts.
+    let title = extract_title_or_h1(&text);
+    if let Some(t) = title
+        && INTERSTITIAL_TITLES.iter().any(|m| t.contains(m))
+    {
+        return Some(vendor_from_markers(&text).unwrap_or(Vendor::Generic));
+    }
+
+    // Near-empty route: tiny visible text + challenge script + no
+    // form (a login/contact page with a Turnstile widget has BOTH a
+    // form and real visible text — it must not match).
+    let visible = visible_text_count(body);
+    if visible < 400
+        && INTERSTITIAL_MARKERS.iter().any(|m| text.contains(m))
+        && !text.contains("<form")
+        && !text.contains("<input")
+    {
+        return Some(vendor_from_markers(&text).unwrap_or(Vendor::Generic));
+    }
+    None
+}
+
+/// Best-effort `<title>` (head) or first `<h1>` text, lowercased.
+fn extract_title_or_h1(lower_text: &str) -> Option<String> {
+    for (open, close) in [("<title", "</title>"), ("<h1", "</h1>")] {
+        let start = lower_text.find(open)?;
+        if let Some(content_start) = lower_text[start..].find('>') {
+            let from = start + content_start + 1;
+            if let Some(end) = lower_text[from..].find(close) {
+                let t = &lower_text[from..from + end];
+                // Strip nested tags inside the title (h1 can wrap spans).
+                let cleaned: String = t
+                    .chars()
+                    .filter(|c| *c != '<')
+                    .collect::<String>()
+                    .split('<')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                let cleaned = cleaned.trim();
+                if !cleaned.is_empty() {
+                    return Some(cleaned.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn vendor_from_markers(lower_text: &str) -> Option<Vendor> {
+    if lower_text.contains("challenges.cloudflare.com")
+        || lower_text.contains("challenge-platform")
+        || lower_text.contains("cf-chl")
+        || lower_text.contains("cloudflare")
+        || lower_text.contains("turnstile")
+    {
+        return Some(Vendor::Cloudflare);
+    }
+    if lower_text.contains("captcha-delivery.com") || lower_text.contains("datadome") {
+        return Some(Vendor::DataDome);
+    }
+    if lower_text.contains("px-captcha") || lower_text.contains("perimeterx") {
+        return Some(Vendor::PerimeterX);
+    }
+    if lower_text.contains("_incapsula_resource") || lower_text.contains("incapsula") {
+        return Some(Vendor::Imperva);
+    }
+    None
+}
+
+/// Fast visible-text estimate: strip tags + script/style/noscript
+/// bodies, count non-whitespace characters. No lowercasing, no
+/// DOM — byte scan. Shared with callers that need shell evidence
+/// (a big body with almost no visible text is a JS shell).
+pub fn visible_text_count(html: &[u8]) -> usize {
     let b = html;
     let mut n = 0usize;
     let mut i = 0usize;
@@ -273,6 +400,7 @@ fn classify_wall(
             || text.contains("cf-chl")
             || text.contains("cf-turnstile")
             || text.contains("challenges.cloudflare.com")
+            || text.contains("performing security verification")
             || status == 403
             || status == 503
         {
@@ -389,8 +517,6 @@ mod tests {
     #[test]
     fn large_serp_with_vendor_mentions_is_content() {
         let body = include_bytes!("../../tests/fixtures/bing-serp.html").to_vec();
-        let scan = &body[..body.len().min(64 * 1024)];
-        let text = String::from_utf8_lossy(scan).to_lowercase();
         let v = detect(200, &[], &body);
         assert!(matches!(v, Verdict::ContentOk), "got {v:?}");
     }
@@ -626,5 +752,56 @@ mod tests {
         let body = b"<html><head><noscript>For the best experience enable JavaScript in your browser settings.</noscript></head><body><h1>Real Article</h1><p>Substantial real body text that is definitely present on this actual page and makes it a real page with content on it.</p></body></html>";
         let v = detect(200, &[], body);
         assert!(matches!(v, Verdict::ContentOk), "got {v:?}");
+    }
+
+    // ── interstitial detection (v2.2: the fake-solve fix) ──
+
+    #[test]
+    fn cf_performing_security_verification_is_interstitial() {
+        // The live allthedifferences.com case: modern Cloudflare
+        // interstitial with ~344 visible chars of vendor boilerplate
+        // that used to pass the visible-text oracle as "content".
+        let body = b"<html><head><title>Just a moment...</title></head><body><div><h1>Just a moment...</h1><noscript>Enable JavaScript and cookies to continue</noscript><p>Performing security verification</p><p>This website uses a security service to protect against malicious bots. This page is displayed while the website verifies you are not a bot.</p><script src=\"https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1\"></script></div></body></html>";
+        assert!(detect_interstitial(body).is_some());
+        let v = detect_dom_smart(body);
+        assert!(
+            matches!(v, Verdict::Challenge(Vendor::Cloudflare)),
+            "got {v:?} — interstitial with visible text must be Challenge"
+        );
+        let v2 = detect(200, &[("server".into(), "cloudflare".into())], body);
+        assert!(matches!(v2, Verdict::Challenge(_)), "got {v2:?}");
+    }
+
+    #[test]
+    fn security_check_title_without_markers_is_interstitial() {
+        // Interstitial signature via title alone (no scripts needed).
+        let body = b"<html><head><title>Please Wait... | Access Denied</title></head><body><p>Checking your browser before accessing the site.</p></body></html>";
+        assert!(detect_interstitial(body).is_some());
+    }
+
+    #[test]
+    fn real_page_titled_about_security_is_content() {
+        // A security article has its own title and real text.
+        let body = b"<html><head><title>Web Security Guide 2026</title></head><body><h1>Web Security Guide</h1><p>This article explains how security checks work on the modern web, what a security service does, and how verification flows are designed. It covers many topics in substantial depth for readers.</p></body></html>";
+        let v = detect_dom_smart(body);
+        assert!(matches!(v, Verdict::ContentOk), "got {v:?}");
+    }
+
+    #[test]
+    fn turnstile_contact_form_still_content_with_interstitial_layer() {
+        // The contact form with a Turnstile widget: has a form +
+        // inputs + its own title — must stay content.
+        let body = b"<html><head><title>Contact Us</title><script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\"></script></head><body><h1>Contact Us</h1><p>Fill out the form below and we will get back to you within 24 hours. Our team is dedicated to providing the best possible support.</p><div class=\"cf-turnstile\"></div><form><input name=\"email\"><textarea name=\"message\"></textarea><button>Send</button></form></body></html>";
+        let v = detect_dom_smart(body);
+        assert!(matches!(v, Verdict::ContentOk), "got {v:?}");
+    }
+
+    #[test]
+    fn turnstile_shell_without_form_is_interstitial() {
+        // Bare Turnstile shell (no form, no text): interstitial.
+        let body = b"<html><head><script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\"></script></head><body><div class=\"cf-turnstile\"></div></body></html>";
+        assert!(detect_interstitial(body).is_some());
+        let v = detect_dom_smart(body);
+        assert!(matches!(v, Verdict::Challenge(_)), "got {v:?}");
     }
 }

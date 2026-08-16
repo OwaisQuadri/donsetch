@@ -97,11 +97,46 @@ fn render(
                             buf.push_str(&format!("`{}`", t.replace('`', "'")));
                         }
                     }
-                    // Wiki citation markers [1] — pure token waste.
-                    "sup" => {}
+                    // Inline math: recover the LaTeX (`$...$`) —
+                    // math elements must never be flattened away.
+                    "math" => {
+                        let l = super::math::latex(c);
+                        if !l.is_empty() {
+                            buf.push_str(&format!(" ${l}$ "));
+                            *total += l.len();
+                        }
+                    }
+                    // Superscript: keep the content (`^{...}`)
+                    // unless it is a wiki-citation marker ([1],
+                    // bare digits) — those are pure token waste.
+                    "sup" => {
+                        let t = plain(c);
+                        if !t.is_empty() && !is_citation_marker(&t) {
+                            buf.push_str(&format!("^{{{t}}}"));
+                            *total += t.len();
+                        }
+                    }
+                    // Subscript: keep the content (`_{...}`) —
+                    // W<d sub>k</d>, x<sub>0</sub> carry meaning.
+                    "sub" => {
+                        let t = plain(c);
+                        if !t.is_empty() {
+                            buf.push_str(&format!("_{{{t}}}"));
+                            *total += t.len();
+                        }
+                    }
                     "script" | "style" | "noscript" | "svg" | "img" | "button" | "input"
                     | "select" => {}
                     "br" => buf.push(' '),
+                    // Block boundaries inside inline rendering
+                    // (multi-paragraph comments, list items): at
+                    // least a space — the words must never fuse.
+                    "p" | "li" | "div" | "blockquote" => {
+                        if !buf.is_empty() && !buf.ends_with(' ') {
+                            buf.push(' ');
+                        }
+                        render(c, base, opts, buf, total, link, depth + 1);
+                    }
                     _ => {
                         if crate::extract::junk::skip(c) {
                             continue;
@@ -113,6 +148,23 @@ fn render(
             _ => {}
         }
     }
+}
+
+/// Wiki citation markers: "[1]", "[12]", "[a]", "[1][2]".
+/// These superscripts are reference noise; real superscripts
+/// (exponents, ordinal suffixes like "th") survive.
+fn is_citation_marker(t: &str) -> bool {
+    let stripped: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+    if stripped.is_empty() {
+        return true;
+    }
+    let inner = stripped.trim_matches(|c| c == '[' || c == ']');
+    if inner.is_empty() {
+        return true;
+    }
+    // Digits (up to 3) or a single footnote letter.
+    (inner.len() <= 3 && inner.chars().all(|c| c.is_ascii_digit()))
+        || inner.len() == 1 && inner.chars().all(|c| c.is_ascii_lowercase())
 }
 
 /// Collapse all whitespace runs to single spaces.

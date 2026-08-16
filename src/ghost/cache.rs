@@ -76,6 +76,18 @@ pub struct DomainProfile {
     /// learns the real lifetime and re-solves proactively.
     #[serde(default)]
     pub observed_lifetime: Option<u64>,
+    /// Consecutive warm fetches that hit a wall. A single warm
+    /// failure is often transient (challenge rotation, vendor
+    /// hiccup); two in a row is a real stale.
+    #[serde(default)]
+    pub warm_fail_streak: u32,
+    /// Tier-1 replay of ghost-harvested cookies VERIFIED working
+    /// (the post-solve tier-1 retry came back ContentOk). Warm
+    /// routing is only offered after a verified replay — cookies
+    /// that the vendor binds to the browser fingerprint never
+    /// earn a doomed tier-1 roundtrip.
+    #[serde(default)]
+    pub replay_ok: bool,
 }
 
 /// How to route a fetch to this host.
@@ -240,6 +252,20 @@ impl GhostState {
                         changed = true;
                     }
                 }
+                // One-time un-poisoning (v2.2): pre-v2.2 code marked
+                // domains needs_tier2 on ANY non-content verdict —
+                // a single 404 or rate-limit forced ghost on every
+                // later fetch. Profiles that never recorded an
+                // actual solve carry no wall knowledge: reset them
+                // so they get a fresh cold tier-1 chance.
+                for profile in state.profiles.values_mut() {
+                    if profile.needs_tier2 && profile.solve_count == 0 && profile.cookies.is_empty()
+                    {
+                        profile.needs_tier2 = false;
+                        profile.wall_vendor = None;
+                        changed = true;
+                    }
+                }
                 // Cap renders to RENDER_MAX (old state files may
                 // have hundreds of cached renders).
                 while state.renders.len() > RENDER_MAX {
@@ -356,7 +382,12 @@ impl GhostState {
         };
         let n = now();
         if profile.needs_tier2 {
-            if cookies_fresh_at(profile, n) {
+            // Warm only when cookies are fresh AND tier-1 replay has
+            // actually been verified to work for this domain. Vendors
+            // that bind clearance to the browser fingerprint reject
+            // tier-1 replay forever — serving Warm there just burns a
+            // doomed roundtrip before every solve.
+            if cookies_fresh_at(profile, n) && profile.replay_ok {
                 return RouteDecision::Warm(profile.cookies.clone());
             }
             // Cookies stale. Should we recheck cold?
@@ -372,6 +403,19 @@ impl GhostState {
 
     // ── Observation ──
 
+    /// A fetch completed with a non-challenge, non-content verdict
+    /// (404, rate-limit, paywall, auth wall). These say nothing
+    /// about walls or cookies — they must not poison the route.
+    /// The counters move and the cold-check clock restarts (this
+    /// WAS a tier-1 answer; the 24h recheck cadence follows it).
+    pub fn record_fetch(&mut self, host: &str) {
+        let n = now();
+        let p = self.profiles.entry(host.to_string()).or_default();
+        p.fetch_count += 1;
+        p.last_cold_check = n;
+        self.save();
+    }
+
     /// Tier 1 cold succeeded. If the domain was previously known
     /// to need tier 2, the wall is gone — clear the flag.
     pub fn record_cold_ok(&mut self, host: &str) {
@@ -379,17 +423,21 @@ impl GhostState {
         let p = self.profiles.entry(host.to_string()).or_default();
         p.fetch_count += 1;
         p.last_cold_check = n;
+        p.warm_fail_streak = 0;
         if p.needs_tier2 {
             p.needs_tier2 = false;
             p.wall_vendor = None;
             // Cookies from a previous solve are stale context — clear.
             p.cookies.clear();
             p.observed_lifetime = None;
+            p.replay_ok = false;
         }
         self.save();
     }
 
     /// Tier 1 cold was walled — domain needs tier 2.
+    /// (Callers: ONLY on an actual Challenge verdict. A 404 or a
+    /// rate-limit is not a wall — it must not force ghost mode.)
     pub fn record_cold_walled(&mut self, host: &str, vendor: Option<&str>) {
         let n = now();
         let p = self.profiles.entry(host.to_string()).or_default();
@@ -413,6 +461,7 @@ impl GhostState {
         let p = self.profiles.entry(host.to_string()).or_default();
         p.fetch_count += 1;
         p.warm_ok_count += 1;
+        p.warm_fail_streak = 0;
         p.last_refreshed = n;
         // Merge: replace by (name, domain), add new ones — but only
         // clearance cookies.
@@ -434,26 +483,48 @@ impl GhostState {
     /// real lifetime: it's at most `now - last_solved`. Next
     /// time, trust the observation over the server's claim and
     /// re-solve before the cookies expire.
+    ///
+    /// Dampened: the FIRST warm failure keeps the cookies (vendor
+    /// challenges rotate; one wall is often transient — the next
+    /// warm fetch gets to prove the cookies still live). Only a
+    /// SECOND consecutive failure clears the vault and learns the
+    /// lifetime. The learned lifetime is floored at 120s: a fluke
+    /// wall one second after a solve must never clamp the domain
+    /// to permanent skip-to-solve (the stackoverflow bug).
     pub fn record_warm_stale(&mut self, host: &str) {
         let n = now();
         let p = self.profiles.entry(host.to_string()).or_default();
         p.fetch_count += 1;
         p.warm_fail_count += 1;
-        let elapsed = n.saturating_sub(p.last_solved);
-        p.observed_lifetime = Some(match p.observed_lifetime {
-            Some(prev) => prev.min(elapsed),
-            None => elapsed,
-        });
-        // Cookies are dead — clear so route_for doesn't serve them.
-        p.cookies.clear();
-        p.last_refreshed = 0;
+        p.warm_fail_streak += 1;
+        if p.warm_fail_streak >= 2 {
+            let elapsed = n.saturating_sub(p.last_solved).max(120);
+            p.observed_lifetime = Some(match p.observed_lifetime {
+                Some(prev) => prev.max(120).min(elapsed),
+                None => elapsed,
+            });
+            // Cookies are dead — clear so route_for doesn't serve them.
+            p.cookies.clear();
+            p.last_refreshed = 0;
+            p.replay_ok = false;
+        }
         self.save();
     }
 
     /// Tier 2 solved the wall — store fresh cookies with real
     /// expiry captured from CDP. Only clearance cookies are kept —
     /// tracking cookies bloat the state file with no benefit.
-    pub fn record_solved(&mut self, host: &str, cookies: &[CookieRecord], vendor: Option<&str>) {
+    ///
+    /// `replay_ok` records whether tier-1 replay of these cookies
+    /// was VERIFIED (post-solve tier-1 fetch came back with real
+    /// content). Warm routing is gated on it — see route_for.
+    pub fn record_solved(
+        &mut self,
+        host: &str,
+        cookies: &[CookieRecord],
+        vendor: Option<&str>,
+        replay_ok: bool,
+    ) {
         let n = now();
         let p = self.profiles.entry(host.to_string()).or_default();
         p.cookies = filter_clearance(cookies);
@@ -461,6 +532,8 @@ impl GhostState {
         p.last_refreshed = n;
         p.solve_count += 1;
         p.needs_tier2 = true;
+        p.warm_fail_streak = 0;
+        p.replay_ok = replay_ok;
         if let Some(v) = vendor {
             p.wall_vendor = Some(v.to_string());
         }
@@ -638,6 +711,7 @@ mod tests {
             "hard.com".into(),
             DomainProfile {
                 needs_tier2: true,
+                replay_ok: true,
                 cookies: vec![cr("cf", "x", ".hard.com", Some(now() + 3600))],
                 last_solved: now(),
                 ..Default::default()
@@ -712,22 +786,23 @@ mod tests {
             "hard.com".into(),
             DomainProfile {
                 needs_tier2: true,
+                replay_ok: true,
                 cookies: vec![cr("cf", "x", ".hard.com", Some(9999))],
                 last_solved: 1000,
                 ..Default::default()
             },
         );
-        // Simulate: warm fetch at t=1300 was walled.
-        // We can't call record_warm_stale with a custom now,
-        // but we can verify the logic by setting last_solved.
-        // The method uses now() internally — test structurally:
-        // after record_warm_stale, cookies should be cleared
-        // and observed_lifetime should be Some.
+        // Simulate: warm fetch at t=1300 was walled. Dampened
+        // learning: the first failure is tolerated (transient
+        // vendor rotation), the second confirms and learns.
+        s.record_warm_stale("hard.com");
+        let p = &s.profiles["hard.com"];
+        assert!(!p.cookies.is_empty(), "first failure tolerated");
         s.record_warm_stale("hard.com");
         let p = &s.profiles["hard.com"];
         assert!(p.cookies.is_empty());
         assert!(p.observed_lifetime.is_some());
-        assert_eq!(p.warm_fail_count, 1);
+        assert_eq!(p.warm_fail_count, 2);
     }
 
     #[test]
@@ -761,13 +836,133 @@ mod tests {
     fn solved_stores_cookies_and_vendor() {
         let mut s = GhostState::default();
         let cookies = vec![cr("cf_clearance", "tok", ".hard.com", Some(now() + 3600))];
-        s.record_solved("hard.com", &cookies, Some("cloudflare"));
+        s.record_solved("hard.com", &cookies, Some("cloudflare"), true);
         let p = &s.profiles["hard.com"];
         assert!(p.needs_tier2);
         assert_eq!(p.solve_count, 1);
         assert_eq!(p.wall_vendor.as_deref(), Some("cloudflare"));
         assert_eq!(p.cookies.len(), 1);
         assert!(!p.cookies.is_empty());
+        assert!(p.replay_ok);
+    }
+
+    // ── replay gating + warm-stale dampening (v2.2) ──
+
+    #[test]
+    fn warm_requires_verified_replay() {
+        // Cookies fresh but replay never verified → SkipToSolve,
+        // not a doomed Warm roundtrip.
+        let mut s = GhostState::default();
+        s.profiles.insert(
+            "strict.com".into(),
+            DomainProfile {
+                needs_tier2: true,
+                replay_ok: false,
+                cookies: vec![cr("cf_clearance", "x", ".strict.com", Some(now() + 3600))],
+                last_solved: now(),
+                last_cold_check: now(),
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            s.route_for("strict.com"),
+            RouteDecision::SkipToSolve
+        ));
+        // Verified replay flips it to Warm.
+        let cookies = vec![cr("cf_clearance", "x", ".strict.com", Some(now() + 3600))];
+        s.record_solved("strict.com", &cookies, Some("cloudflare"), true);
+        assert!(matches!(s.route_for("strict.com"), RouteDecision::Warm(_)));
+    }
+
+    #[test]
+    fn single_warm_failure_keeps_cookies() {
+        // Transient tolerance: one walled warm fetch must not kill
+        // the vault or learn a bogus lifetime.
+        let mut s = GhostState::default();
+        s.profiles.insert(
+            "hard.com".into(),
+            DomainProfile {
+                needs_tier2: true,
+                replay_ok: true,
+                cookies: vec![cr("cf_clearance", "x", ".hard.com", Some(now() + 3600))],
+                last_solved: now() - 5, // solved 5s ago
+                ..Default::default()
+            },
+        );
+        s.record_warm_stale("hard.com");
+        let p = &s.profiles["hard.com"];
+        assert!(!p.cookies.is_empty(), "first failure keeps cookies");
+        assert!(p.observed_lifetime.is_none(), "no learning on first failure");
+        assert!(p.replay_ok);
+        // Still Warm-routable (cookies alive).
+        assert!(matches!(s.route_for("hard.com"), RouteDecision::Warm(_)));
+    }
+
+    #[test]
+    fn second_consecutive_warm_failure_learns() {
+        let mut s = GhostState::default();
+        s.profiles.insert(
+            "hard.com".into(),
+            DomainProfile {
+                needs_tier2: true,
+                replay_ok: true,
+                cookies: vec![cr("cf_clearance", "x", ".hard.com", Some(9999))],
+                last_solved: now() - 3_600, // solved 1h ago
+                ..Default::default()
+            },
+        );
+        s.record_warm_stale("hard.com");
+        s.record_warm_stale("hard.com");
+        let p = &s.profiles["hard.com"];
+        assert!(p.cookies.is_empty(), "second failure clears cookies");
+        let learned = p.observed_lifetime.expect("learned after 2nd failure");
+        assert!(learned >= 120, "lifetime floored at 120s, got {learned}");
+        assert!(!p.replay_ok);
+        // Warm success resets the streak.
+        s.record_solved(
+            "hard.com",
+            &[cr("cf_clearance", "y", ".hard.com", Some(9999))],
+            None,
+            true,
+        );
+        s.record_warm_ok("hard.com", &[]);
+        assert_eq!(s.profiles["hard.com"].warm_fail_streak, 0);
+    }
+
+    #[test]
+    fn one_second_fluke_never_poisons_lifetime() {
+        // The live stackoverflow bug: a wall 1s after solve clamped
+        // observed_lifetime to 1s → warm forever dead. The floor
+        // plus dampening make that impossible.
+        let mut s = GhostState::default();
+        s.profiles.insert(
+            "so.com".into(),
+            DomainProfile {
+                needs_tier2: true,
+                replay_ok: true,
+                cookies: vec![cr("cf_clearance", "x", ".so.com", Some(9999))],
+                last_solved: now() - 1,
+                ..Default::default()
+            },
+        );
+        s.record_warm_stale("so.com");
+        s.record_warm_stale("so.com");
+        let p = &s.profiles["so.com"];
+        let learned = p.observed_lifetime.expect("learned");
+        assert!(learned >= 120, "got {learned} — must be floored");
+    }
+
+    #[test]
+    fn non_challenge_outcomes_do_not_poison() {
+        // record_fetch moves counters only: a 404/429/paywall must
+        // never force a domain into ghost mode.
+        let mut s = GhostState::default();
+        s.record_fetch("newsite.com");
+        s.record_fetch("newsite.com");
+        let p = &s.profiles["newsite.com"];
+        assert_eq!(p.fetch_count, 2);
+        assert!(!p.needs_tier2);
+        assert!(matches!(s.route_for("newsite.com"), RouteDecision::Cold));
     }
 
     // ── convergence simulation ──
@@ -779,7 +974,7 @@ mod tests {
         let host = "cf-protected.com";
         let now = now();
 
-        // Visit 1: unknown → cold → walled → solve
+        // Visit 1: unknown → cold → walled → solve (replay verified)
         assert!(matches!(s.route_for(host), RouteDecision::Cold));
         s.record_cold_walled(host, Some("cloudflare"));
         let cookies = vec![cr(
@@ -788,9 +983,9 @@ mod tests {
             ".cf-protected.com",
             Some(now + 3600),
         )];
-        s.record_solved(host, &cookies, Some("cloudflare"));
+        s.record_solved(host, &cookies, Some("cloudflare"), true);
 
-        // Visit 2: hard + fresh → warm
+        // Visit 2: hard + fresh + replay-verified → warm
         match s.route_for(host) {
             RouteDecision::Warm(c) => assert_eq!(c.len(), 1),
             other => panic!("expected Warm, got {other:?}"),
@@ -909,7 +1104,7 @@ mod tests {
             cr("_ga", "tracking", ".a.com", None),
             cr("datadome", "val", ".a.com", Some(now() + 3600)),
         ];
-        s.record_solved("a.com", &cookies, Some("cloudflare"));
+        s.record_solved("a.com", &cookies, Some("cloudflare"), true);
         let p = &s.profiles["a.com"];
         assert_eq!(p.cookies.len(), 2); // cf_clearance + datadome only
     }

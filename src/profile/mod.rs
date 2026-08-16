@@ -78,6 +78,16 @@ pub struct BrowserProfile {
 impl BrowserProfile {
     /// Chrome 150 on the given platform. Ground truth: Chromium 150 capture, 2026-07-30.
     pub fn chrome_150(platform: Platform) -> Self {
+        Self::chrome(150, platform)
+    }
+
+    /// Chrome `major` on the given platform. The TLS/H2 tables are
+    /// the Chrome 150 capture (stable across adjacent versions);
+    /// the UA and client hints carry the real version so the ghost
+    /// browser and tier 1 advertise the SAME identity — clearance
+    /// cookies are bound to it, and a ghost solving on Chromium 151
+    /// while tier 1 claims 150 gets its replays rejected.
+    pub fn chrome(major: u32, platform: Platform) -> Self {
         Self {
             name: "chrome-150",
             tls: TlsProfile {
@@ -101,19 +111,24 @@ impl BrowserProfile {
                 conn_window_update: 15663105,
             },
             user_agent: format!(
-                "Mozilla/5.0 ({}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+                "Mozilla/5. ({}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36",
                 platform.ua_token()
             ),
-            sec_ch_ua:
-                "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\", \"Google Chrome\";v=\"150\""
-                    .to_string(),
+            sec_ch_ua: format!(
+                "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"{major}\", \"Google Chrome\";v=\"{major}\""
+            ),
             platform,
         }
     }
 
     /// Default: host-coherent identity (a Windows agent looks like Windows Chrome).
+    /// The major version is probed from the INSTALLED browser when
+    /// one exists (ghost + tier 1 must claim the same version).
     pub fn host_default() -> Self {
-        Self::chrome_150(Platform::host())
+        match probe_installed_major() {
+            Some(major) => Self::chrome(major, Platform::host()),
+            None => Self::chrome_150(Platform::host()),
+        }
     }
 
     /// Ordered header template for a document GET, Chrome order.
@@ -137,4 +152,28 @@ impl BrowserProfile {
             ("priority".into(), "u=0, i".into()),
         ]
     }
+}
+
+/// Probe the installed browser's major version once. `--version`
+/// prints on all three platforms (Chromium/Chrome/Edge all do).
+/// ~20ms at daemon startup; None when no browser or unparsable.
+pub fn probe_installed_major() -> Option<u32> {
+    let bin = crate::ghost::chrome_binary().ok()?;
+    let out = std::process::Command::new(&bin)
+        .arg("--version")
+        .output()
+        .ok()?;
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // "Chromium 151.0.7922.108 Arch Linux" / "Google Chrome 150..."
+    // / "Microsoft Edge 151..."
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    for t in tokens {
+        if let Some(first) = t.split('.').next()
+            && let Ok(major) = first.parse::<u32>()
+            && (20..=400).contains(&major)
+        {
+            return Some(major);
+        }
+    }
+    None
 }
