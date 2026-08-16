@@ -339,10 +339,10 @@ impl Fetcher {
         // Reject header values carrying CR/LF/NUL before they can
         // reach the wire: values synthesized from response data
         // (cookies, referer) must never split the request.
-        if req_headers
-            .iter()
-            .any(|(n, v)| !crate::fetch::guards::valid_header_value(n) || !crate::fetch::guards::valid_header_value(v))
-        {
+        if req_headers.iter().any(|(n, v)| {
+            !crate::fetch::guards::valid_header_value(n)
+                || !crate::fetch::guards::valid_header_value(v)
+        }) {
             return Err(FetchError::Http(
                 "invalid header value (CR/LF/NUL) — refused to send".into(),
             ));
