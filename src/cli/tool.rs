@@ -396,12 +396,15 @@ pub fn print_top_help() {
     println!("MANAGEMENT:");
     println!("  {:8} Start MCP server (JSON-RPC on stdio)", "mcp");
     println!("  {:8} Manage BYOK search provider keys", "keys");
+    println!("  {:8} Manage proxy configuration", "proxy");
+    println!("  {:8} Quick status overview", "status");
     println!("  {:8} Health check with auto-fix", "doctor");
     println!("  {:8} Self-update from GitHub Releases", "update");
     println!("  {:8} Revert to previous version", "rollback");
     println!("  {:8} Show version and build info", "version");
     println!();
-    println!("Run `donsetch <command> --help` for parameters and examples.");
+    println!("Run `donsetch <command> --help` for parameters.");
+    println!("Run `donsetch help <command>` for detailed help on a command.");
     println!();
     println!(
         "Exit codes: 0 success · 1 permanent error · 2 transient (retry) · 3 walled (try different source)"

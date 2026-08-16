@@ -191,8 +191,8 @@ async fn cmd_add(args: &[String]) {
 
 async fn cmd_remove(args: &[String]) {
     if args.is_empty() {
-        eprintln!("Usage: donsetch proxy remove <host:port> [host:port...]");
-        eprintln!("  Removes proxies by host:port or full proxy URL.");
+        eprintln!("Usage: donsetch proxy remove <id> [id...]");
+        eprintln!("  Remove by index (1, 2, ...) from `proxy list` or by host:port / URL.");
         std::process::exit(1);
     }
 
@@ -203,16 +203,49 @@ async fn cmd_remove(args: &[String]) {
     let mut removed = 0u32;
     let mut not_found = 0u32;
 
+    // Collect indices to remove. Parse each arg as either a
+    // 1-based index (from `proxy list`) or a host:port/URL.
+    // Collect indices first so shifting doesn't bite us.
+    let mut to_remove: Vec<usize> = Vec::new();
+    let mut not_found_args: Vec<String> = Vec::new();
+
     for arg in args {
-        let id = normalize_id(arg);
-        if let Some(pos) = proxies.iter().position(|p| p.id() == id) {
-            let p = proxies.remove(pos);
-            println!("  {} {:<30} removed", cli::icon_pass(), p.id());
-            removed += 1;
+        let pos = if let Ok(n) = arg.parse::<usize>()
+            && n >= 1
+            && n <= proxies.len()
+            && !to_remove.contains(&(n - 1))
+        {
+            Some(n - 1)
+        } else if let Ok(n) = arg.parse::<usize>()
+            && n >= 1
+        {
+            // Index out of range — report as not found.
+            None
         } else {
-            println!("  {} {:<30} not found", cli::icon_fail(), id);
-            not_found += 1;
+            let id = normalize_id(arg);
+            proxies.iter().position(|p| p.id() == id)
+        };
+
+        match pos {
+            Some(idx) if !to_remove.contains(&idx) => {
+                to_remove.push(idx);
+            }
+            _ => {
+                not_found_args.push(arg.clone());
+                not_found += 1;
+            }
         }
+    }
+
+    // Remove in reverse order so indices don't shift.
+    to_remove.sort_unstable_by(|a, b| b.cmp(a));
+    for idx in &to_remove {
+        let p = proxies.remove(*idx);
+        println!("  {} {:<30} removed", cli::icon_pass(), p.id());
+        removed += 1;
+    }
+    for arg in &not_found_args {
+        println!("  {} {:<30} not found", cli::icon_fail(), arg);
     }
 
     if removed > 0
@@ -697,7 +730,7 @@ fn print_help() {
     println!();
     println!("Subcommands:");
     println!("  add <url> [url...] [--no-check]  Add proxies (validated, optionally probed)");
-    println!("  remove <id> [id...]              Remove proxies by host:port or URL");
+    println!("  remove <id> [id...]              Remove by index (1, 2, ...) or host:port / URL");
     println!("  list                             Show all configured proxies");
     println!("  check                            Probe all proxies (connectivity + exit IP)");
     println!("  clear                            Remove all proxies");
@@ -712,6 +745,13 @@ fn print_help() {
     println!("  http://host:port                 HTTP CONNECT without auth");
     println!("  user:pass@host:port              Bare = HTTP CONNECT (backward compat)");
     println!("  host:port                        No auth, HTTP CONNECT");
+    println!();
+    println!("Examples:");
+    println!("  donsetch proxy add socks5://user:pass@1.2.3.4:1080");
+    println!("  donsetch proxy list");
+    println!("  donsetch proxy remove 1          # remove first proxy from list");
+    println!("  donsetch proxy remove 1.2.3.4:1080");
+    println!("  donsetch proxy check");
     println!();
     println!("Config: cache_dir/proxies.txt (one URL per line, # comments)");
     println!("Env:   DONSEEK_PROXIES (comma-separated, overrides config for same host:port)");

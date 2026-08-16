@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod keys;
 pub mod proxy;
 pub mod rollback;
+pub mod status;
 pub mod tool;
 pub mod update;
 pub mod version;

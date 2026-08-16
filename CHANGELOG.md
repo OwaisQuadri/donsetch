@@ -9,10 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`donsetch status`** — one-glance overview: version + update check, search config (providers, keys, default mode), proxies count, cache size, and health hint. No probes, no browser launch — fast. The "I just installed it, what's the state?" command.
+- **`donsetch help <command>`** — route to any command's help: `donsetch help keys`, `donsetch help proxy`, `donsetch help fetch`, etc. Falls back to top-level help for unknown commands.
 - **`donsetch keys default local`** — set the local keyless search engine as the default search method, even when BYOK provider keys are configured. When local is the default, the local 5-engine search is tried first and BYOK keys are only used as fallback if local search fails. This lets users test or use the local engine without removing their keys. `donsetch keys default <provider>` switches back to BYOK-first mode.
 - **`donsetch keys export [path|-]`** — export all BYOK keys and config to a file (with 0600 permissions) or stdout (with `-`). Useful for backup, transfer between machines, or dotfiles repos.
 - **`donsetch keys import <path>`** — import a config from a file previously exported by `keys export`. Replaces the current config entirely. Validates structure (provider names, key states, default) before saving.
 - **`donsetch keys clear`** — remove all keys and reset to a clean state. The nuclear option for starting fresh.
+
+### Fixed
+
+- **Proxy missing from top-level help** — `proxy` command was not listed in `donsetch --help`, making it undiscoverable. Now shown in the MANAGEMENT section alongside `keys`, `doctor`, `update`, etc.
+- **`proxy remove` now accepts numeric indices** — `proxy list` displays proxies as `1, 2, 3, ...` but `proxy remove` only accepted `host:port` or full URLs. Now `donsetch proxy remove 1` works. Handles multiple indices (`remove 1 3 5`) with correct order-of-operations (collects all first, removes in reverse to avoid index shifting). Backward compatible with `host:port` and full URL arguments.
 
 ## [2.0.0] - 2026-08-16
 
