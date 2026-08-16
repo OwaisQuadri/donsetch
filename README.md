@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/herobanner.png" alt="DonSeTch — The web, for AI agents">
+<img src="assets/herobanner.png" width="640" alt="DonSeTch — The web, for AI agents">
 
 **$0. No keys, no accounts. Built from scratch in Rust.**
 
