@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pi extension TUI: truncateToWidth ANSI leak** — pi-tui's `truncateToWidth` function injects `\x1b[0m` RESET codes around the ellipsis even when the input is plain text. These RESET codes broke pi's green/red tool-call overlay mid-line, causing text to fall outside the highlight. Replaced all `truncateToWidth` calls with a local `truncate()` function that adds zero ANSI codes. This was the remaining cause of the visual glitch after the earlier green/red removal.
+
 ## [2.2.4] - 2026-08-17
 
 ### Fixed

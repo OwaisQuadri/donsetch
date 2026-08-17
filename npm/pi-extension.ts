@@ -24,7 +24,7 @@ import { Type } from "typebox";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { Text, visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 
 // ── Constants ──
 const INIT_TIMEOUT_MS = 10_000;
@@ -33,11 +33,17 @@ const SHUTDOWN_GRACE_MS = 2_000;
 
 // ── TUI rendering note ──
 // Pi's TUI wraps tool calls in its own green (success) / red (failure)
-// highlight. We output PLAIN TEXT only — no ANSI color codes. Any
-// ANSI we emit (especially RESET) breaks pi's overlay mid-line,
-// causing text to fall outside the green/red highlight and show
-// with the TUI background color instead. Plain text = pi colors
-// the whole thing uniformly.
+// highlight. We output PLAIN TEXT only — no ANSI codes at all.
+// pi-tui's truncateToWidth injects \x1b[0m RESET around the ellipsis,
+// which breaks pi's overlay mid-line. We use our own truncate()
+// that adds zero ANSI codes.
+
+/** Plain text truncation — no ANSI codes. */
+function truncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  if (maxLen <= 3) return text.slice(0, maxLen);
+  return text.slice(0, maxLen - 3) + "...";
+}
 
 // ── Tool icons ──
 const ICONS: Record<string, string> = {
@@ -252,7 +258,7 @@ function getPreview(text: string, maxLen = 72): string {
   for (const line of lines) {
     let clean = line.replace(/^#+\s*/, "").replace(/\*\*([^*]+)\*\*/g, "$1").trim();
     if (clean.length > 0 && !clean.startsWith("{") && !clean.startsWith("[")) {
-      return truncateToWidth(clean, maxLen, "\u2026");
+      return truncate(clean, maxLen);
     }
   }
   return "";
@@ -282,7 +288,7 @@ function shortUrl(url: string): string {
     const u = new URL(url);
     return u.hostname + (u.pathname !== "/" ? u.pathname.slice(0, 30) : "");
   } catch {
-    return truncateToWidth(url, 50, "\u2026");
+    return truncate(url, 50);
   }
 }
 
@@ -427,7 +433,7 @@ export default function (pi: ExtensionAPI) {
           if (args?.url) {
             key = shortUrl(args.url);
           } else if (args?.query) {
-            key = truncateToWidth(`"${args.query}"`, 50, "\u2026");
+            key = truncate(`"${args.query}"`, 50);
           }
           // Plain text only — no ANSI codes. Pi wraps tool calls
           // in its own green (success) / red (failure) highlight.
@@ -470,7 +476,7 @@ export default function (pi: ExtensionAPI) {
           if (isErr) {
             line2 = d.error || "failed";
           } else if (toolName === "web_search" && d.topResult) {
-            line2 = truncateToWidth(d.topResult, 70, "\u2026");
+            line2 = truncate(d.topResult, 70);
           } else if (d.preview) {
             line2 = d.preview;
           }
