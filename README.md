@@ -65,7 +65,7 @@ Works with every MCP client: Claude Code, Cursor, OpenCode, Pi, anything that sp
 
 <div align="center">
 
-<video src="https://raw.githubusercontent.com/dondai44423/donsetch/master/assets/donsetch-demo.mp4" controls muted width="640"></video>
+<video src="https://github.com/dondai44423/donsetch/releases/download/v2.2.1/donsetch-demo.mp4" controls muted width="640"></video>
 
 </div>
 
