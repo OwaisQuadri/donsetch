@@ -23,7 +23,7 @@ Works with **Claude Code**, **Cursor**, **OpenCode**, **Pi**, **Windsurf**, and 
 [![Rust](https://img.shields.io/badge/Rust-edition%202024-ce422b?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![MCP](https://img.shields.io/badge/MCP-server-7c3aed?logo=modelcontextprotocol&logoColor=white)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/license-AGPL%203.0-2563eb)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-442%20passed-00d4aa)](#)
+[![Tests](https://img.shields.io/badge/tests-479%20passed-00d4aa)](#)
 
 </div>
 
@@ -58,6 +58,18 @@ Works with every MCP client: Claude Code, Cursor, OpenCode, Pi, anything that sp
 | 📄 **Pixel-fusion PDF** | Glyphs + rendered pixels from the same stream, fused deterministically. No hallucination. Per-region trust audit. Scanned PDFs auto-OCR'd. |
 | 🧬 **Built from scratch** | Own HTTP/2 (HPACK, flow control), own extraction engine, own PDF parser, own search aggregator, own crawl engine. Zero dependency on existing OSS web tooling. |
 | 🪶 **2,363 tokens** | Three tools, 2,363 tokens total in the MCP context — measured with tiktoken (GPT-4o tokenizer). No bloat, no redundancy, every token earns its place. |
+
+---
+
+## 🎬 Demo
+
+<div align="center">
+
+<video src="assets/donsetch-demo.mp4" controls muted width="640"></video>
+
+</div>
+
+*(30-second walkthrough: search, fetch with bot-wall bypass, and crawl)*
 
 ---
 
