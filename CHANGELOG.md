@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Pi extension TUI: provider + cache display** — search results now show the provider (`via local`, `via exa`, `via tavily`), so the agent and user can see which engine was used. Fetch results show `via cache` when warm cookies were used (not a fresh fetch) and `via ghost` when the browser escalated.
-- **Pi extension TUI: green color fix** — success glyph changed from green to amber. Pi's TUI highlights successful tool calls with green, and the previous green ANSI code for the ✓ glyph bled into pi's highlight, causing a visual glitch. Amber for success, red for errors — clean separation from pi's own colors.
+- **Pi extension TUI: success/fail coloring fix** — removed all green and red ANSI codes from renderResult. Pi's TUI already wraps successful tool calls in green and failures in red; our own green/red codes bled into pi's highlight causing a visual glitch. renderResult now outputs only amber (tool name) and dim (metadata) — pi handles the success/fail coloring.
 
 ## [2.2.1] - 2026-08-17
 

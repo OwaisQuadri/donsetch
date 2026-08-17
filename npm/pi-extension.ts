@@ -32,12 +32,11 @@ const CALL_TIMEOUT_MS = 120_000;
 const SHUTDOWN_GRACE_MS = 2_000;
 
 // ── Color palette — DonSeTch amber theme ──
-// Note: avoid green for success — pi's TUI highlights successful tool
-// calls with green, and using green here causes a visual clash where
-// ANSI codes bleed into pi's highlight. Amber for success, red for
-// errors. Clean separation from pi's own colors.
+// Pi's TUI wraps successful tool calls in green and failures in red.
+// We do NOT use green or red in our render output — that's pi's job.
+// Amber for our own accents (tool name, icons), dim for metadata.
+// Clean separation: pi handles success/fail coloring, we handle content.
 const C_AMBER = "\x1b[38;2;255;178;0m";
-const C_RED   = "\x1b[38;2;229;115;115m";
 const C_DIM   = "\x1b[38;2;130;130;140m";
 const C_CREAM = "\x1b[38;2;240;230;210m";
 const RESET   = "\x1b[0m";
@@ -445,8 +444,6 @@ export default function (pi: ExtensionAPI) {
 
           const isErr = result?.isError || result?.details?.isError;
           const d = result?.details ?? {};
-          const glyph = isErr ? "\u2717" : "\u2713";
-          const glyphColor = isErr ? C_RED : C_AMBER;
 
           // Build metadata string per tool
           let meta = "";
@@ -477,7 +474,9 @@ export default function (pi: ExtensionAPI) {
             line2 = d.preview;
           }
 
-          const line1 = `${glyphColor}${glyph}${RESET} ${C_CREAM}${toolName}${RESET} ${C_DIM}\u00B7 ${meta}${RESET}`;
+          // No glyph coloring — pi wraps the whole result in green
+          // (success) or red (failure). We just output the text.
+          const line1 = `${C_AMBER}${toolName}${RESET} ${C_DIM}\u00B7 ${meta}${RESET}`;
           const output = line2
             ? `${line1}\n  ${C_DIM}${line2}${RESET}`
             : line1;
