@@ -253,7 +253,9 @@ async fn crawl_follows_links_bfs() {
 async fn crawl_cycles_terminate() {
     let a = "<html><body><article><p>content words here for the extractor threshold pass yes yes</p><a href=\"/b\">b</a></article></body></html>";
     let b = "<html><body><article><p>other content words here for the extractor threshold pass</p><a href=\"/a\">a</a></article></body></html>";
+    let root = "<html><body><article><p>root page content words here for the extractor threshold pass</p><a href=\"/a\">a</a><a href=\"/b\">b</a></article></body></html>";
     let site = MockSite::new()
+        .page("https://ex.com/", 200, root)
         .page("https://ex.com/a", 200, a)
         .page("https://ex.com/b", 200, b);
     let (fetch, hits) = site.fetcher();
@@ -262,7 +264,7 @@ async fn crawl_cycles_terminate() {
     o.mode = CrawlMode::Content;
     o.max_pages = 20;
     o.deadline = Duration::from_secs(5);
-    let r = crawler.crawl("https://ex.com/a", o, None).await.unwrap();
+    let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
     // Each page fetched exactly once despite the cycle.
     let hits = hits.lock().unwrap();
     let a_hits = hits.iter().filter(|h| h.ends_with("/a")).count();

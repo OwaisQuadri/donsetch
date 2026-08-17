@@ -430,7 +430,7 @@ pub async fn ghost_fetch(
         let substantive = visible >= 80;
         let stable = prev_len > 0 && cur_len.abs_diff(prev_len) < cur_len / 100 + 64;
         let min_settle = if cur_len < 50_000 {
-            Duration::from_secs(3)
+            Duration::from_secs(4)
         } else {
             Duration::ZERO
         };

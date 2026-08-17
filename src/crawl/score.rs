@@ -58,6 +58,17 @@ fn depth_prior(path: &str) -> f64 {
 /// enqueued. This prevents the crawler from following
 /// navigation, footer, and sidebar links to off-topic sections.
 /// Returns true for empty focus (no filter).
+///
+/// Compound token handling: query terms containing `_` or `-`
+/// (e.g. `spawn_blocking`, `async-await`) are treated as compound
+/// identifiers. A compound term matches if:
+///   (a) the full compound form appears as a substring in the
+///       path or anchor (e.g. `spawn_blocking` in the path), OR
+///   (b) ALL its fragments appear in the path/anchor tokens.
+/// This prevents the stemmed fragment `block` (from splitting
+/// `spawn_blocking` → `spawn` + `block`) from matching unrelated
+/// paths like `/ant-libp2p-allow-block-list/` where only `block`
+/// appears without `spawn`.
 pub fn focus_match(anchor: &str, path: &str, focus: &str) -> bool {
     let qlang = language::detect_from_text(focus);
     let qtoks = focus::tokenize(focus, &qlang);
@@ -67,9 +78,38 @@ pub fn focus_match(anchor: &str, path: &str, focus: &str) -> bool {
     let anchor_toks = focus::tokenize(anchor, &qlang);
     let path_text = path.replace(['/', '-', '_', '.'], " ");
     let path_toks = focus::tokenize(&path_text, &qlang);
-    qtoks
-        .iter()
-        .any(|qt| anchor_toks.iter().any(|t| t == qt) || path_toks.iter().any(|t| t == qt))
+    let all_toks: Vec<&String> = anchor_toks.iter().chain(path_toks.iter()).collect();
+
+    let lower_path = path.to_lowercase();
+    let lower_anchor = anchor.to_lowercase();
+
+    // Split query into whitespace-separated terms.
+    for term in focus.split_whitespace() {
+        let lower_term = term.to_lowercase();
+
+        // Compound term (contains _ or -): check full form as
+        // substring, or ALL fragments as token matches.
+        if lower_term.contains('_') || lower_term.contains('-') {
+            // (a) Full compound form as substring.
+            if lower_path.contains(&lower_term) || lower_anchor.contains(&lower_term) {
+                return true;
+            }
+            // (b) ALL fragments must match as tokens.
+            let fragments = focus::tokenize(&lower_term, &qlang);
+            if !fragments.is_empty() && fragments.iter().all(|ft| all_toks.iter().any(|t| *t == ft))
+            {
+                return true;
+            }
+        } else {
+            // Simple term: check if any token matches.
+            let term_toks = focus::tokenize(&lower_term, &qlang);
+            if term_toks.iter().any(|tt| all_toks.iter().any(|t| *t == tt)) {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -129,11 +169,39 @@ mod tests {
     }
 
     #[test]
-    fn focus_match_stemming() {
-        // "blocking" should match "block" via light stemming.
+    fn focus_match_compound_no_false_positive() {
+        // `block` from `spawn_blocking` must NOT match paths that
+        // contain `block` but not `spawn` (e.g. unrelated crates
+        // on docs.rs that happen to have "block" in the name).
+        assert!(!focus_match(
+            "",
+            "/ant-libp2p-allow-block-list",
+            "spawn_blocking vs spawn"
+        ));
+        assert!(!focus_match(
+            "",
+            "/async-blocking-bridger",
+            "spawn_blocking vs spawn"
+        ));
+        assert!(!focus_match("", "/asm_block", "spawn_blocking vs spawn"));
+    }
+
+    #[test]
+    fn focus_match_compound_in_path() {
+        // Full compound form in path → match.
         assert!(focus_match(
-            "block",
-            "/docs/blocking",
+            "",
+            "/tokio/task/spawn_blocking",
+            "spawn_blocking vs spawn"
+        ));
+    }
+
+    #[test]
+    fn focus_match_all_fragments() {
+        // Both fragments `spawn` and `block` in path → match.
+        assert!(focus_match(
+            "spawn block tutorial",
+            "/docs/spawn/block",
             "spawn_blocking vs spawn"
         ));
     }

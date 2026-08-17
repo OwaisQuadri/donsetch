@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-08-17
+
+### Fixed
+
+- **Crawl: auto-scope drift on multi-tenant hosts** — seeding a crawl at `docs.rs/tokio` (single-segment path) returned `None` from `auto_scope`, causing the crawler to explore the entire `docs.rs` sitemap instead of staying within `/tokio/`. Fixed: single-segment paths now scope to `/{segment}/*`. Before: 383 off-topic pages fetched (async-blocking-bridger, asm_block, etc.). After: 5 pages, all within `/tokio/`.
+
+- **Crawl: focus filter false positives from compound terms** — `focus_match` tokenized `spawn_blocking` into `spawn` + `block`, then matched `block` against unrelated paths like `/ant-libp2p-allow-block-list/`. Fixed: compound terms (containing `_` or `-`) are matched as full substrings OR require ALL fragments to match. `spawn_blocking` must appear as `spawn_blocking` in the path, or both `spawn` AND `block` must be present.
+
+- **Fetch: content density threshold too high** — lowered from 50KB to 20KB raw and 5000 to 3000 chars extracted. Sites like artstation (91KB raw, 866 chars, 0.9% density) now correctly escalate to tier 2. Sites like bilibili (24KB raw, 1476 chars, 6% density) are not flagged.
+
+- **Fetch: ghost settle time increased to 4s** — 3s was not enough for some SPAs (crates.io occasionally settled at 8KB before hydration). 4s gives SvelteKit/React enough time to download, parse, and execute JS bundles.
+
+- **Doctor: TLS fingerprint false warning** — `tls.peet.ws` being unreachable showed a warning in `donsetch doctor`. Changed to Pass: the TLS stack is active (used for every fetch); the external fingerprint service being down is not a DonSeTch issue.
+
+- **Tests: crawl_cycles_terminate with root seed** — test was seeded at `/a` which auto-scoped to `/a/*`, preventing the root page from being fetched. Fixed: seed at `/` (root) so auto-scope returns `None` and all paths are in scope.
+
 ## [2.3.0] - 2026-08-17
 
 ### Fixed

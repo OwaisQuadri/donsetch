@@ -371,6 +371,10 @@ impl FrontierQueue {
 ///   `/tokio/latest/tokio/` -> `/tokio/latest/tokio/*`
 /// - Path not ending with `/` (page): use parent directory.
 ///   `/tokio-rs/tokio/wiki` -> `/tokio-rs/tokio/*`
+/// - Single-segment path (e.g. `/tokio`): scope to that segment.
+///   `/tokio` -> `/tokio/*` (NOT None — multi-tenant hosts like
+///   docs.rs, crates.io, npmjs.com have each crate/package as
+///   a top-level segment; returning None crawls the entire site).
 /// - Root path `/`: no scope (crawl the whole host).
 pub fn auto_scope(seed_path: &str) -> Option<String> {
     let path = if seed_path.starts_with('/') {
@@ -383,14 +387,26 @@ pub fn auto_scope(seed_path: &str) -> Option<String> {
         return None;
     }
 
-    let prefix = if path.ends_with('/') {
-        path
-    } else {
-        match path.rfind('/') {
-            Some(0) => return None,
-            Some(i) => path[..i + 1].to_string(),
-            None => return None,
+    // Directory path: full path as prefix.
+    if path.ends_with('/') {
+        if path == "/" {
+            return None;
         }
+        return Some(format!("{path}*"));
+    }
+
+    // Page path: use parent directory.
+    let prefix = match path.rfind('/') {
+        Some(0) => {
+            // Single-segment path like `/tokio` — scope to
+            // `/tokio/*` instead of returning None. This is
+            // critical for multi-tenant hosts (docs.rs,
+            // crates.io, npmjs.com) where each top-level segment
+            // is a different project.
+            return Some(format!("{path}/*"));
+        }
+        Some(i) => path[..i + 1].to_string(),
+        None => return None,
     };
 
     if prefix == "/" || prefix.is_empty() {
@@ -572,10 +588,11 @@ mod tests {
     }
 
     #[test]
-    fn auto_scope_single_segment_page_is_none() {
-        // /learn -> parent is / -> no scope
-        assert_eq!(auto_scope("/learn"), None);
-        assert_eq!(auto_scope("/blog"), None);
+    fn auto_scope_single_segment_is_scope() {
+        // /tokio on docs.rs -> /tokio/* (NOT None — multi-tenant host)
+        assert_eq!(auto_scope("/tokio"), Some("/tokio/*".into()));
+        assert_eq!(auto_scope("/learn"), Some("/learn/*".into()));
+        assert_eq!(auto_scope("/blog"), Some("/blog/*".into()));
     }
 
     #[test]

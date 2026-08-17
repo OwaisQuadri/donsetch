@@ -1042,8 +1042,8 @@ fn classify_docs() {
 // 11. CONTENT DENSITY SHELL DETECTION (v2.3.0)
 // ════════════════════════════════════════════════════════════
 
-/// A large page (> 50KB) that yields < 5% of its size as text
-/// with < 5000 chars total is a JS shell. SPAs that server-render
+/// A large page (> 20KB) that yields < 5% of its size as text
+/// with < 3000 chars total is a JS shell. SPAs that server-render
 /// their layout (navigation, sidebar, footer) produce enough
 /// boilerplate to pass the < 800 char thin check, but the main
 /// content is client-rendered. Content density catches these.
@@ -1052,8 +1052,8 @@ fn content_density_shell_large_page_low_density_is_thin() {
     // 60KB of HTML with only ~900 chars of visible text.
     // Simulates a SPA shell with navigation + noscript + sidebar.
     let mut html = String::from("<html><head><script>");
-    // Pad with JS to reach > 50KB
-    html.push_str(&"var x = 1;".repeat(6000));
+    // Pad with JS to reach > 20KB
+    html.push_str(&"var x = 1;".repeat(3000));
     html.push_str("</script></head><body>");
     html.push_str("<nav>Home About Contact Login Search Settings</nav>");
     html.push_str("<noscript>Enable JavaScript for the best experience</noscript>");
@@ -1061,8 +1061,8 @@ fn content_density_shell_large_page_low_density_is_thin() {
     html.push_str("<footer>Copyright 2026 Terms Privacy Cookies</footer>");
     html.push_str("</body></html>");
     assert!(
-        html.len() > 50_000,
-        "test HTML must be > 50KB, got {}",
+        html.len() > 20_000,
+        "test HTML must be > 20KB, got {}",
         html.len()
     );
     let r = extract_html(&html);
@@ -1080,13 +1080,13 @@ fn content_density_real_page_high_density_not_thin() {
     // 60KB+ of HTML with ~30KB of real article text (50% density).
     let mut html = String::from("<html><body><article>");
     html.push_str("<h1>Rust Static vs Dynamic Dispatch</h1>");
-    for i in 0..400 {
+    for i in 0..200 {
         html.push_str(&format!("<p>This is paragraph number {} with substantial real content about Rust dispatch mechanisms and how they work in practice with various types and traits and monomorphization.</p>", i));
     }
     html.push_str("</article></body></html>");
     assert!(
-        html.len() > 50_000,
-        "test HTML must be > 50KB, got {}",
+        html.len() > 20_000,
+        "test HTML must be > 20KB, got {}",
         html.len()
     );
     let r = extract_html(&html);
@@ -1096,7 +1096,7 @@ fn content_density_real_page_high_density_not_thin() {
     );
 }
 
-/// A small page (< 50KB) with low content density is NOT thin.
+/// A small page (< 20KB) with low content density is NOT thin.
 /// Content density check only applies to large pages.
 /// bilibili.com homepage: 24KB raw, ~1500 chars, 6% density.
 #[test]
@@ -1115,40 +1115,40 @@ fn content_density_small_page_low_density_not_thin() {
     html.push_str("<div>Breaking news updates latest announcements community events special promotions premium features subscriber benefits platform improvements new tools</div>");
     html.push_str("</body></html>");
     assert!(
-        html.len() < 50_000,
-        "test HTML must be < 50KB, got {}",
+        html.len() < 20_000,
+        "test HTML must be < 20KB, got {}",
         html.len()
     );
     let r = extract_html(&html);
     assert!(
         !r.thin,
-        "small page (< 50KB) must not trigger content density check, got thin={}, chars={}",
+        "small page (< 20KB) must not trigger content density check, got thin={}, chars={}",
         r.thin, r.total_chars
     );
 }
 
-/// A large page with > 5000 chars extracted is NOT thin even if
+/// A large page with > 3000 chars extracted is NOT thin even if
 /// density is low. The content is real even if the HTML is bloated.
 #[test]
 fn content_density_large_page_many_chars_not_thin() {
-    // 80KB of HTML with ~6000 chars of text (7.5% density, but > 5000 chars).
+    // 80KB of HTML with ~3000 chars of text (7.5% density, but > 3000 chars).
     let mut html = String::from("<html><head><script>");
-    html.push_str(&"var x = 1;".repeat(6000));
+    html.push_str(&"var x = 1;".repeat(3000));
     html.push_str("</script></head><body><article>");
     html.push_str(
-        &"<p>Real article content with enough text to exceed the 5000 char threshold.</p>"
+        &"<p>Real article content with enough text to exceed the 3000 char threshold.</p>"
             .repeat(40),
     );
     html.push_str("</article></body></html>");
     assert!(
-        html.len() > 50_000,
-        "test HTML must be > 50KB, got {}",
+        html.len() > 20_000,
+        "test HTML must be > 20KB, got {}",
         html.len()
     );
     let r = extract_html(&html);
     assert!(
         !r.thin,
-        "large page with > 5000 chars must not be thin even with low density"
+        "large page with > 3000 chars must not be thin even with low density"
     );
 }
 

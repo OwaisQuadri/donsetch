@@ -774,13 +774,16 @@ fn downstream(
     // almost nothing are shells at any size. Skeleton markers
     // stay a secondary signal for borderline yields.
     //
-    // Content density: a large page (> 50KB) that yields < 5% of
-    // its raw size as text, with < 5000 chars total, is a JS shell.
+    // Content density: a page > 20KB that yields < 5% of its
+    // raw size as text, with < 3000 chars total, is a JS shell.
     // SPAs that server-render their layout (navigation, sidebar,
     // footer) produce enough boilerplate text to pass the < 800
     // char threshold, but the main content is client-rendered.
-    // Measured false positives: bilibili 0.8%, pixiv 2.1%,
-    // artstation 0.9% — all well under 5%. Real pages: 15-40%+.
+    // Measured: artstation 0.9% density, pixiv 2.1% (both > 20KB).
+    // Real pages: 15-40%+ density. bilibili at 6% with 1476 chars
+    // is NOT flagged (above the 5% density threshold, and above
+    // 3000 chars is not required because density already says
+    // it's real content).
     // A matched section is intentionally small — the agent asked for
     // exactly this slice. Shell detection must not fire on it (a
     // small section on a 400KB page used to escalate to ghost and
@@ -790,7 +793,7 @@ fn downstream(
     } else {
         1.0
     };
-    let is_shell = raw_len > 50_000 && density < 0.05 && full.len() < 5_000;
+    let is_shell = raw_len > 20_000 && density < 0.05 && full.len() < 3_000;
     let thin = !section_hit
         && ((full.len() < 800 && (thin_flag || raw_len > 5_000 || blocks_total == 0))
             || (thin_flag && has_skeletons && full.len() < 4000)
