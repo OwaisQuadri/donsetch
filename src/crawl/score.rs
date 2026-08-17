@@ -96,14 +96,13 @@ pub fn focus_match(anchor: &str, path: &str, focus: &str) -> bool {
             }
             // (b) ALL fragments must match as tokens.
             let fragments = focus::tokenize(&lower_term, &qlang);
-            if !fragments.is_empty() && fragments.iter().all(|ft| all_toks.iter().any(|t| *t == ft))
-            {
+            if !fragments.is_empty() && fragments.iter().all(|ft| all_toks.contains(&ft)) {
                 return true;
             }
         } else {
             // Simple term: check if any token matches.
             let term_toks = focus::tokenize(&lower_term, &qlang);
-            if term_toks.iter().any(|tt| all_toks.iter().any(|t| *t == tt)) {
+            if term_toks.iter().any(|tt| all_toks.contains(&tt)) {
                 return true;
             }
         }
