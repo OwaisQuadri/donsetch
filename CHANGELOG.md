@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-08-17
+
+### Fixed
+
+- **Pi extension TUI: removed all green/red ANSI from renderResult** — pi handles success (green) and failure (red) coloring itself. Our own green/red codes bled into pi's highlight causing a visual glitch. renderResult now outputs only amber (tool name) and dim (metadata).
+
 ## [2.2.2] - 2026-08-17
 
 ### Changed
