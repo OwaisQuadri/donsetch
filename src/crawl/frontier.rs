@@ -362,6 +362,72 @@ impl FrontierQueue {
     }
 }
 
+/// Auto-derive a path scope from the seed URL's path. When
+/// `include_paths` is empty, this provides a default scope that
+/// keeps the crawl within the seed's section of the site.
+///
+/// Algorithm: the seed URL's path defines the scope boundary.
+/// - Path ending with `/` (directory): use full path as prefix.
+///   `/tokio/latest/tokio/` -> `/tokio/latest/tokio/*`
+/// - Path not ending with `/` (page): use parent directory.
+///   `/tokio-rs/tokio/wiki` -> `/tokio-rs/tokio/*`
+/// - Root path `/`: no scope (crawl the whole host).
+pub fn auto_scope(seed_path: &str) -> Option<String> {
+    let path = if seed_path.starts_with('/') {
+        seed_path.to_string()
+    } else {
+        format!("/{seed_path}")
+    };
+
+    if path == "/" || path.is_empty() {
+        return None;
+    }
+
+    let prefix = if path.ends_with('/') {
+        path
+    } else {
+        match path.rfind('/') {
+            Some(0) => return None,
+            Some(i) => path[..i + 1].to_string(),
+            None => return None,
+        }
+    };
+
+    if prefix == "/" || prefix.is_empty() {
+        return None;
+    }
+
+    Some(format!("{prefix}*"))
+}
+
+/// Common non-content path patterns. Safety net merged with
+/// user exclude_paths. Auto-scope + focus filtering handle
+/// most cases; these catch the obvious junk.
+const JUNK_PATHS: &[&str] = &[
+    "/login*",
+    "/signin*",
+    "/signup*",
+    "/register*",
+    "/auth*",
+    "/oauth*",
+    "/account*",
+    "/settings*",
+    "/cart*",
+    "/checkout*",
+    "/favicon*",
+];
+
+/// Build the effective exclude list: user excludes + default junk.
+pub fn effective_excludes(user: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = user.to_vec();
+    for j in JUNK_PATHS {
+        if !out.iter().any(|u| u == j) {
+            out.push(j.to_string());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +545,45 @@ mod tests {
         let fr = locale_canonical("/fr/docs/Web/JavaScript/Array/map");
         assert_eq!(en, de);
         assert_eq!(en, fr);
+    }
+
+    #[test]
+    fn auto_scope_directory_path() {
+        assert_eq!(
+            auto_scope("/tokio/latest/tokio/"),
+            Some("/tokio/latest/tokio/*".into())
+        );
+        assert_eq!(auto_scope("/3/tutorial/"), Some("/3/tutorial/*".into()));
+    }
+
+    #[test]
+    fn auto_scope_page_path_uses_parent() {
+        assert_eq!(
+            auto_scope("/tokio-rs/tokio/wiki"),
+            Some("/tokio-rs/tokio/*".into())
+        );
+        assert_eq!(auto_scope("/docs/payments"), Some("/docs/*".into()));
+    }
+
+    #[test]
+    fn auto_scope_root_is_none() {
+        assert_eq!(auto_scope("/"), None);
+        assert_eq!(auto_scope(""), None);
+    }
+
+    #[test]
+    fn auto_scope_single_segment_page_is_none() {
+        // /learn -> parent is / -> no scope
+        assert_eq!(auto_scope("/learn"), None);
+        assert_eq!(auto_scope("/blog"), None);
+    }
+
+    #[test]
+    fn effective_excludes_merges_junk() {
+        let user = vec!["/api/*".to_string()];
+        let eff = effective_excludes(&user);
+        assert!(eff.contains(&"/api/*".to_string()));
+        assert!(eff.contains(&"/login*".to_string()));
+        assert!(eff.contains(&"/cart*".to_string()));
     }
 }

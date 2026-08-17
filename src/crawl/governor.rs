@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 /// its own signals instead of taxing every crawl with a 700ms+
 /// theater of politeness. Measured effect: small-crawl median
 /// 6.29s → ~2.5s with zero observed throttling on test hosts.
-const BASE_DELAY: Duration = Duration::from_millis(300);
+const BASE_DELAY: Duration = Duration::from_millis(200);
 
 /// Hard ceiling on adaptive delay growth (rung = BASE * 2^k,
 /// capped at 6 rungs ≈ 45s).

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-08-17
+
+### Changed
+
+- **Crawl auto-scope** — when `include_paths` is empty, the crawl now auto-derives a path scope from the seed URL's path. `docs.rs/tokio/latest/tokio/` stays within `/tokio/latest/tokio/*`; `github.com/tokio-rs/tokio/wiki` stays within `/tokio-rs/tokio/*`. Multi-tenant sites (docs.rs, github.com) and multi-section sites (stripe.com, nextjs.org) no longer escape the seed's section. The user no longer needs to manually set `include_paths` for the common case.
+- **Focus filtering on all link discovery paths** — when a `focus` query is set, links with zero focus-token matches are now filtered from BFS outlinks, pagination `<link rel="next">`, RSS/Atom feed entries, and sitemap frontier seeding. Previously only the sitemap map display was focus-filtered; all discovered links were enqueued regardless of relevance. The filter uses a smart soft/hard approach: if the current page has any matching links, non-matching links are hard-filtered (only relevant pages crawled). If no links match (e.g., a homepage linking to a tutorial that links to the target content), non-matching links are soft-filtered (enqueued at low priority) to enable multi-hop discovery.
+- **Junk path filtering** — common non-content paths (`/login*`, `/signin*`, `/signup*`, `/register*`, `/auth*`, `/oauth*`, `/account*`, `/settings*`, `/cart*`, `/checkout*`, `/favicon*`) are now excluded by default, merged with user-specified `exclude_paths`.
+- **Faster crawl pacing** — base inter-request delay reduced from 300ms to 200ms; skim dwell cap reduced from 300ms to 100ms. Roughly 2x faster crawls with zero observed throttling on test sites.
+
+### Fixed
+
+- **Sitemap focus filter bug** — the sitemap filter used `score <= 0.0` which incorrectly filtered deep but relevant pages (depth_prior made the total score negative even with a focus token match). Replaced with `focus_match()` which checks for any token match regardless of depth.
+- **Sitemap seeding not focus-filtered** — sitemap entries were seeded into the frontier without focus filtering (only the map display was filtered). Now all sitemap-seeded entries pass the focus gate.
+
+### Added
+
+- **`next_action` in crawl output** — when the crawl returns 0 pages or stops early, the structured output now includes a `next_action` field with actionable guidance: "use mode=content", "try broader include_paths", "the site blocked the crawler", "resume={token} to continue", etc.
+
 ## [2.2.0] - 2026-08-17
 
 ### Fixed

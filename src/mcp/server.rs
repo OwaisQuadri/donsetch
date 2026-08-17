@@ -399,6 +399,14 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         ));
     }
 
+    // Agent guidance: next_action tells the agent what to try
+    // next when results are poor or empty. Computed from the
+    // stop reason, skip reasons, and page count.
+    let next_action = compute_crawl_next_action(&result);
+    if !next_action.is_empty() {
+        text.push_str(&format!("\n💡 {next_action}\n"));
+    }
+
     let structured = json!({
         "seed": result.seed,
         "pages": result.pages.iter().filter(|p| !p.duplicate).map(|p| json!({
@@ -419,11 +427,77 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         "crawl_delay": result.crawl_delay,
         "elapsed_s": result.elapsed.as_secs_f64(),
         "resume": result.resume,
+        "next_action": next_action,
     });
     json!({
         "content": [{"type": "text", "text": text}],
         "structuredContent": structured
     })
+}
+
+/// Compute actionable guidance for the agent based on crawl
+/// results. Returns an empty string when the crawl succeeded
+/// normally (no guidance needed).
+fn compute_crawl_next_action(result: &crate::crawl::CrawlResult) -> String {
+    use crate::crawl::StopReason;
+
+    // Resume available — always suggest it first.
+    if let Some(tok) = &result.resume {
+        return format!(
+            "resume={tok} to continue crawling (stopped: {:?}).",
+            result.stop
+        );
+    }
+
+    // 0 pages — diagnose why.
+    if result.pages.is_empty() {
+        let skip_reasons: Vec<&str> = result.skipped.iter().map(|(_, w)| w.as_str()).collect();
+        let all_scope = skip_reasons
+            .iter()
+            .all(|r| r.contains("out of scope") || r.contains("filtered"));
+        let all_blocked = skip_reasons
+            .iter()
+            .all(|r| r.contains("Challenge") || r.contains("Blocked") || r.contains("wall"));
+        let all_404 = skip_reasons
+            .iter()
+            .all(|r| r.contains("404") || r.contains("NotFound"));
+        let has_sitemap = !result.map.is_empty();
+
+        if all_404 {
+            return "seed URL returned 404 — check the URL is correct.".into();
+        }
+        if all_blocked {
+            return "the site blocked the crawler. Try respect_robots=false, or fetch the seed URL directly first to check access.".into();
+        }
+        if all_scope && result.filtered_out > 0 {
+            return "all discovered URLs were outside the seed's path scope. Try broader include_paths, or same_host=false to crawl the whole host.".into();
+        }
+        if !has_sitemap && result.map.is_empty() && result.filtered_out == 0 {
+            return "no sitemap found and no links discovered. Try mode=content to BFS from the seed, or check the seed URL is accessible.".into();
+        }
+        return "crawl returned 0 pages. Try mode=content, broader include_paths, or a different seed URL.".into();
+    }
+
+    // Pages found but stopped early.
+    match result.stop {
+        StopReason::MaxPages => {
+            "crawl hit the page budget. Increase max_pages or use resume to continue.".into()
+        }
+        StopReason::CharBudget => {
+            "crawl hit the character budget. Increase max_total_chars or use resume to continue."
+                .into()
+        }
+        StopReason::Deadline => {
+            "crawl hit the time deadline. Increase deadline_s or use resume to continue.".into()
+        }
+        StopReason::ThrottledOut => {
+            "the host throttled the crawler. Wait a few minutes and resume.".into()
+        }
+        StopReason::DepthLimit => {
+            "crawl hit the depth limit. Increase max_depth to discover more pages.".into()
+        }
+        StopReason::FrontierEmpty => String::new(), // normal completion
+    }
 }
 
 /// Map a raw FetchError to a user-friendly diagnostic.

@@ -52,6 +52,26 @@ fn depth_prior(path: &str) -> f64 {
     -(segs as f64) * 0.15
 }
 
+/// Check if any focus query token appears in the anchor text or
+/// URL path. Used as a hard gate for crawl outlinks: when a
+/// focus query is set, links with zero token matches are NOT
+/// enqueued. This prevents the crawler from following
+/// navigation, footer, and sidebar links to off-topic sections.
+/// Returns true for empty focus (no filter).
+pub fn focus_match(anchor: &str, path: &str, focus: &str) -> bool {
+    let qlang = language::detect_from_text(focus);
+    let qtoks = focus::tokenize(focus, &qlang);
+    if qtoks.is_empty() {
+        return true;
+    }
+    let anchor_toks = focus::tokenize(anchor, &qlang);
+    let path_text = path.replace(['/', '-', '_', '.'], " ");
+    let path_toks = focus::tokenize(&path_text, &qlang);
+    qtoks
+        .iter()
+        .any(|qt| anchor_toks.iter().any(|t| t == qt) || path_toks.iter().any(|t| t == qt))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,5 +103,38 @@ mod tests {
     fn cjk_focus_scores() {
         let s = score_candidate("什么是机器学习", "/some/article", Some("机器学习"));
         assert!(s > 0.0);
+    }
+
+    #[test]
+    fn focus_match_basic() {
+        assert!(focus_match(
+            "spawn blocking tutorial",
+            "/docs/async",
+            "spawn_blocking"
+        ));
+        assert!(focus_match(
+            "click here",
+            "/tokio/task/spawn_blocking",
+            "spawn_blocking"
+        ));
+        assert!(!focus_match("login", "/login", "spawn_blocking vs spawn"));
+        assert!(!focus_match("pricing", "/pricing", "spawn_blocking"));
+        assert!(focus_match("", "/tokio/spawn", "spawn_blocking vs spawn"));
+        assert!(!focus_match("", "/tokio/bytes", "spawn_blocking vs spawn"));
+    }
+
+    #[test]
+    fn focus_match_empty_is_passthrough() {
+        assert!(focus_match("anything", "/any/path", ""));
+    }
+
+    #[test]
+    fn focus_match_stemming() {
+        // "blocking" should match "block" via light stemming.
+        assert!(focus_match(
+            "block",
+            "/docs/blocking",
+            "spawn_blocking vs spawn"
+        ));
     }
 }

@@ -304,6 +304,21 @@ impl Crawler {
             move |u: &Url| !same || u.host_str().map(|h| host_matches(h, &sh)).unwrap_or(false)
         };
 
+        // ── Auto-scope: derive path prefix from seed URL ──
+        // When include_paths is empty, auto-derive a scope from
+        // the seed URL's path. This keeps the crawl within the
+        // seed's section on multi-tenant sites (docs.rs,
+        // github.com) and multi-section sites (stripe.com).
+        // Also merge default junk-path excludes (login, cart,
+        // etc.) as a safety net.
+        let mut opts = opts;
+        if opts.include_paths.is_empty()
+            && let Some(scope) = frontier::auto_scope(seed_url.path())
+        {
+            opts.include_paths = vec![scope];
+        }
+        opts.exclude_paths = frontier::effective_excludes(&opts.exclude_paths);
+
         // ── Phase 1: the map ───────────────────────────────
         let mut map: Vec<String> = Vec::new();
         let mut sitemap_entries: Vec<SitemapEntry> = Vec::new();
@@ -330,11 +345,10 @@ impl Crawler {
                     if !scope_allowed(u.path(), &opts.include_paths, &opts.exclude_paths) {
                         continue;
                     }
-                    if let Some(q) = &opts.focus {
-                        let s = score::score_candidate("", u.path(), Some(q));
-                        if s <= 0.0 {
-                            continue;
-                        }
+                    if let Some(q) = &opts.focus
+                        && !score::focus_match("", u.path(), q)
+                    {
+                        continue;
                     }
                     // Dedup translated variants in the map.
                     let lcanon = frontier::locale_canonical(u.path());
@@ -416,6 +430,13 @@ impl Crawler {
                     && scope_allowed(u.path(), &opts.include_paths, &opts.exclude_paths)
                     && (!opts.respect_robots || robots.allowed(u.path()))
                 {
+                    // Focus gate: skip sitemap entries that don't
+                    // match the focus query (if set).
+                    if let Some(q) = &opts.focus
+                        && !score::focus_match("", u.path(), q)
+                    {
+                        continue;
+                    }
                     let lcanon = frontier::locale_canonical(u.path());
                     if !seeded_locales.insert(lcanon) {
                         continue; // Another variant already queued
@@ -652,7 +673,7 @@ impl Crawler {
                                 // was the single biggest crawl latency
                                 // cost (6.29s median in the 50-case
                                 // benchmark).
-                                let dwell = (page.body.len() / 32).min(300) as u64;
+                                let dwell = (page.body.len() / 64).min(100) as u64;
                                 governor.on_success(host, &lane.id, page.latency, dwell)
                             }
                             (429, _) | (503, _) => {
@@ -923,6 +944,18 @@ impl Crawler {
                             Url::parse(&page.url).unwrap_or_else(|_| parsed.clone())
                         };
 
+                        // Harvest <a href> links early so we can check
+                        // focus match across all link sources (pagination,
+                        // feeds, outlinks).
+                        let links = self_harvest_static(&html, &base);
+                        let any_focus_match = focus.as_ref().as_ref().is_some_and(|fq| {
+                            links.iter().any(|(child, anchor)| {
+                                frontier::resolve(&base, child)
+                                    .map(|cu| score::focus_match(anchor, cu.path(), fq))
+                                    .unwrap_or(false)
+                            })
+                        });
+
                         // Pagination: <link rel="next"> continues a
                         // linear chain — push at the SAME depth so
                         // pagination doesn't consume depth budget.
@@ -948,6 +981,26 @@ impl Crawler {
                                         continue;
                                     }
                                     if opts_worker.respect_robots && !robots.allowed(nu.path()) {
+                                        continue;
+                                    }
+                                    // Focus gate for pagination: hard filter
+                                    // when page has matching links or depth
+                                    // >= 1; soft filter for multi-hop at seed.
+                                    if let Some(fq) = focus.as_ref()
+                                        && !score::focus_match("", nu.path(), fq)
+                                    {
+                                        if any_focus_match || item.depth > 0 {
+                                            continue;
+                                        }
+                                        let s =
+                                            score::score_candidate("", nu.path(), focus.as_deref())
+                                                - 100.0;
+                                        q.push_with_parent(
+                                            nu,
+                                            s,
+                                            item.depth,
+                                            Some(item.url.clone()),
+                                        );
                                         continue;
                                     }
                                     let lcanon = frontier::locale_canonical(nu.path());
@@ -1025,6 +1078,28 @@ impl Crawler {
                                         if ls.contains(&lcanon) {
                                             continue;
                                         }
+                                        // Focus gate for feed entries: hard
+                                        // filter when page has matching links
+                                        // or depth >= 1; soft at seed.
+                                        if let Some(fq) = focus.as_ref()
+                                            && !score::focus_match("", u.path(), fq)
+                                        {
+                                            if any_focus_match || item.depth > 0 {
+                                                continue;
+                                            }
+                                            let s = score::score_candidate(
+                                                "",
+                                                u.path(),
+                                                focus.as_deref(),
+                                            ) - 100.0;
+                                            q.push_with_parent(
+                                                u,
+                                                s,
+                                                item.depth + 1,
+                                                Some(item.url.clone()),
+                                            );
+                                            continue;
+                                        }
                                         let s =
                                             score::score_candidate("", u.path(), focus.as_deref());
                                         q.push_with_parent(
@@ -1039,7 +1114,6 @@ impl Crawler {
                         }
 
                         // Standard <a href> harvest.
-                        let links = self_harvest_static(&html, &base);
                         let filtered: Vec<(url::Url, String, f64)> = {
                             let ls = locale_seen.lock().unwrap();
                             links
@@ -1077,6 +1151,23 @@ impl Crawler {
                                         cu.path(),
                                         focus.as_deref(),
                                     );
+                                    // Focus gate: when a focus query is set,
+                                    // non-matching links are filtered.
+                                    // Hard filter when: (a) this page has
+                                    // matching links (only crawl relevant),
+                                    // or (b) depth >= 1 (prevent runaway).
+                                    // Soft filter when: this page has no
+                                    // matching links AND it's the seed page
+                                    // (multi-hop discovery).
+                                    if let Some(fq) = focus.as_ref()
+                                        && !score::focus_match(&anchor, cu.path(), fq)
+                                    {
+                                        if any_focus_match || item.depth > 0 {
+                                            filtered_out.fetch_add(1, Ordering::Relaxed);
+                                            return None;
+                                        }
+                                        return Some((cu, anchor, s - 100.0));
+                                    }
                                     Some((cu, anchor, s))
                                 })
                                 .collect()
