@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-17
+
 ### Fixed
 
-- **Pi extension TUI: truncateToWidth ANSI leak** — pi-tui's `truncateToWidth` function injects `\x1b[0m` RESET codes around the ellipsis even when the input is plain text. These RESET codes broke pi's green/red tool-call overlay mid-line, causing text to fall outside the highlight. Replaced all `truncateToWidth` calls with a local `truncate()` function that adds zero ANSI codes. This was the remaining cause of the visual glitch after the earlier green/red removal.
+- **False positive ContentOk on SPA shells** — pages that server-render their layout (navigation, sidebar, footer) but client-render the main content produced enough boilerplate text (> 800 chars) to pass the thin check. The tool returned this boilerplate as content without escalating to tier 2. Added content density check: if raw HTML is > 50KB and extracted text is < 5% of raw with < 5000 chars, the page is classified as a JS shell and triggers tier-2 escalation. Measured false positives: artstation (0.9% density), all caught. Real pages: 15-40%+ density, never triggered.
+
+- **Ghost (tier 2) settles too early on SPA shells** — the ghost_fetch content-quality oracle settled after 2 stability polls (~400ms), before SPAs had time to hydrate and render their content. A stable 8KB DOM at 400ms is a SvelteKit/React shell, not a complete page. Added a minimum settle time of 3 seconds for DOMs < 50KB, giving SPAs time to download, parse, and execute their JS bundles. Large DOMs (>= 50KB) settle fast as before. Fixed: crates.io (SvelteKit, was 8KB shell, now 47KB full render), users.rust-lang.org (Discourse, was intermittent 30KB shell, now consistent 397KB full render).
+
+- **Pi extension TUI: truncateToWidth ANSI leak** — pi-tui's `truncateToWidth` function injects `\x1b[0m` RESET codes around the ellipsis even when the input is plain text. These RESET codes broke pi's green/red tool-call overlay mid-line, causing text to fall outside the highlight. Replaced all `truncateToWidth` calls with a local `truncate()` function that adds zero ANSI codes.
 
 ## [2.2.4] - 2026-08-17
 

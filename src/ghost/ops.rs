@@ -416,10 +416,26 @@ pub async fn ghost_fetch(
         // for simple pages — ghost_fetch ran the full 20s timeout
         // on example.com (visible=122, cur_len=559) instead of
         // returning immediately.
+        //
+        // SPA hydration guard: small DOMs (< 50KB) need more
+        // time before settling. SPAs download, parse, and execute
+        // JS bundles asynchronously — a stable 8KB DOM at t=400ms
+        // is a SvelteKit/React shell, not a complete page. Wait
+        // at least 3 seconds for the DOM to grow before settling.
+        // Large DOMs (≥ 50KB) are already rendered — settle fast.
+        // Measured: crates.io shell 8KB (needs ~3s), Discourse
+        // shell 30KB (needs ~2-3s), both grow to 100-400KB after
+        // hydration. example.com 559B (already complete at t=0).
         let visible = visible_text_len(&html);
         let substantive = visible >= 80;
         let stable = prev_len > 0 && cur_len.abs_diff(prev_len) < cur_len / 100 + 64;
-        if substantive && stable {
+        let min_settle = if cur_len < 50_000 {
+            Duration::from_secs(3)
+        } else {
+            Duration::ZERO
+        };
+        let past_min = start.elapsed() >= min_settle;
+        if substantive && stable && past_min {
             settle_streak += 1;
             if settle_streak >= 2 {
                 let cookies = ghost.cookies().await.unwrap_or_default();
