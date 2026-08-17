@@ -345,33 +345,43 @@ No API key, no account, no third-party service. 10+ keyless backends in parallel
 - **Entity coverage penalty**: anchor entities (hyphenated compounds like "B-tree") and specifiers (version numbers, years) checked against results. Wrong entity → 0.3× score penalty. Fixes BM25 splitting "B-tree" → "b" + "tree" where "binary tree" matches.
 - **Honest reporting**: `weak=true` means low consensus. Per-engine status always visible. Never a fake "no results" that's actually a rate limit.
 
-### BYOK (Bring Your Own Keys)
+### BYOK (Bring Your Own Keys) — Pro Search, No Vendor Lock-in
 
-Want even better search? Add a paid search provider key and the local engine is bypassed entirely — the provider handles search, IP, and rate limits. Falls back to local if the provider is exhausted.
+The local engine is powerful, but paid providers give you higher rate limits, premium data sources, and managed infrastructure. DonSeTch makes BYOK a first-class feature, not an afterthought:
+
+- **Multi-provider, multi-key stacking** — add as many keys as you want, even for the same provider. Two Exa keys with 1,500 credits each? You now have 3,000 credits in a single pool. DonSeTch rotates across them automatically — when one hits its rate limit or runs dry, it falls through to the next. No manual switching.
+- **Smart fallback** — if a provider exhausts all its keys or errors out, DonSeTch falls back to the local keyless engine. You never get a dead search. Set the order yourself: BYOK-first or local-first.
+- **Key rotation** — every key tracks its own rate-limit cooldown and credit-depletion state. A throttled key is skipped until it recovers; a depleted key is retired. All automatic.
+- **Portable key store** — export, import, transfer, or wipe your keys. Move between machines in one command.
+
+<div align="center">
+
+<img src="assets/byok-keys.png" alt="DonSeTch keys list with configured providers" width="640">
+
+</div>
 
 ```bash
-donsetch keys add tinyfish sk-tinyfish-...
+# Add keys — stack as many as you want per provider
+donsetch keys add exa sk-exa-...         # 1,500 credits
+donsetch keys add exa sk-exa-...         # another 1,500 → 3,000 total
 donsetch keys add tavily tvly-...
 donsetch keys add serper ...
-donsetch keys add exa ...
-```
+donsetch keys add tinyfish sk-tinyfish-...
 
-Prefer the local engine but want keys as fallback? Set local as default:
+# See what's configured (keys are masked)
+donsetch keys list
 
-```bash
-donsetch keys default local       # local first, BYOK fallback
+# Set dispatch order — which engine tries first?
+donsetch keys default local       # local keyless first, BYOK fallback
 donsetch keys default exa          # BYOK first, local fallback
-```
 
-Back up, transfer, or wipe your keys:
-
-```bash
+# Back up, transfer, or reset
 donsetch keys export ~/donsetch-keys.json
 donsetch keys import ~/donsetch-keys.json
 donsetch keys clear
 ```
 
-Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**. Key rotation, rate-limit cooldown, credit-depletion detection, and local fallback all automatic.
+Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**.
 
 ---
 
