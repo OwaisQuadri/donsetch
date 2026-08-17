@@ -31,15 +31,13 @@ const INIT_TIMEOUT_MS = 10_000;
 const CALL_TIMEOUT_MS = 120_000;
 const SHUTDOWN_GRACE_MS = 2_000;
 
-// ── Color palette — DonSeTch amber theme ──
-// Pi's TUI wraps successful tool calls in green and failures in red.
-// We do NOT use green or red in our render output — that's pi's job.
-// Amber for our own accents (tool name, icons), dim for metadata.
-// Clean separation: pi handles success/fail coloring, we handle content.
-const C_AMBER = "\x1b[38;2;255;178;0m";
-const C_DIM   = "\x1b[38;2;130;130;140m";
-const C_CREAM = "\x1b[38;2;240;230;210m";
-const RESET   = "\x1b[0m";
+// ── TUI rendering note ──
+// Pi's TUI wraps tool calls in its own green (success) / red (failure)
+// highlight. We output PLAIN TEXT only — no ANSI color codes. Any
+// ANSI we emit (especially RESET) breaks pi's overlay mid-line,
+// causing text to fall outside the green/red highlight and show
+// with the TUI background color instead. Plain text = pi colors
+// the whole thing uniformly.
 
 // ── Tool icons ──
 const ICONS: Record<string, string> = {
@@ -431,15 +429,18 @@ export default function (pi: ExtensionAPI) {
           } else if (args?.query) {
             key = truncateToWidth(`"${args.query}"`, 50, "\u2026");
           }
+          // Plain text only — no ANSI codes. Pi wraps tool calls
+          // in its own green (success) / red (failure) highlight.
+          // Any ANSI we emit breaks pi's overlay mid-line.
           return new Text(
-            `${C_AMBER}${icon}${RESET} ${C_CREAM}${toolName}${RESET}  ${C_DIM}${key}${RESET}`,
+            `${icon} ${toolName}  ${key}`,
             0, 0
           );
         },
 
         renderResult(result: any, opts: any, _theme: any) {
           if (opts?.isPartial) {
-            return new Text(`${C_AMBER}\u23F3${RESET} ${C_DIM}${toolName} working…${RESET}`, 0, 0);
+            return new Text(`${toolName} working…`, 0, 0);
           }
 
           const isErr = result?.isError || result?.details?.isError;
@@ -474,11 +475,10 @@ export default function (pi: ExtensionAPI) {
             line2 = d.preview;
           }
 
-          // No glyph coloring — pi wraps the whole result in green
-          // (success) or red (failure). We just output the text.
-          const line1 = `${C_AMBER}${toolName}${RESET} ${C_DIM}\u00B7 ${meta}${RESET}`;
+          // Plain text only — no ANSI. Pi handles all coloring.
+          const line1 = `${toolName} \u00B7 ${meta}`;
           const output = line2
-            ? `${line1}\n  ${C_DIM}${line2}${RESET}`
+            ? `${line1}\n  ${line2}`
             : line1;
 
           return new Text(output, 0, 0);

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-08-17
+
+### Fixed
+
+- **Pi extension TUI: visual glitch fixed** — stripped ALL ANSI color codes from renderCall and renderResult. Plain text only. Pi wraps tool calls in its own green (success) / red (failure) highlight; our ANSI RESET codes were breaking pi's overlay mid-line, causing text to fall outside the highlight and show with the TUI background color.
+
 ## [2.2.3] - 2026-08-17
 
 ### Fixed
