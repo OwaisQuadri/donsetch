@@ -32,8 +32,11 @@ const CALL_TIMEOUT_MS = 120_000;
 const SHUTDOWN_GRACE_MS = 2_000;
 
 // ── Color palette — DonSeTch amber theme ──
+// Note: avoid green for success — pi's TUI highlights successful tool
+// calls with green, and using green here causes a visual clash where
+// ANSI codes bleed into pi's highlight. Amber for success, red for
+// errors. Clean separation from pi's own colors.
 const C_AMBER = "\x1b[38;2;255;178;0m";
-const C_GREEN = "\x1b[38;2;100;200;100m";
 const C_RED   = "\x1b[38;2;229;115;115m";
 const C_DIM   = "\x1b[38;2;130;130;140m";
 const C_CREAM = "\x1b[38;2;240;230;210m";
@@ -286,6 +289,45 @@ function shortUrl(url: string): string {
   }
 }
 
+/**
+ * Extract the search provider from structuredContent.
+ * Returns "local" when provider is null/undefined (local keyless
+ * engine), or the provider name ("exa", "tavily", "serper",
+ * "tinyfish") for BYOK.
+ */
+function getSearchProvider(sc: any): string {
+  if (!sc) return "local";
+  const provider = sc.provider;
+  if (!provider || provider === "null") return "local";
+  return String(provider);
+}
+
+/**
+ * Extract the fetch source label from structuredContent.
+ * Returns "cache" when tier is "1(warm)" (warm cookies, not a
+ * fresh fetch), "ghost" when tier starts with "2" (browser
+ * escalation), or "" for a normal tier-1 fetch.
+ */
+function getFetchSource(sc: any): string {
+  if (!sc) return "";
+  const tier = String(sc.tier || "");
+  if (tier.includes("warm")) return "cache";
+  if (tier.startsWith("2")) return "ghost";
+  return "";
+}
+
+/**
+ * Extract the fetch verdict/content status from structuredContent.
+ * Returns "blocked" when content_ok is false or verdict is not
+ * ContentOk, "" otherwise.
+ */
+function getFetchStatus(sc: any): string {
+  if (!sc) return "";
+  if (sc.content_ok === false) return "blocked";
+  if (sc.thin === true) return "thin";
+  return "";
+}
+
 // ── Extension ──
 
 export default function (pi: ExtensionAPI) {
@@ -342,6 +384,7 @@ export default function (pi: ExtensionAPI) {
             const result = await callMcpTool(toolName, params);
             const text = result?.content?.[0]?.text ?? "";
             const isErr = result?.isError ?? false;
+            const sc = result?.structuredContent ?? null;
 
             // Build details for TUI rendering
             const details: any = {
@@ -353,6 +396,10 @@ export default function (pi: ExtensionAPI) {
             if (toolName === "web_search") {
               details.results = countSearchResults(text);
               details.topResult = getFirstResultTitle(text);
+              details.provider = getSearchProvider(sc);
+            } else if (toolName === "web_fetch") {
+              details.source = getFetchSource(sc);
+              details.status = getFetchStatus(sc);
             } else if (toolName === "web_crawl") {
               details.pages = countCrawlPages(text);
             }
@@ -399,16 +446,22 @@ export default function (pi: ExtensionAPI) {
           const isErr = result?.isError || result?.details?.isError;
           const d = result?.details ?? {};
           const glyph = isErr ? "\u2717" : "\u2713";
-          const color = isErr ? C_RED : C_GREEN;
+          const glyphColor = isErr ? C_RED : C_AMBER;
 
           // Build metadata string per tool
           let meta = "";
           if (toolName === "web_fetch") {
-            const chars = d.chars ?? 0;
-            meta = `${chars.toLocaleString()} chars`;
+            const parts: string[] = [];
+            parts.push(`${(d.chars ?? 0).toLocaleString()} chars`);
+            if (d.source === "cache") parts.push("via cache");
+            else if (d.source === "ghost") parts.push("via ghost");
+            if (d.status === "blocked") parts.push("blocked");
+            else if (d.status === "thin") parts.push("thin");
+            meta = parts.join(" \u00B7 ");
           } else if (toolName === "web_search") {
             const count = d.results ?? 0;
-            meta = `${count} result${count !== 1 ? "s" : ""}`;
+            const provider = d.provider ?? "local";
+            meta = `${count} result${count !== 1 ? "s" : ""} \u00B7 via ${provider}`;
           } else if (toolName === "web_crawl") {
             const pages = d.pages ?? 0;
             meta = `${pages} page${pages !== 1 ? "s" : ""}`;
@@ -424,7 +477,7 @@ export default function (pi: ExtensionAPI) {
             line2 = d.preview;
           }
 
-          const line1 = `${color}${glyph}${RESET} ${C_CREAM}${toolName}${RESET} ${C_DIM}\u00B7 ${meta}${RESET}`;
+          const line1 = `${glyphColor}${glyph}${RESET} ${C_CREAM}${toolName}${RESET} ${C_DIM}\u00B7 ${meta}${RESET}`;
           const output = line2
             ? `${line1}\n  ${C_DIM}${line2}${RESET}`
             : line1;
