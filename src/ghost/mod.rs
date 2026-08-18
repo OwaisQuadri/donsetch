@@ -68,6 +68,12 @@ pub fn chrome_binary() -> Result<String, FetchError> {
     // Known install locations (most reliable, no PATH needed).
     for path in known_chrome_paths() {
         if is_executable(&path) {
+            // Snap wrappers (/snap/bin/chromium → /usr/bin/snap) are
+            // executable but don't reliably pass CDP flags through
+            // Snap's confinement. Resolve to the real binary.
+            if let Some(real) = resolve_snap_chrome(&path) {
+                return Ok(real.to_string_lossy().into_owned());
+            }
             return Ok(path.to_string_lossy().into_owned());
         }
     }
@@ -94,11 +100,50 @@ fn known_chrome_paths() -> Vec<PathBuf> {
         "/usr/bin/chromium-browser",
         "/usr/bin/google-chrome",
         "/usr/bin/google-chrome-stable",
+        // Snap Chromium: the real binary inside the snap mount.
+        // The /snap/bin/chromium wrapper is a symlink to /usr/bin/snap
+        // and doesn't reliably pass CDP flags through Snap's confinement.
+        // Prefer the real binary; fall back to the wrapper below.
+        "/snap/chromium/current/usr/lib/chromium-browser/chrome",
         "/snap/bin/chromium",
     ]
     .into_iter()
     .map(PathBuf::from)
     .collect()
+}
+
+/// If `path` is a Snap wrapper (canonicalizes to /usr/bin/snap or
+/// similar), resolve to the real Chromium binary inside the snap
+/// mount. Returns None if `path` is already a real binary or if the
+/// real binary can't be found.
+#[cfg(target_os = "linux")]
+fn resolve_snap_chrome(path: &std::path::Path) -> Option<PathBuf> {
+    let real = std::fs::canonicalize(path).ok()?;
+    let real_str = real.to_string_lossy();
+    // Snap wrappers resolve to the snap command itself.
+    if !real_str.ends_with("/snap") {
+        return None; // Already a real binary.
+    }
+    // Extract the snap package name from the original path.
+    // /snap/bin/chromium → "chromium", /snap/bin/firefox → "firefox"
+    let orig = path.to_string_lossy();
+    let snap_name = orig.strip_prefix("/snap/bin/").unwrap_or("chromium");
+    // Look for the real binary inside the snap mount.
+    for candidate in [
+        format!("/snap/{snap_name}/current/usr/lib/chromium-browser/chrome"),
+        format!("/snap/{snap_name}/current/usr/lib/{snap_name}/chromium"),
+    ] {
+        let p = PathBuf::from(&candidate);
+        if is_executable(&p) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn resolve_snap_chrome(_path: &std::path::Path) -> Option<PathBuf> {
+    None
 }
 
 #[cfg(target_os = "macos")]

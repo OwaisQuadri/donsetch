@@ -92,7 +92,10 @@ fn smoke_scanned_detection() {
         "expected scanned/ocr note, got {:?}",
         parsed.notes
     );
-    // When the OCR model cache exists locally, content must be recovered.
+    // When the OCR feature is compiled AND the model cache exists
+    // locally, content must be recovered. Without the feature, OCR
+    // can't run even if models are on disk from a previous build.
+    #[cfg(feature = "ocr")]
     if crate::pdf::ocr::ocr_cache_dir()
         .join("en_pp-ocrv5_mobile_rec.onnx")
         .exists()

@@ -96,11 +96,11 @@ jobs:
           key: ${{ matrix.target }}-v3
 
       - name: Test
-        run: cargo test --target ${{ matrix.target }}
+        run: cargo test --features ocr,rerank --target ${{ matrix.target }}
 
       - name: Clippy
         if: matrix.os == 'ubuntu-latest'
-        run: cargo clippy -- -Dwarnings
+        run: cargo clippy --features ocr,rerank -- -Dwarnings
 
       - name: Format check
         if: matrix.os == 'ubuntu-latest'

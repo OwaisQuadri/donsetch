@@ -121,11 +121,12 @@ Binary lands at `target/release/donsetch`. First build takes ~2 min (compiling B
 
 - **BoringSSL** is vendored and built from source via `boring-sys`. First build compiles it (~2 min), then cached.
 - **PDFium** is downloaded as a static library by `build.rs` — no manual setup.
-- **ONNX Runtime** is downloaded at build time by `oar-ocr` (OCR) and `ort` (reranker).
+- **ONNX Runtime** is downloaded at build time by `oar-ocr` (OCR) and `ort` (reranker) when those features are enabled.
 - **Models** (OCR + reranker) download on first use to `~/.cache/donsetch/`, not bundled in the binary.
-- **Feature flags**: `default = ["ocr", "rerank"]`. Build with `--no-default-features` for HTTP-only (no OCR, no reranker, smaller binary).
-- **Chromium** (optional): needed for tier 2 browser escalation on bot-walled sites. Linux: `pacman -S chromium`. macOS: `brew install chromium`. Windows: Edge works.
+- **Feature flags**: `default = []` — the core tool (fetch, search, crawl, PDF) works standalone. Build with `--features ocr,rerank` for OCR + semantic reranking (pulls in ONNX Runtime). The prebuilt npm binary ships with both features enabled.
+- **Chromium** (optional): needed for tier 2 browser escalation on bot-walled sites. Linux: `pacman -S chromium`. macOS: `brew install chromium`. Windows: Edge works. **Ubuntu Snap**: set `DONGHOST_CHROME=/snap/chromium/current/usr/lib/chromium-browser/chrome` — the `/snap/bin/chromium` wrapper doesn't reliably pass CDP flags.
 - **Linux Xvfb**: for headful Chrome on Linux, `xorg-server-xvfb` is needed. DonSeTch starts Xvfb automatically.
+- **Linux ARM64 (aarch64)**: the default build (no features) works out of the box. If you enable `--features ocr,rerank`, ONNX Runtime's C++ global constructors may deadlock at startup on aarch64. Install `lld` for linking LLVM-produced PDFium archives (`apt install lld`).
 
 </details>
 
@@ -566,6 +567,7 @@ DonSeTch is install and use. wigolo is install, download ~1.5 GB of models and b
 |---|---|
 | First build takes ~2 min | BoringSSL is compiled from source. Cached after that. |
 | Go is a build dependency | BoringSSL's build system is Go-based. You need Go even though DonSeTch is Rust. |
+| OCR/rerank not in default build | ONNX Runtime's C++ global constructors can deadlock on aarch64. Build with `--features ocr,rerank` to enable. The prebuilt npm binary ships with both. |
 | Interactive captchas not solved | hCaptcha, reCAPTCHA, Turnstile checkbox = honest dead end. No solving service by design. |
 | robots.txt ON by default for crawl | `respect_robots=true` for crawl. `fetch` doesn't check robots. |
 | Search rate-limits without a proxy | Keyless search scrapes public engines from your IP. Set `DONSEEK_PROXIES` for heavy use. |
@@ -587,7 +589,7 @@ DonSeTch is install and use. wigolo is install, download ~1.5 GB of models and b
 
 ## 🤝 Contributing
 
-PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Run `cargo clippy --release -- -Dwarnings` and `cargo test --release` before submitting. AGPL v3 — all contributions under the same license.
+PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Run `cargo clippy --features ocr,rerank -- -Dwarnings` and `cargo test --features ocr,rerank` before submitting. AGPL v3 — all contributions under the same license.
 
 ## 📄 License
 

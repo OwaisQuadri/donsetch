@@ -41,7 +41,12 @@ tokenizers = { version = "0.23", default-features = false, features = ["onig"], 
 ndarray = { version = "0.17", optional = true }
 
 [features]
-default = ["ocr", "rerank"]
+# No default features — the core tool (fetch, search, crawl, PDF)
+# works standalone. OCR and semantic reranking pull in ONNX Runtime,
+# a heavy C++ dependency whose static global constructors can deadlock
+# on some platforms (notably aarch64 Linux, see issue #9). CI and release
+# builds explicitly enable both with `--features ocr,rerank`.
+default = []
 ocr = ["dep:oar-ocr", "dep:image", "reqwest/blocking"]
 rerank = ["dep:ort", "dep:tokenizers", "dep:ndarray", "reqwest/blocking"]
 

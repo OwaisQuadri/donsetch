@@ -361,26 +361,33 @@ fn check_state_permissions() -> CheckResult {
 /// Cross-encoder rerank model cache (semantic search reranking
 /// + focus filter). Missing = downloads on first search.
 fn check_rerank_model() -> CheckResult {
-    let dir = paths::cache_dir().join("rerank");
-    if !dir.exists() {
-        return CheckResult::Warn("not cached (downloads on first search)".into());
+    #[cfg(not(feature = "rerank"))]
+    {
+        CheckResult::Warn("not compiled (build with --features rerank to enable)".into())
     }
-    let models = std::fs::read_dir(&dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .is_some_and(|ext| ext == "onnx" || ext == "json" || ext == "txt")
-                })
-                .count()
-        })
-        .unwrap_or(0);
-    if models > 0 {
-        CheckResult::Pass(format!("{models} model files cached"))
-    } else {
-        CheckResult::Warn("not cached (downloads on first search)".into())
+    #[cfg(feature = "rerank")]
+    {
+        let dir = paths::cache_dir().join("rerank");
+        if !dir.exists() {
+            return CheckResult::Warn("not cached (downloads on first search)".into());
+        }
+        let models = std::fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .is_some_and(|ext| ext == "onnx" || ext == "json" || ext == "txt")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        if models > 0 {
+            CheckResult::Pass(format!("{models} model files cached"))
+        } else {
+            CheckResult::Warn("not cached (downloads on first search)".into())
+        }
     }
 }
 
@@ -520,33 +527,40 @@ fn check_pdfium() -> CheckResult {
 }
 
 fn check_ocr_models() -> CheckResult {
-    if !crate::pdf::ocr::enabled() {
-        return CheckResult::Warn("disabled (DONSHEET_OCR=off)".into());
+    #[cfg(not(feature = "ocr"))]
+    {
+        CheckResult::Warn("not compiled (build with --features ocr to enable)".into())
     }
+    #[cfg(feature = "ocr")]
+    {
+        if !crate::pdf::ocr::enabled() {
+            return CheckResult::Warn("disabled (DONSHEET_OCR=off)".into());
+        }
 
-    let dir = crate::pdf::ocr::ocr_cache_dir();
-    if !dir.exists() {
-        return CheckResult::Warn("not cached (downloads on first use)".into());
-    }
+        let dir = crate::pdf::ocr::ocr_cache_dir();
+        if !dir.exists() {
+            return CheckResult::Warn("not cached (downloads on first use)".into());
+        }
 
-    // Count model files (.onnx + .txt dictionary).
-    let models = std::fs::read_dir(&dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .is_some_and(|ext| ext == "onnx" || ext == "txt")
-                })
-                .count()
-        })
-        .unwrap_or(0);
+        // Count model files (.onnx + .txt dictionary).
+        let models = std::fs::read_dir(&dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        e.path()
+                            .extension()
+                            .is_some_and(|ext| ext == "onnx" || ext == "txt")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
 
-    if models > 0 {
-        CheckResult::Pass(format!("{models} model files cached"))
-    } else {
-        CheckResult::Warn("not cached (downloads on first use)".into())
+        if models > 0 {
+            CheckResult::Pass(format!("{models} model files cached"))
+        } else {
+            CheckResult::Warn("not cached (downloads on first use)".into())
+        }
     }
 }
 

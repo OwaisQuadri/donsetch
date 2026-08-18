@@ -127,6 +127,55 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/pdfium/lib");
 
+    // ── LLD auto-detection (Linux) ────────────────────────────
+    //
+    // The PDFium static archives are produced by LLVM/Clang. GNU ld
+    // on some versions/architectures can't parse the ELF machine type
+    // of LLVM-generated archive members — notably aarch64 with GNU
+    // ld 2.42+ reports "architecture: UNKNOWN!" and skips them as
+    // incompatible. Newer GNU binutils (2.44+) on x86_64 also reject
+    // LLVM CREL relocations in the same archives.
+    //
+    // LLD handles both correctly. If ld.lld is available, we inject
+    // -fuse-ld=lld into the link step so the compiler driver (cc/gcc)
+    // uses LLD instead of GNU ld. This is transparent to the user —
+    // no RUSTFLAGS or .cargo/config.toml needed.
+    if os == "linux" {
+        let lld_available = Command::new("ld.lld")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if lld_available {
+            println!("cargo:rustc-link-arg=-fuse-ld=lld");
+        } else if arch == "aarch64" {
+            eprintln!(
+                "warning: donsetch: LLD not found. GNU ld on aarch64 may fail \
+                 to link LLVM-produced PDFium archives. \
+                 Install lld (e.g., apt install lld) and rebuild."
+            );
+        }
+    }
+
+    // ── aarch64 + ONNX warning ────────────────────────────────
+    //
+    // ONNX Runtime (via `ort`/`oar-ocr`) is statically linked. Its C++
+    // global constructors (protobuf InitProtobufDefaultsSlow) run before
+    // main() and can deadlock on aarch64 Linux. If the user explicitly
+    // enables OCR/rerank on aarch64, warn them.
+    if os == "linux" && arch == "aarch64" {
+        let has_onnx = env::var_os("CARGO_FEATURE_OCR").is_some()
+            || env::var_os("CARGO_FEATURE_RERANK").is_some();
+        if has_onnx {
+            eprintln!(
+                "warning: donsetch: OCR/rerank features are enabled on aarch64 \
+                 Linux. ONNX Runtime's C++ global constructors may deadlock \
+                 at startup on this platform. If the binary hangs, build \
+                 without these features: cargo build --release"
+            );
+        }
+    }
+
     // ── Compile-time metadata for `donsetch -v` ────────────────
     // Captured here so the binary self-reports its build identity.
 
@@ -173,7 +222,12 @@ fn main() {
     if env::var_os("CARGO_FEATURE_RERANK").is_some() {
         feats.push("rerank");
     }
-    println!("cargo:rustc-env=DONSHEET_FEATURES={}", feats.join(", "));
+    let feats_display = if feats.is_empty() {
+        "(none)".to_string()
+    } else {
+        feats.join(", ")
+    };
+    println!("cargo:rustc-env=DONSHEET_FEATURES={feats_display}");
 }
 
 fn target_pair(os: &str, arch: &str) -> &'static str {

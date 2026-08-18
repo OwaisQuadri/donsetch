@@ -104,6 +104,12 @@ mod inner {
 
     /// Initializes the reranker on first call. Returns `None` on any
     /// failure — caller skips reranking gracefully.
+    ///
+    /// ONNX Runtime init runs in a separate thread with a 30s timeout.
+    /// ONNX's C++ global constructors can deadlock on some platforms
+    /// (see pykeio/ort#579); the timeout prevents an infinite hang.
+    /// If it fires, reranking is disabled and results fall back to
+    /// RRF+BM25.
     fn init() -> Option<Reranker> {
         let (model_path, tok_path) = match ensure_files() {
             Ok(p) => p,
@@ -113,8 +119,24 @@ mod inner {
             }
         };
 
-        // Load tokenizer with truncation + padding configured.
-        // Both methods take &mut self, so we call them sequentially.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(init_inner(model_path, tok_path));
+        });
+
+        match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+            Ok(result) => result,
+            Err(_) => {
+                eprintln!(
+                    "[rerank] ONNX Runtime init timed out (30s) — \
+                     reranking disabled, falling back to RRF+BM25"
+                );
+                None
+            }
+        }
+    }
+
+    fn init_inner(model_path: PathBuf, tok_path: PathBuf) -> Option<Reranker> {
         use tokenizers::{
             PaddingDirection, PaddingParams, PaddingStrategy, TruncationParams, TruncationStrategy,
         };

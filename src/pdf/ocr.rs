@@ -14,50 +14,60 @@
 //! DONSHEET_OCR=off disables the tier.
 //! DONSHEET_OCR_MAX_PAGES caps per-document OCR cost (default 25).
 
+#[cfg(feature = "ocr")]
 use std::path::PathBuf;
 
 use super::engine::{PageChars, PdfChar};
 use super::pixels::PageBitmap;
 
+#[cfg(feature = "ocr")]
 const BASE: &str = "https://www.modelscope.cn/models/greatv/oar-ocr/resolve/master";
 
 /// sha256-pinned registry models.
+#[cfg(feature = "ocr")]
 struct Model {
     name: &'static str,
     sha256: &'static str,
     min_bytes: u64,
 }
 
+#[cfg(feature = "ocr")]
 const DET: Model = Model {
     name: "pp-ocrv5_mobile_det.onnx",
     sha256: "1eb7b4f7ab657ebd1c66d5f79bca7497f29768a2e3c15e52daecbba1a8e4a039",
     min_bytes: 4 * 1024 * 1024,
 };
+#[cfg(feature = "ocr")]
 const REC_EN: Model = Model {
     name: "en_pp-ocrv5_mobile_rec.onnx",
     sha256: "8307465d3c9ef2ba4055c3bd0be55aafe11f518630212b7598b70ccb376028ac",
     min_bytes: 5 * 1024 * 1024,
 };
+#[cfg(feature = "ocr")]
 const DICT_EN: Model = Model {
     name: "ppocrv5_en_dict.txt",
     sha256: "e025a66d31f327ba0c232e03f407ae8d105e1e709e7ccb3f408aa778c24e70d6",
     min_bytes: 512,
 };
+#[cfg(feature = "ocr")]
 const REC_ZH: Model = Model {
     name: "pp-ocrv5_mobile_rec.onnx",
     sha256: "243a0f06d826761323e9045e9b113ab2c191c3aa50565585e628300b8eda0224",
     min_bytes: 12 * 1024 * 1024,
 };
+#[cfg(feature = "ocr")]
 const DICT_ZH: Model = Model {
     name: "ppocrv5_dict.txt",
     sha256: "d1979e9f794c464c0d2e0b70a7fe14dd978e9dc644c0e71f14158cdf8342af1b",
     min_bytes: 50 * 1024,
 };
+#[cfg(feature = "ocr")]
 const REC_DEVA: Model = Model {
     name: "devanagari_pp-ocrv5_mobile_rec.onnx",
     sha256: "b3d50774dfbec6ae02249ff79a925431a4381c8c6f86d342ff6e7b63e5fefa77",
     min_bytes: 5 * 1024 * 1024,
 };
+#[cfg(feature = "ocr")]
 const DICT_DEVA: Model = Model {
     name: "ppocrv5_devanagari_dict.txt",
     sha256: "09c7440bfc5477e5c41052304b6b185aff8c4a5e8b2b4c23c1c706f6fe1ee9fc",
@@ -65,6 +75,7 @@ const DICT_DEVA: Model = Model {
 };
 
 /// OCR cache dir for the model zoo.
+#[cfg(feature = "ocr")]
 pub fn ocr_cache_dir() -> PathBuf {
     crate::paths::cache_dir().join("ocr")
 }
@@ -182,13 +193,28 @@ mod imp {
         };
         cell.get_or_init(|| {
             let (det, rec, dict) = ensure_models(kind)?;
-            oar_ocr::oarocr::OAROCRBuilder::new(
-                det.to_string_lossy().to_string(),
-                rec.to_string_lossy().to_string(),
-                dict.to_string_lossy().to_string(),
-            )
-            .build()
-            .map_err(|e| format!("ocr engine init failed: {e}"))
+            // Run ONNX engine init in a separate thread with a timeout.
+            // ONNX Runtime's C++ global constructors can deadlock on
+            // some platforms (see pykeio/ort#579); the timeout prevents
+            // an infinite hang — if ONNX doesn't respond in 30s, OCR
+            // is disabled and pages fall back to the glyph stream.
+            let det_s = det.to_string_lossy().to_string();
+            let rec_s = rec.to_string_lossy().to_string();
+            let dict_s = dict.to_string_lossy().to_string();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let result = oar_ocr::oarocr::OAROCRBuilder::new(det_s, rec_s, dict_s)
+                    .build()
+                    .map_err(|e| format!("ocr engine init failed: {e}"));
+                let _ = tx.send(result);
+            });
+            match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+                Ok(result) => result,
+                Err(_) => Err(
+                    "ONNX Runtime init timed out (30s) — OCR disabled, falling back to glyph stream"
+                        .to_string(),
+                ),
+            }
         })
         .as_ref()
         .map_err(|e| e.clone())

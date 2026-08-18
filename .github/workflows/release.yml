@@ -101,7 +101,7 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --features ocr,rerank --target ${{ matrix.target }}
 
       # Verify the binary actually runs — catches broken cross-target
       # builds, missing DLLs, and link-time issues that don't show
