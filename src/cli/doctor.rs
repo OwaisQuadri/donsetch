@@ -213,8 +213,23 @@ fn check_chrome() -> CheckResult {
     match crate::ghost::chrome_binary() {
         Ok(path) => {
             // Try to get the browser version.
-            let version = std::process::Command::new(&path)
-                .arg("--version")
+            // On Windows, --version without --headless opens a GUI
+            // window. Pass --headless=new + temp --user-data-dir so
+            // Chrome exits silently (same fix as probe_installed_major).
+            let mut cmd = std::process::Command::new(&path);
+            cmd.arg("--version");
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::null());
+            #[cfg(target_os = "windows")]
+            {
+                let tmp = std::env::temp_dir().join("donsetch-chrome-probe");
+                let _ = std::fs::create_dir_all(&tmp);
+                cmd.arg("--headless=new");
+                cmd.arg(format!("--user-data-dir={}", tmp.display()));
+                cmd.arg("--no-first-run");
+                cmd.arg("--no-default-browser-check");
+            }
+            let version = cmd
                 .output()
                 .ok()
                 .and_then(|o| String::from_utf8(o.stdout).ok())

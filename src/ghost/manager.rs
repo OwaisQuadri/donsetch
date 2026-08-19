@@ -53,6 +53,17 @@ impl DerefMut for GhostGuard {
 impl Drop for GhostGuard {
     fn drop(&mut self) {
         self.guard.last_used = Instant::now();
+        // On Windows, a frozen browser window stays visible in the
+        // taskbar (unlike Linux where Xvfb hides it completely). Drop
+        // the Ghost immediately after use. The Proc's Drop closes the
+        // Job Object handle, triggering KILL_ON_JOB_CLOSE which kills
+        // the whole browser tree. The warm-browser optimization is
+        // sacrificed on Windows for a clean user experience: no stuck,
+        // unresponsive Chrome window lingering after a fetch.
+        #[cfg(target_os = "windows")]
+        {
+            let _ = self.guard.ghost.take();
+        }
     }
 }
 
@@ -82,7 +93,7 @@ impl GhostManager {
             // still flash on screen briefly. Xvfb is the clean
             // solution for invisible headful Chrome on Linux.
             eprintln!(
-                "[ghost] Xvfb not found — install with `pacman -S xorg-server-xvfb` (or your distro's equivalent) for invisible headful Chrome on Linux"
+                "[ghost] Xvfb not found — install with `apt install xvfb` or `pacman -S xorg-server-xvfb` (or your distro's equivalent) for invisible headful Chrome on Linux"
             );
             None
         };

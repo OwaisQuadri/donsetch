@@ -7,21 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.3] - 2026-08-19
+
+### Fixed
+
+- **Windows: Chrome window popping up during search/fetch (#10)**: `probe_installed_major()` ran `chrome.exe --version` without `--headless`, which opens a visible GUI window on Windows (and may pop the profile picker since no `--user-data-dir` is passed). The probe now passes `--headless=new` plus a temp `--user-data-dir` on Windows so Chrome prints the version and exits silently. Result is cached in a `OnceLock` so the probe runs at most once per process. Same fix applied to `check_chrome()` in doctor.
+
+- **Windows: Chrome not auto-closed after tier-2 fetch (#11)**: the Ghost browser was frozen (not killed) after use, leaving a visible, unresponsive Chrome window in the taskbar. On Windows, the browser is now killed immediately when the GhostGuard drops. The Proc's Drop closes the Job Object handle, triggering `KILL_ON_JOB_CLOSE` which kills the whole browser tree. The warm-browser optimization is sacrificed on Windows for a clean user experience.
+
+- **WSL: Xvfb fails to start (#12)**: `/tmp/.X11-unix/` directory may not exist under WSL and minimal container setups, preventing Xvfb from creating the X11 socket. The directory is now created with `create_dir_all` before starting Xvfb. Startup timeout increased from 5s to 10s for slower environments. Error messages updated to be distro-agnostic (`apt install xvfb` alongside `pacman`).
+
 ## [2.3.2] - 2026-08-18
 
 ### Fixed
 
-- **Linux ARM64: default build now works out of the box** — `ocr` and `rerank` are no longer default features. ONNX Runtime's C++ global constructors (protobuf `InitProtobufDefaultsSlow`) deadlock at startup on aarch64 Linux before `main()` is reached, making the full-feature binary hang indefinitely. The default build (fetch, search, crawl, PDF) works standalone. CI and release builds explicitly enable both features with `--features ocr,rerank`.
+- **Linux ARM64: default build now works out of the box**: `ocr` and `rerank` are no longer default features. ONNX Runtime's C++ global constructors (protobuf `InitProtobufDefaultsSlow`) deadlock at startup on aarch64 Linux before `main()` is reached, making the full-feature binary hang indefinitely. The default build (fetch, search, crawl, PDF) works standalone. CI and release builds explicitly enable both features with `--features ocr,rerank`.
 
-- **Linux ARM64: LLD auto-detection** — GNU ld on aarch64 rejects LLVM-produced PDFium static archives (reports "architecture: UNKNOWN!"). `build.rs` now auto-detects `ld.lld` and injects `-fuse-ld=lld` when available. No manual `RUSTFLAGS` needed. Warns if LLD is missing on aarch64.
+- **Linux ARM64: LLD auto-detection**: GNU ld on aarch64 rejects LLVM-produced PDFium static archives (reports "architecture: UNKNOWN!"). `build.rs` now auto-detects `ld.lld` and injects `-fuse-ld=lld` when available. No manual `RUSTFLAGS` needed. Warns if LLD is missing on aarch64.
 
-- **Snap Chromium resolution** — `/snap/bin/chromium` is a symlink to `/usr/bin/snap` and doesn't reliably pass CDP flags through Snap confinement. Ghost now resolves Snap wrappers to the real Chromium binary inside the snap mount (`/snap/chromium/current/usr/lib/chromium-browser/chrome`).
+- **Snap Chromium resolution**: `/snap/bin/chromium` is a symlink to `/usr/bin/snap` and doesn't reliably pass CDP flags through Snap confinement. Ghost now resolves Snap wrappers to the real Chromium binary inside the snap mount (`/snap/chromium/current/usr/lib/chromium-browser/chrome`).
 
-- **Doctor: accurate feature reporting** — OCR and rerank checks now report "not compiled" when the binary was built without those features, instead of showing "not cached".
+- **Doctor: accurate feature reporting**: OCR and rerank checks now report "not compiled" when the binary was built without those features, instead of showing "not cached".
 
-- **OCR/rerank init timeout safety** — ONNX Runtime initialization (both OCR and reranker) now runs in a separate thread with a 30s timeout. If ONNX's C++ constructors deadlock, the tool degrades gracefully instead of hanging forever. Reranking falls back to RRF+BM25; OCR falls back to the glyph stream.
+- **OCR/rerank init timeout safety**: ONNX Runtime initialization (both OCR and reranker) now runs in a separate thread with a 30s timeout. If ONNX's C++ constructors deadlock, the tool degrades gracefully instead of hanging forever. Reranking falls back to RRF+BM25; OCR falls back to the glyph stream.
 
-- **Build-time aarch64 + ONNX warning** — when `ocr` or `rerank` features are explicitly enabled on aarch64 Linux, the build script emits a warning about potential startup deadlocks.
+- **Build-time aarch64 + ONNX warning**: when `ocr` or `rerank` features are explicitly enabled on aarch64 Linux, the build script emits a warning about potential startup deadlocks.
 
 ## [2.3.1] - 2026-08-17
 

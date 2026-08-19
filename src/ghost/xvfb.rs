@@ -67,6 +67,11 @@ mod linux {
             let _ = std::fs::remove_file(&sock_path);
             let _ = std::fs::remove_file(&lock_path);
 
+            // Ensure /tmp/.X11-unix/ exists. Under WSL and some minimal
+            // container setups this directory is absent, and Xvfb can't
+            // create the X11 socket without it.
+            let _ = std::fs::create_dir_all("/tmp/.X11-unix");
+
             let mut cmd = Command::new("Xvfb");
             cmd.args([
                 &display,
@@ -81,7 +86,7 @@ mod linux {
 
             let mut child = cmd.spawn().map_err(|e| {
                 FetchError::ghost(format!(
-                    "Xvfb spawn: {e} (install: pacman -S xorg-server-xvfb)"
+                    "Xvfb spawn: {e} (install: apt install xvfb / pacman -S xorg-server-xvfb)"
                 ))
             })?;
 
@@ -90,8 +95,9 @@ mod linux {
             // Xvfb creates /tmp/.X11-unix/X99 when it's ready to
             // accept connections. We also try connecting to make
             // sure the socket is live, not just present.
+            // 10s timeout: WSL and some containers are slower to start.
             let sock_path = format!("/tmp/.X11-unix/X{DISPLAY_NUM}");
-            let ready = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let ready = tokio::time::timeout(std::time::Duration::from_secs(10), async {
                 loop {
                     if std::fs::exists(&sock_path).unwrap_or(false)
                         && std::os::unix::net::UnixStream::connect(&sock_path).is_ok()
@@ -109,7 +115,7 @@ mod linux {
 
             if ready.is_err() || !std::fs::exists(&sock_path).unwrap_or(false) {
                 return Err(FetchError::ghost(
-                    "Xvfb failed to start (install: pacman -S xorg-server-xvfb)",
+                    "Xvfb failed to start (install: apt install xvfb / pacman -S xorg-server-xvfb)",
                 ));
             }
 

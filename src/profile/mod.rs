@@ -154,26 +154,49 @@ impl BrowserProfile {
     }
 }
 
-/// Probe the installed browser's major version once. `--version`
-/// prints on all three platforms (Chromium/Chrome/Edge all do).
-/// ~20ms at daemon startup; None when no browser or unparsable.
+/// Probe the installed browser's major version. Cached after first call.
+///
+/// On Windows, `chrome.exe --version` without `--headless` opens a
+/// visible GUI window (and may pop the profile picker since no
+/// `--user-data-dir` is passed). We pass `--headless=new` plus a temp
+/// `--user-data-dir` so Chrome prints the version and exits without
+/// any visible window. The result is cached in a `OnceLock` so the
+/// probe runs at most once per process.
+static PROBED_MAJOR: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+
 pub fn probe_installed_major() -> Option<u32> {
-    let bin = crate::ghost::chrome_binary().ok()?;
-    let out = std::process::Command::new(&bin)
-        .arg("--version")
-        .output()
-        .ok()?;
-    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    // "Chromium 151.0.7922.108 Arch Linux" / "Google Chrome 150..."
-    // / "Microsoft Edge 151..."
-    let tokens: Vec<&str> = line.split_whitespace().collect();
-    for t in tokens {
-        if let Some(first) = t.split('.').next()
-            && let Ok(major) = first.parse::<u32>()
-            && (20..=400).contains(&major)
+    *PROBED_MAJOR.get_or_init(|| {
+        let bin = crate::ghost::chrome_binary().ok()?;
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.arg("--version");
+        // On Windows, --version without --headless opens a GUI window.
+        // Pass --headless=new + a temp --user-data-dir so Chrome exits
+        // silently. Harmless on Linux/macOS (they ignore --headless
+        // with --version).
+        #[cfg(target_os = "windows")]
         {
-            return Some(major);
+            let tmp = std::env::temp_dir().join("donsetch-chrome-probe");
+            let _ = std::fs::create_dir_all(&tmp);
+            cmd.arg("--headless=new");
+            cmd.arg(format!("--user-data-dir={}", tmp.display()));
+            cmd.arg("--no-first-run");
+            cmd.arg("--no-default-browser-check");
         }
-    }
-    None
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::null());
+        let out = cmd.output().ok()?;
+        let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        // "Chromium 151.0.7922.108 Arch Linux" / "Google Chrome 150..."
+        // / "Microsoft Edge 151..."
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        for t in tokens {
+            if let Some(first) = t.split('.').next()
+                && let Ok(major) = first.parse::<u32>()
+                && (20..=400).contains(&major)
+            {
+                return Some(major);
+            }
+        }
+        None
+    })
 }
