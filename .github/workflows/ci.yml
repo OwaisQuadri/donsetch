@@ -35,6 +35,9 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - name: macos-arm64
             os: macos-latest
             target: aarch64-apple-darwin
@@ -59,6 +62,10 @@ jobs:
       - name: Install NASM (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Install LLD (Linux ARM64)
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: sudo apt-get update && sudo apt-get install -y lld
 
       - name: Install NASM (macOS)
         if: matrix.os == 'macos-latest'
