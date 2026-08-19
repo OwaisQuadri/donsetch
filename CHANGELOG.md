@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **HTTP 304 (cached re-read) reported as `Blocked` at status 200 (#20)**: re-reading the same URL in one long-lived process (the MCP server) failed with `verdict: Blocked, status: 200`, even though the page was fine and the first read of it succeeded. A re-read asks the server "has this changed?", and an unchanged page answers HTTP 304 Not Modified with an empty body. Wall detection has no rule for 304, so that empty response scored as `Blocked`; the cached body, status and headers were then merged back in over it, but the verdict was left behind. The verdict is now re-scored over the merged body, as the fresh-cache path already did. This hit every read after the first, permanently, for any page served with an ETag but no `Cache-Control` (S3/CloudFront, nginx defaults). The CLI was never affected, since its cache lives and dies with each run.
 
+- **Basic auth and proxy auth headers were corrupted by a base64 bug (#15)**: the encoder placed its `=` padding at the start of the final group instead of the end, so `user:passwd` encoded as `dXNlcjpwYXNz==QA` rather than `dXNlcjpwYXNzd2Q=`. Only credentials whose byte length was an exact multiple of 3 came out valid; everything else was rejected by the server. Covered by RFC 4648 test vectors.
+
 ## [2.3.6] - 2026-08-19
 
 ### Added
