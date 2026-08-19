@@ -35,15 +35,19 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            features: --features ocr,rerank
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            features: ''
           - name: macos-arm64
             os: macos-latest
             target: aarch64-apple-darwin
+            features: --features ocr,rerank
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
+            features: --features ocr,rerank
 
     steps:
       - uses: actions/checkout@v7
@@ -105,11 +109,12 @@ jobs:
           key: ${{ matrix.target }}-v3
 
       - name: Test
-        run: cargo test --features ocr,rerank --target ${{ matrix.target }}
+        run: cargo test ${{ matrix.features }} --target ${{ matrix.target }}
+        timeout-minutes: 20
 
       - name: Clippy
         if: matrix.os == 'ubuntu-latest'
-        run: cargo clippy --features ocr,rerank -- -Dwarnings
+        run: cargo clippy ${{ matrix.features }} -- -Dwarnings
 
       - name: Format check
         if: matrix.os == 'ubuntu-latest'

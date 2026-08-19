@@ -42,15 +42,19 @@ jobs:
           - name: linux-x64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            features: --features ocr,rerank
           - name: linux-arm64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            features: ''
           - name: darwin-arm64
             os: macos-latest
             target: aarch64-apple-darwin
+            features: --features ocr,rerank
           - name: win32-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
+            features: --features ocr,rerank
 
     steps:
       - uses: actions/checkout@v7
@@ -111,7 +115,8 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --features ocr,rerank --target ${{ matrix.target }}
+        run: cargo build --release ${{ matrix.features }} --target ${{ matrix.target }}
+        timeout-minutes: 30
 
       # Verify the binary actually runs — catches broken cross-target
       # builds, missing DLLs, and link-time issues that don't show
