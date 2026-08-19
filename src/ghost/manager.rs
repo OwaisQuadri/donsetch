@@ -69,8 +69,15 @@ impl Drop for GhostGuard {
 
 impl GhostManager {
     pub async fn new() -> Arc<Self> {
-        // Start Xvfb on Linux if available.
-        let xvfb = if super::xvfb::is_available() {
+        // Termux (Android) has no X11 by default. Skip Xvfb entirely;
+        // Ghost will use --headless=new mode. Detecting Termux early
+        // avoids a confusing error message about Xvfb installation.
+        let is_termux = std::env::var_os("PREFIX")
+            .map(|p| p.to_string_lossy().contains("com.termux"))
+            .unwrap_or(false);
+
+        // Start Xvfb on Linux if available (and not Termux).
+        let xvfb = if !is_termux && super::xvfb::is_available() {
             match super::xvfb::Xvfb::start().await {
                 Ok(xvfb) => {
                     let disp = xvfb.display_env();
@@ -86,6 +93,12 @@ impl GhostManager {
                     None
                 }
             }
+        } else if is_termux {
+            // Termux: no Xvfb needed. Ghost uses --headless=new.
+            if std::env::var_os("DONGHOST_DEBUG").is_some() {
+                eprintln!("[ghost] Termux detected, using headless mode (no Xvfb)");
+            }
+            None
         } else {
             // Xvfb not installed: warn the user. Chrome will run
             // headful off-screen (--window-position=-32000,-32000 +

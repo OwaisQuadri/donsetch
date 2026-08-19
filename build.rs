@@ -140,7 +140,7 @@ fn main() {
     // -fuse-ld=lld into the link step so the compiler driver (cc/gcc)
     // uses LLD instead of GNU ld. This is transparent to the user —
     // no RUSTFLAGS or .cargo/config.toml needed.
-    if os == "linux" {
+    if os == "linux" || os == "android" {
         let lld_available = Command::new("ld.lld")
             .arg("--version")
             .output()
@@ -152,7 +152,7 @@ fn main() {
             eprintln!(
                 "warning: donsetch: LLD not found. GNU ld on aarch64 may fail \
                  to link LLVM-produced PDFium archives. \
-                 Install lld (e.g., apt install lld) and rebuild."
+                 Install lld (e.g., apt install lld / pkg install lld) and rebuild."
             );
         }
     }
@@ -163,7 +163,7 @@ fn main() {
     // global constructors (protobuf InitProtobufDefaultsSlow) run before
     // main() and can deadlock on aarch64 Linux. If the user explicitly
     // enables OCR/rerank on aarch64, warn them.
-    if os == "linux" && arch == "aarch64" {
+    if (os == "linux" || os == "android") && arch == "aarch64" {
         let has_onnx = env::var_os("CARGO_FEATURE_OCR").is_some()
             || env::var_os("CARGO_FEATURE_RERANK").is_some();
         if has_onnx {
@@ -206,6 +206,8 @@ fn main() {
     let triple = match (os.as_str(), arch.as_str()) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
         ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        ("android", "aarch64") => "aarch64-linux-android",
+        ("android", "x86_64") => "x86_64-linux-android",
         ("macos", "x86_64") => "x86_64-apple-darwin",
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("windows", "x86_64") => "x86_64-pc-windows-msvc",
@@ -234,6 +236,11 @@ fn target_pair(os: &str, arch: &str) -> &'static str {
     match (os, arch) {
         ("linux", "x86_64") => "linux-x64",
         ("linux", "aarch64") => "linux-arm64",
+        // Android uses the same Linux ELF static archives. The
+        // objects are aarch64/x86_64 ELF with compatible ABI for
+        // static linking. Termux (Android) builds use these.
+        ("android", "x86_64") => "linux-x64",
+        ("android", "aarch64") => "linux-arm64",
         ("macos", "x86_64") => "mac-x64",
         ("macos", "aarch64") => "mac-arm64",
         ("windows", "x86_64") => "win-x64",

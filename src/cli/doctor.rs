@@ -252,6 +252,14 @@ fn check_chrome() -> CheckResult {
 fn check_xvfb() -> CheckResult {
     #[cfg(target_os = "linux")]
     {
+        // Termux (Android) has no X11 by default. Xvfb is not
+        // needed — Ghost uses --headless=new mode.
+        if std::env::var_os("PREFIX")
+            .map(|p| p.to_string_lossy().contains("com.termux"))
+            .unwrap_or(false)
+        {
+            return CheckResult::Pass("not needed (Termux — headless mode)".into());
+        }
         if crate::ghost::xvfb::is_available() {
             // :99 socket alive = daemon's Xvfb will be reused.
             let reuse = std::path::Path::new("/tmp/.X11-unix/X99").exists();

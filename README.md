@@ -88,6 +88,7 @@ Downloads the prebuilt binary for your platform from GitHub Releases with SHA256
 | Linux x86_64 | `donsetch-linux-x64.tar.gz` |
 | macOS arm64 | `donsetch-darwin-arm64.tar.gz` |
 | Windows x86_64 | `donsetch-win32-x64.tar.gz` |
+| Termux (Android) | Build from source (see build notes) |
 
 ### Option 2 — Pi agent (native extension)
 
@@ -127,6 +128,7 @@ Binary lands at `target/release/donsetch`. First build takes ~2 min (compiling B
 - **Chromium** (optional): needed for tier 2 browser escalation on bot-walled sites. Linux: `pacman -S chromium`. macOS: `brew install chromium`. Windows: Edge works. **Ubuntu Snap**: set `DONGHOST_CHROME=/snap/chromium/current/usr/lib/chromium-browser/chrome` — the `/snap/bin/chromium` wrapper doesn't reliably pass CDP flags.
 - **Linux Xvfb**: for headful Chrome on Linux, `xorg-server-xvfb` is needed. DonSeTch starts Xvfb automatically.
 - **Linux ARM64 (aarch64)**: the default build (no features) works out of the box. If you enable `--features ocr,rerank`, ONNX Runtime's C++ global constructors may deadlock at startup on aarch64. Install `lld` for linking LLVM-produced PDFium archives (`apt install lld`).
+- **Termux (Android)**: the default build works. Install `pkg install rust clang make pkg-config go` and `cargo build --release`. Chromium: `pkg install x11-repo && pkg install chromium`. DonSeTch auto-detects Termux and uses headless mode (no Xvfb needed). Install `lld` for PDFium linking: `pkg install lld`.
 
 </details>
 

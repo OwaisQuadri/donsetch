@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.4] - 2026-08-19
+
+### Added
+
+- **Termux (Android) support**: first-class native support for Termux. DonSeTch auto-detects Termux via `$PREFIX` env var, finds Chromium at `$PREFIX/bin/chromium-browser`, skips Xvfb (uses `--headless=new` mode since Android has no X11 by default), and the doctor reports correctly. Build: `pkg install rust clang make pkg-config go lld && cargo build --release`.
+
+### Fixed
+
+- **Linux headless fallback**: when no Xvfb and no DISPLAY are available on Linux (WSS, headless server, container), Ghost now falls back to `--headless=new` mode instead of silently failing. Previously, the browser would try to connect to a non-existent display and crash.
+
+- **build.rs Android target**: LLD auto-detection, PDFium target pair mapping, and target triple now all handle `target_os = "android"` correctly. Android uses the same Linux ELF static archives for PDFium.
+
 ## [2.3.3] - 2026-08-19
 
 ### Fixed

@@ -95,21 +95,29 @@ pub fn chrome_binary() -> Result<String, FetchError> {
 
 #[cfg(target_os = "linux")]
 fn known_chrome_paths() -> Vec<PathBuf> {
-    [
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
+    let mut paths = vec![
+        PathBuf::from("/usr/bin/chromium"),
+        PathBuf::from("/usr/bin/chromium-browser"),
+        PathBuf::from("/usr/bin/google-chrome"),
+        PathBuf::from("/usr/bin/google-chrome-stable"),
         // Snap Chromium: the real binary inside the snap mount.
         // The /snap/bin/chromium wrapper is a symlink to /usr/bin/snap
         // and doesn't reliably pass CDP flags through Snap's confinement.
         // Prefer the real binary; fall back to the wrapper below.
-        "/snap/chromium/current/usr/lib/chromium-browser/chrome",
-        "/snap/bin/chromium",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .collect()
+        PathBuf::from("/snap/chromium/current/usr/lib/chromium-browser/chrome"),
+        PathBuf::from("/snap/bin/chromium"),
+    ];
+    // Termux: $PREFIX/bin/chromium-browser or chromium.
+    // $PREFIX is /data/data/com.termux/files/usr.
+    if let Some(prefix) = std::env::var_os("PREFIX") {
+        let prefix = PathBuf::from(prefix);
+        let p1 = prefix.join("bin/chromium-browser");
+        let p2 = prefix.join("bin/chromium");
+        // Insert at front so Termux paths are tried first.
+        paths.insert(0, p1);
+        paths.insert(1, p2);
+    }
+    paths
 }
 
 /// If `path` is a Snap wrapper (canonicalizes to /usr/bin/snap or
@@ -268,20 +276,19 @@ impl Ghost {
         // Fallback (no display, no platform support): --headless=new.
 
         #[cfg(target_os = "linux")]
-        if let Some(disp) = display {
-            // Linux + Xvfb: headful on virtual display.
-            cmd.env("DISPLAY", disp);
-            chrome_args.push("--ozone-platform=x11".into());
-        }
-        // No platform-specific window-position needed —
-        // -32000,-32000 is set globally above. On Linux+Xvfb
-        // the window is on a virtual display (invisible regardless
-        // of position). On macOS/Windows the off-screen position
-        // + CDP minimize (below) makes it invisible.
-
-        #[cfg(not(target_os = "linux"))]
         {
-            let _ = display;
+            if let Some(disp) = display {
+                // Linux + Xvfb: headful on virtual display.
+                cmd.env("DISPLAY", disp);
+                chrome_args.push("--ozone-platform=x11".into());
+            } else {
+                // No Xvfb available (Termux, headless server, WSL
+                // without X11). Fall back to headless mode.
+                // --headless=new is less stealthy than headful on
+                // Xvfb (SwiftShader WebGL, detectable), but it's
+                // the only option without a display.
+                chrome_args.push("--headless=new".into());
+            }
         }
 
         // Unknown platforms (not Linux/macOS/Windows): headless
