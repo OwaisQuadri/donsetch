@@ -15,7 +15,7 @@
 
 // ── Linux: real Xvfb implementation ──
 
-#[cfg(target_os = "linux")]
+#[cfg(linux_like)]
 mod linux {
     use std::process::Stdio;
     use tokio::process::{Child, Command};
@@ -174,8 +174,11 @@ mod linux {
 }
 
 // ── Non-Linux: stub (macOS/Windows use off-screen headful mode) ──
+// Android is linux_like so it uses the real Xvfb module (though
+// Termux won't have Xvfb installed, the stub correctly reports
+// not available and Ghost falls back to --headless=new).
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(linux_like))]
 mod other {
     use crate::error::FetchError;
 
@@ -201,7 +204,7 @@ mod other {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(linux_like)]
 pub use linux::*;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(linux_like))]
 pub use other::*;

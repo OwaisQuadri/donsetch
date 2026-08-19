@@ -213,14 +213,14 @@ fn check_chrome() -> CheckResult {
     match crate::ghost::chrome_binary() {
         Ok(path) => {
             // Try to get the browser version.
-            // On Windows, --version without --headless opens a GUI
-            // window. Pass --headless=new + temp --user-data-dir so
+            // On Windows and macOS, --version without --headless may open
+            // a GUI window. Pass --headless=new + temp --user-data-dir so
             // Chrome exits silently (same fix as probe_installed_major).
             let mut cmd = std::process::Command::new(&path);
             cmd.arg("--version");
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::null());
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             {
                 let tmp = std::env::temp_dir().join("donsetch-chrome-probe");
                 let _ = std::fs::create_dir_all(&tmp);
@@ -250,7 +250,7 @@ fn check_chrome() -> CheckResult {
 /// headless on Wayland-only sessions (more detectable). Warn,
 /// not fail — but the user deserves to know.
 fn check_xvfb() -> CheckResult {
-    #[cfg(target_os = "linux")]
+    #[cfg(linux_like)]
     {
         // Termux (Android) has no X11 by default. Xvfb is not
         // needed — Ghost uses --headless=new mode.
@@ -274,7 +274,7 @@ fn check_xvfb() -> CheckResult {
             )
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(linux_like))]
     {
         CheckResult::Pass("not needed on this platform".into())
     }

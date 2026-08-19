@@ -53,14 +53,16 @@ impl DerefMut for GhostGuard {
 impl Drop for GhostGuard {
     fn drop(&mut self) {
         self.guard.last_used = Instant::now();
-        // On Windows, a frozen browser window stays visible in the
-        // taskbar (unlike Linux where Xvfb hides it completely). Drop
-        // the Ghost immediately after use. The Proc's Drop closes the
-        // Job Object handle, triggering KILL_ON_JOB_CLOSE which kills
-        // the whole browser tree. The warm-browser optimization is
-        // sacrificed on Windows for a clean user experience: no stuck,
-        // unresponsive Chrome window lingering after a fetch.
-        #[cfg(target_os = "windows")]
+        // On Windows and macOS, a frozen browser window stays visible
+        // (Windows: taskbar, macOS: desktop). On Linux with Xvfb the
+        // window is on a virtual display (invisible), so the warm-browser
+        // optimization is safe there. On Linux headless (no Xvfb), there is
+        // no visible window either, so freezing is safe.
+        //
+        // Kill the browser on drop for Windows and macOS so no stuck,
+        // unresponsive Chrome window lingers after a fetch. The Proc's
+        // Drop closes the handle and the browser tree is reaped.
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             let _ = self.guard.ghost.take();
         }

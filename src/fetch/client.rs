@@ -166,13 +166,25 @@ impl Fetcher {
         let mut redirects = 0u8;
         let mut first_request = true;
 
+        // Resolve env-var proxy (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY)
+        // when no explicit proxy lane is passed. This follows the
+        // curl/wget convention so users can route all DonSeTch
+        // traffic through a proxy with a single env var. Resolved
+        // once here and reused across redirect hops for consistency.
+        let env_proxy = if proxy.is_none() {
+            crate::transport::proxy::from_env_for(url_str)
+        } else {
+            None
+        };
+        let effective_proxy = proxy.or(env_proxy.as_ref());
+
         loop {
             let host = host_of(&current)?;
             // Referer applies to the initial request only.
             // Redirects get no referer (avoids cross-origin leak).
             let ref_arg = if first_request { referer } else { None };
             let mut out = self
-                .fetch_once_via(&current, &conditional, proxy, use_jar, ref_arg)
+                .fetch_once_via(&current, &conditional, effective_proxy, use_jar, ref_arg)
                 .await?;
             {
                 let mut jar = self.jar.lock().unwrap();
@@ -248,7 +260,7 @@ impl Fetcher {
                     if let Verdict::Challenge(_) = out.verdict
                         && header_value(&out.headers, "set-cookie").is_some()
                         && let Ok(mut retry) = self
-                            .fetch_once_via(&current, &[], proxy, use_jar, ref_arg)
+                            .fetch_once_via(&current, &[], effective_proxy, use_jar, ref_arg)
                             .await
                     {
                         {
@@ -323,6 +335,24 @@ impl Fetcher {
                     .unwrap_or(req_headers.len());
                 req_headers.insert(pos, ("cookie".into(), cookie));
             }
+        }
+        // Basic auth from URL userinfo (user:pass@host). The url
+        // crate strips userinfo from the authority we send in the
+        // Host header (correct per RFC 3986), so we carry the
+        // credentials as an Authorization: Basic header, matching
+        // browser behavior. Without this, every tier-1 request to
+        // a basic-auth URL goes out unauthenticated (issue #15).
+        if !url.username().is_empty() {
+            let credentials = match url.password() {
+                Some(pass) => format!("{}:{}", url.username(), pass),
+                None => url.username().to_string(),
+            };
+            let encoded = crate::transport::proxy::base64(&credentials);
+            let pos = req_headers
+                .iter()
+                .position(|(n, _)| n == "accept-encoding")
+                .unwrap_or(req_headers.len());
+            req_headers.insert(pos, ("authorization".into(), format!("Basic {encoded}")));
         }
         req_headers.extend(conditional.iter().cloned());
 

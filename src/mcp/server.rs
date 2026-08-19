@@ -1156,15 +1156,18 @@ async fn ghost_escalate(
     let mut replay_content_ok = false;
 
     // The retry is the oracle of record for TERMINAL verdicts: a
-    // 404/paywall/auth-wall on tier 1 means the ghost spent its
-    // time rendering a dead page (browsers render 404s too). The
-    // ghost's pretty DOM must never launder a dead URL into
-    // ContentOk — the skip-to-solve path has no other gate.
+    // 404/paywall on tier 1 means the ghost spent its time
+    // rendering a dead page (browsers render 404s too). The ghost's
+    // pretty DOM must never launder a dead URL into ContentOk.
+    //
+    // AuthWall is deliberately excluded: an auth wall on the
+    // retry means the HTTP path can't authenticate, but the
+    // browser may have (Chromium handles userinfo/cookies/JS
+    // auth natively). Discarding the ghost's content because the
+    // tier-1 retry hit a wall the browser already cleared is
+    // the core tier-2 regression in issue #15.
     if let Some(r) = &retry
-        && matches!(
-            r.verdict,
-            Verdict::SoftNotFound | Verdict::AuthWall | Verdict::Paywall
-        )
+        && matches!(r.verdict, Verdict::SoftNotFound | Verdict::Paywall)
     {
         let kind = verdict_kind(r.verdict, r.status);
         return Err((verdict_error(r.verdict, r.status, &r.url), kind));

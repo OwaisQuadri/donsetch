@@ -373,6 +373,22 @@ impl Proxy {
             )
         }
     }
+
+    /// Chrome-compatible `--proxy-server` value (scheme://host:port, no
+    /// credentials — Chrome handles proxy auth via its own dialog or
+    /// `--proxy-auth` extension). Used for the Ghost browser tier.
+    pub fn chrome_proxy_arg(&self) -> String {
+        let scheme = match self.scheme {
+            ProxyScheme::Http => "http",
+            ProxyScheme::Socks5 => "socks5",
+        };
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        format!("{scheme}://{host}:{}", self.port)
+    }
 }
 
 // ── Config file ──────────────────────────────────────────────
@@ -421,6 +437,57 @@ pub fn load_all() -> Vec<Proxy> {
     proxies
 }
 
+/// Detect a proxy from standard environment variables for a given URL.
+/// Checks in order: HTTPS_PROXY (for https://), HTTP_PROXY (for http://),
+/// ALL_PROXY (both). Also checks lowercase variants. NO_PROXY is respected:
+/// comma-separated host suffixes that bypass the proxy.
+///
+/// This follows the curl/wget convention, so `HTTP_PROXY=http://proxy:8080`
+/// works out of the box. SOCKS5 proxies via `ALL_PROXY=socks5://host:port`
+/// are also supported.
+pub fn from_env_for(url: &str) -> Option<Proxy> {
+    let parsed = url::Url::parse(url).ok()?;
+    let scheme = parsed.scheme();
+    let host = parsed.host_str()?;
+
+    // NO_PROXY: comma-separated host suffixes that bypass the proxy.
+    // Matches the host exactly or as a suffix (e.g. ".example.com"
+    // matches "foo.example.com"). Also "*" disables all proxying.
+    let no_proxy = std::env::var("NO_PROXY")
+        .or_else(|_| std::env::var("no_proxy"))
+        .unwrap_or_default();
+    if !no_proxy.is_empty() {
+        for entry in no_proxy.split(',') {
+            let entry = entry.trim();
+            if entry == "*" {
+                return None;
+            }
+            let entry = entry.strip_prefix('.').unwrap_or(entry);
+            if host == entry || host.ends_with(&format!(".{entry}")) {
+                return None;
+            }
+        }
+    }
+
+    // Scheme-specific env var, then ALL_PROXY as fallback.
+    // Check uppercase first, then lowercase (curl convention).
+    let env_name = if scheme == "https" {
+        "HTTPS_PROXY"
+    } else {
+        "HTTP_PROXY"
+    };
+    let env_val = std::env::var(env_name)
+        .or_else(|_| std::env::var(env_name.to_lowercase()))
+        .or_else(|_| std::env::var("ALL_PROXY"))
+        .or_else(|_| std::env::var("all_proxy"))
+        .ok()?;
+    let env_val = env_val.trim();
+    if env_val.is_empty() {
+        return None;
+    }
+    Proxy::parse(env_val).ok()
+}
+
 /// Save proxies to the config file. Atomic write (temp + rename).
 /// Sets 0600 on Unix (credentials present).
 pub fn save_config(proxies: &[Proxy]) -> std::io::Result<()> {
@@ -455,7 +522,7 @@ fn parse_lines(content: &str) -> Vec<Proxy> {
         .collect()
 }
 
-fn base64(input: &str) -> String {
+pub(crate) fn base64(input: &str) -> String {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let b = input.as_bytes();
     let mut out = String::with_capacity(b.len() * 4 / 3 + 4);
@@ -620,5 +687,170 @@ u:p@also_valid:8080
         assert!(parse_lines("").is_empty());
         assert!(parse_lines("# only comments\n# more comments").is_empty());
         assert!(parse_lines("\n\n\n").is_empty());
+    }
+
+    // ── from_env_for tests ──
+    // These tests use std::env::set_var which is not thread-safe,
+    // so each test sets and cleans up its own vars. Rust's test runner
+    // runs tests in parallel by default, but these tests use unique
+    // var names to avoid collisions. The standard proxy vars
+    // (HTTP_PROXY etc.) are cleaned up after each test.
+    //
+    // SAFETY: set_var/remove_var are unsafe in Rust 2024 edition because
+    // they're not thread-safe. We guard all env var tests with a mutex to
+    // serialize them, so only one test touches env vars at a time.
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn env_https_proxy() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("NO_PROXY");
+            std::env::remove_var("no_proxy");
+            std::env::set_var("HTTPS_PROXY", "http://proxy:8080");
+        }
+        let p = from_env_for("https://example.com/").expect("should detect proxy");
+        assert_eq!(p.host, "proxy");
+        assert_eq!(p.port, 8080);
+        assert_eq!(p.scheme, ProxyScheme::Http);
+        unsafe {
+            std::env::remove_var("HTTPS_PROXY");
+        }
+    }
+
+    #[test]
+    fn env_http_proxy() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("NO_PROXY");
+            std::env::remove_var("no_proxy");
+            std::env::set_var("HTTP_PROXY", "http://proxy:3128");
+        }
+        let p = from_env_for("http://example.com/").expect("should detect proxy");
+        assert_eq!(p.host, "proxy");
+        assert_eq!(p.port, 3128);
+        unsafe {
+            std::env::remove_var("HTTP_PROXY");
+        }
+    }
+
+    #[test]
+    fn env_all_proxy_fallback() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("HTTP_PROXY");
+            std::env::remove_var("https_proxy");
+            std::env::remove_var("http_proxy");
+            std::env::set_var("ALL_PROXY", "socks5://proxy:1080");
+        }
+        let p = from_env_for("https://example.com/").expect("should detect proxy");
+        assert_eq!(p.host, "proxy");
+        assert_eq!(p.port, 1080);
+        assert_eq!(p.scheme, ProxyScheme::Socks5);
+        unsafe {
+            std::env::remove_var("ALL_PROXY");
+        }
+    }
+
+    #[test]
+    fn env_lowercase_proxy() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("NO_PROXY");
+            std::env::remove_var("no_proxy");
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::set_var("https_proxy", "http://proxy:8080");
+        }
+        let p = from_env_for("https://example.com/").expect("should detect lowercase proxy");
+        assert_eq!(p.host, "proxy");
+        unsafe {
+            std::env::remove_var("https_proxy");
+        }
+    }
+
+    #[test]
+    fn env_no_proxy_bypass() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("HTTPS_PROXY", "http://proxy:8080");
+            std::env::set_var("NO_PROXY", "example.com");
+        }
+        assert!(
+            from_env_for("https://example.com/").is_none(),
+            "NO_PROXY should bypass"
+        );
+        unsafe {
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("NO_PROXY");
+        }
+    }
+
+    #[test]
+    fn env_no_proxy_wildcard() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("HTTPS_PROXY", "http://proxy:8080");
+            std::env::set_var("NO_PROXY", "*");
+        }
+        assert!(
+            from_env_for("https://example.com/").is_none(),
+            "NO_PROXY=* should bypass all"
+        );
+        unsafe {
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("NO_PROXY");
+        }
+    }
+
+    #[test]
+    fn env_no_proxy_subdomain() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("HTTPS_PROXY", "http://proxy:8080");
+            std::env::set_var("NO_PROXY", ".example.com");
+        }
+        assert!(
+            from_env_for("https://foo.example.com/").is_none(),
+            "NO_PROXY=.example.com should match subdomain"
+        );
+        assert!(
+            from_env_for("https://example.com/").is_none(),
+            "NO_PROXY=.example.com should match root"
+        );
+        assert!(
+            from_env_for("https://other.com/").is_some(),
+            "NO_PROXY should not match unrelated domain"
+        );
+        unsafe {
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("NO_PROXY");
+        }
+    }
+
+    #[test]
+    fn env_no_proxy_returns_none_without_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        unsafe {
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("HTTP_PROXY");
+            std::env::remove_var("ALL_PROXY");
+            std::env::remove_var("https_proxy");
+            std::env::remove_var("http_proxy");
+            std::env::remove_var("all_proxy");
+        }
+        assert!(
+            from_env_for("https://example.com/").is_none(),
+            "no env vars = no proxy"
+        );
+    }
+
+    #[test]
+    fn chrome_proxy_arg_format() {
+        let p = Proxy::parse("socks5://u:p@host:1080").unwrap();
+        let arg = p.chrome_proxy_arg();
+        assert_eq!(arg, "socks5://host:1080");
+        assert!(!arg.contains("u:p"));
     }
 }

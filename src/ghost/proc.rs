@@ -258,7 +258,7 @@ impl Proc {
 /// `PR_SET_PDEATHSIG` — kernel kills the child if donsetch dies.
 /// Called in `pre_exec` (child context). Linux-only; macOS has no
 /// `prctl` equivalent.
-#[cfg(target_os = "linux")]
+#[cfg(linux_like)]
 pub fn pdeath_pre_exec() -> std::io::Result<()> {
     unsafe {
         if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {

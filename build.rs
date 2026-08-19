@@ -45,6 +45,9 @@ const KNOWN_HASHES: &[(&str, &str)] = &[(
 )];
 
 fn main() {
+    // Declare the custom cfg so rustc doesn't warn about it.
+    println!("cargo::rustc-check-cfg=cfg(linux_like)");
+
     let os = env::var("CARGO_CFG_TARGET_OS").expect("no target os");
     let arch = env::var("CARGO_CFG_TARGET_ARCH").expect("no target arch");
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("no manifest dir"));
@@ -52,11 +55,22 @@ fn main() {
     let libdir = vendored.join("lib");
 
     let is_windows = os == "windows";
+    let is_android = os == "android";
+    // Windows and Android use shared libraries (DLL / .so) from
+    // bblanchon/pdfium-binaries. Linux/macOS use static archives from
+    // kognitos/pdfium-static. Android's bionic libc cannot link the
+    // glibc-targeted static archives (issue #16).
+    let is_shared = is_windows || is_android;
 
     // Windows: pdfium.lib is an import library for pdfium.dll.
+    // Android: libpdfium.so is a shared library.
     // Linux/macOS: libpdfium.a is a full static archive.
-    let pdfium_name = if is_windows {
-        "pdfium.lib"
+    let pdfium_name = if is_shared {
+        if is_windows {
+            "pdfium.lib"
+        } else {
+            "libpdfium.so"
+        }
     } else {
         "libpdfium.a"
     };
@@ -67,35 +81,50 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", libdir.display());
 
-    if is_windows {
-        // Link against the import library; pdfium.dll is resolved at runtime.
+    if is_shared {
+        // Link against the shared library. On Windows this links
+        // against the import library; pdfium.dll is resolved at
+        // runtime. On Android, libpdfium.so is linked directly.
         println!("cargo:rustc-link-lib=dylib=pdfium");
-        for l in ["gdi32", "user32", "advapi32", "comdlg32", "shell32"] {
-            println!("cargo:rustc-link-lib=dylib={}", l);
+        if is_windows {
+            for l in ["gdi32", "user32", "advapi32", "comdlg32", "shell32"] {
+                println!("cargo:rustc-link-lib=dylib={}", l);
+            }
+        } else if is_android {
+            // PDFium's Android .so links against libc++_shared.so
+            // (NDK C++ runtime). Termux ships libc++_shared.so in
+            // $PREFIX/lib; the linker finds it via the search path.
+            println!("cargo:rustc-link-lib=dylib=c++_shared");
+            println!("cargo:rustc-link-lib=dylib=log");
         }
 
-        // Copy pdfium.dll to the output directory so tests and the binary
-        // can find it at runtime without requiring it in PATH.
+        // Copy the shared library to the output directory so tests
+        // and the binary can find it at runtime without requiring it
+        // in PATH (Windows) or LD_LIBRARY_PATH (Android).
         let bindir = vendored.join("bin");
-        let dll = bindir.join("pdfium.dll");
-        if dll.exists() {
+        let shared_lib = if is_windows {
+            bindir.join("pdfium.dll")
+        } else {
+            bindir.join("libpdfium.so")
+        };
+        if shared_lib.exists() {
             let out_dir = env::var("OUT_DIR").expect("no OUT_DIR");
-            // OUT_DIR is something like target/release/build/donsetch-xxx/out
-            // or target/<target>/release/build/donsetch-xxx/out (with --target).
-            // Walk up to find the profile dir (release or debug).
             let out_path = PathBuf::from(&out_dir);
             let profile_dir = out_path
                 .ancestors()
                 .nth(3)
                 .expect("cannot find profile dir from OUT_DIR");
-            // Copy to the profile dir (next to donsetch.exe) and to deps/
-            // (next to test executables) so both find it at runtime.
+            let dest_name = if is_windows {
+                "pdfium.dll"
+            } else {
+                "libpdfium.so"
+            };
             for dest in [
-                profile_dir.join("pdfium.dll"),
-                profile_dir.join("deps").join("pdfium.dll"),
+                profile_dir.join(dest_name),
+                profile_dir.join("deps").join(dest_name),
             ] {
                 if !dest.exists() {
-                    let _ = fs::copy(&dll, &dest);
+                    let _ = fs::copy(&shared_lib, &dest);
                 }
             }
         }
@@ -119,6 +148,14 @@ fn main() {
             }
             other => panic!("pdfium: unsupported target os {other}"),
         }
+    }
+
+    // Android shares the Linux code paths (process groups, /proc,
+    // prctl, known Chrome paths, headless fallback). Emit a cfg so
+    // the source uses #[cfg(linux_like)] instead of repeating
+    // #[cfg(any(target_os = "linux", target_os = "android"))] everywhere.
+    if os == "linux" || os == "android" {
+        println!("cargo:rustc-cfg=linux_like");
     }
 
     // Force re-run when the vendor lib dir is missing or changes.
@@ -194,12 +231,12 @@ fn main() {
     }
 
     // PDFium variant string.
-    let pdfium_tag = if is_windows {
+    let pdfium_tag = if is_shared {
         PDFIUM_SHARED_TAG
     } else {
         PDFIUM_STATIC_TAG
     };
-    let pdfium_kind = if is_windows { "dll" } else { "static" };
+    let pdfium_kind = if is_shared { "shared" } else { "static" };
     println!("cargo:rustc-env=DONSHEET_PDFIUM={pdfium_kind}, {pdfium_tag}");
 
     // Target triple.
@@ -236,11 +273,11 @@ fn target_pair(os: &str, arch: &str) -> &'static str {
     match (os, arch) {
         ("linux", "x86_64") => "linux-x64",
         ("linux", "aarch64") => "linux-arm64",
-        // Android uses the same Linux ELF static archives. The
-        // objects are aarch64/x86_64 ELF with compatible ABI for
-        // static linking. Termux (Android) builds use these.
-        ("android", "x86_64") => "linux-x64",
-        ("android", "aarch64") => "linux-arm64",
+        // Android uses bblanchon's shared library (.so), NOT the
+        // kognitos static archive (.a). The static archive is
+        // glibc-targeted and cannot link on bionic (issue #16).
+        ("android", "x86_64") => "android-x64",
+        ("android", "aarch64") => "android-arm64",
         ("macos", "x86_64") => "mac-x64",
         ("macos", "aarch64") => "mac-arm64",
         ("windows", "x86_64") => "win-x64",
@@ -258,11 +295,16 @@ fn target_pair(os: &str, arch: &str) -> &'static str {
 fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
     let pair = target_pair(os, arch);
     let is_windows = os == "windows";
+    let is_android = os == "android";
+    let is_shared = is_windows || is_android;
 
-    let (url, tgz_name) = if is_windows {
+    // Shared library (Windows DLL, Android .so): bblanchon/pdfium-binaries.
+    // Static archive (Linux/macOS): kognitos/pdfium-static.
+    let (url, tgz_name) = if is_shared {
+        let tag = PDFIUM_SHARED_TAG;
         (
             format!(
-                "https://github.com/bblanchon/pdfium-binaries/releases/download/{PDFIUM_SHARED_TAG}/pdfium-{pair}.tgz"
+                "https://github.com/bblanchon/pdfium-binaries/releases/download/{tag}/pdfium-{pair}.tgz"
             ),
             format!("pdfium-{pair}.tgz"),
         )
@@ -323,9 +365,9 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
     }
     let _ = fs::remove_file(&tgz);
 
-    // bblanchon names the import library pdfium.dll.lib, but the MSVC
-    // linker (via cargo:rustc-link-lib=dylib=pdfium) looks for pdfium.lib.
-    // Rename so the linker finds it.
+    // bblanchon names the Windows import library pdfium.dll.lib, but
+    // the MSVC linker (via cargo:rustc-link-lib=dylib=pdfium) looks for
+    // pdfium.lib. Rename so the linker finds it.
     if is_windows {
         let old = vendored.join("lib").join("pdfium.dll.lib");
         let new = vendored.join("lib").join("pdfium.lib");

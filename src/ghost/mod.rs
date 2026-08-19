@@ -26,7 +26,7 @@ use std::process::Stdio;
 use std::time::Instant;
 
 use serde_json::{Value, json};
-#[cfg(target_os = "linux")]
+#[cfg(linux_like)]
 use std::os::unix::process::CommandExt as _;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -93,7 +93,7 @@ pub fn chrome_binary() -> Result<String, FetchError> {
     ))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(linux_like)]
 fn known_chrome_paths() -> Vec<PathBuf> {
     let mut paths = vec![
         PathBuf::from("/usr/bin/chromium"),
@@ -142,7 +142,7 @@ fn known_chrome_paths() -> Vec<PathBuf> {
 /// similar), resolve to the real Chromium binary inside the snap
 /// mount. Returns None if `path` is already a real binary or if the
 /// real binary can't be found.
-#[cfg(target_os = "linux")]
+#[cfg(linux_like)]
 fn resolve_snap_chrome(path: &std::path::Path) -> Option<PathBuf> {
     let real = std::fs::canonicalize(path).ok()?;
     let real_str = real.to_string_lossy();
@@ -167,7 +167,7 @@ fn resolve_snap_chrome(path: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(linux_like))]
 fn resolve_snap_chrome(_path: &std::path::Path) -> Option<PathBuf> {
     None
 }
@@ -279,6 +279,16 @@ impl Ghost {
             "--disable-gpu-shader-disk-cache".into(),
             "--disable-features=SiteEngagementService".into(),
         ];
+        // ── HTTP proxy (env var) ──
+        // If HTTP_PROXY/HTTPS_PROXY/ALL_PROXY is set, route the
+        // Ghost browser through the same proxy as tier 1. Chrome
+        // handles proxy auth via its own dialog (which we never see
+        // in headless/off-screen mode), so for authenticated proxies
+        // the user may need a proxy-auth extension. For unauthenticated
+        // proxies this just works.
+        if let Some(p) = crate::transport::proxy::from_env_for("https://ghost.local/") {
+            chrome_args.push(format!("--proxy-server={}", p.chrome_proxy_arg()));
+        }
         // ── Stealth mode selection ──
         //
         // The goal: run headful Chrome (real GPU, real WebGL, real
@@ -295,7 +305,7 @@ impl Ghost {
         //
         // Fallback (no display, no platform support): --headless=new.
 
-        #[cfg(target_os = "linux")]
+        #[cfg(linux_like)]
         {
             if let Some(disp) = display {
                 // Linux + Xvfb: headful on virtual display.
@@ -311,9 +321,9 @@ impl Ghost {
             }
         }
 
-        // Unknown platforms (not Linux/macOS/Windows): headless
-        // fallback — no off-screen positioning guarantee.
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        // Unknown platforms (not Linux/Android/macOS/Windows): headless
+        // fallback. Android is covered by linux_like above.
+        #[cfg(not(any(linux_like, target_os = "macos", target_os = "windows")))]
         {
             chrome_args.push("--headless=new".into());
         }
@@ -328,10 +338,10 @@ impl Ghost {
         // freeze/thaw/kill the whole browser tree.
         proc::Proc::prepare_cmd(&mut cmd);
         cmd.stdout(Stdio::null()).stderr(Stdio::piped());
-        // No orphans even if donsetch dies hard. Linux-only:
-        // macOS has no prctl; Windows uses the Job Object's
-        // KILL_ON_JOB_CLOSE.
-        #[cfg(target_os = "linux")]
+        // No orphans even if donsetch dies hard. Linux/Android:
+        // prctl(PR_SET_PDEATHSIG). macOS has no prctl; Windows
+        // uses the Job Object's KILL_ON_JOB_CLOSE.
+        #[cfg(linux_like)]
         unsafe {
             cmd.as_std_mut().pre_exec(proc::pdeath_pre_exec);
         }
@@ -441,7 +451,7 @@ impl Ghost {
 
         // Unknown platform fallback: headless mode with device
         // metrics override (no real screen geometry available).
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        #[cfg(not(any(linux_like, target_os = "macos", target_os = "windows")))]
         {
             cdp.call(
                 Some(&session),
@@ -1057,7 +1067,7 @@ fn named_key(key: &str) -> Option<(&'static str, i64)> {
 /// process groups and escape group kills). Linux-only:
 /// uses /proc; macOS has no /proc and Windows's Job
 /// Object already owns the crashpad handlers.
-#[cfg(target_os = "linux")]
+#[cfg(linux_like)]
 fn sweep_crashpad() {
     let marker = profile_dir().to_string_lossy().into_owned();
     let Ok(entries) = std::fs::read_dir("/proc") else {
@@ -1079,7 +1089,7 @@ fn sweep_crashpad() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(linux_like))]
 fn sweep_crashpad() {}
 
 /// Minimal base64 decode (avoids a dep for one call).

@@ -7,9 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.6] - 2026-08-19
+
 ### Added
 
+- **HTTP proxy support**: standard `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables are now respected by all tier-1 fetches and tier-2 Ghost browser launches. Follows the curl/wget convention: `HTTPS_PROXY` for https URLs, `HTTP_PROXY` for http URLs, `ALL_PROXY` as fallback, `NO_PROXY` for host-based bypass (exact match, suffix match with leading dot, and `*` wildcard). SOCKS5 proxies via `ALL_PROXY=socks5://host:port` are supported. The Ghost browser (Chrome) receives `--proxy-server` so tier-2 traffic also routes through the proxy.
+
 - **Linux ARM64 (aarch64) prebuilt binaries**: GitHub Actions release workflow now builds `donsetch-linux-arm64.tar.gz` on `ubuntu-24.04-arm` (native ARM64), and the npm `install.js` postinstall script recognizes the `linux-arm64` platform (`process.platform=linux` + `process.arch=arm64`). `npm install -g donsetch` now works on aarch64 Linux. CI also runs the full test suite on `ubuntu-24.04-arm`.
+
+### Fixed
+
+- **HTTP basic auth dropped from URL userinfo (#15)**: the HTTP client discarded the `user:pass@` component when normalizing URLs, so every tier-1 request to a basic-auth URL went out unauthenticated. Credentials are now carried as an `Authorization: Basic` header, matching browser behavior. Also fixes the tier-2 regression where the ghost-retry with ghost cookies re-hit the auth wall and discarded already-rendered content.
+
+- **macOS: visible, unresponsive Chrome window after tier-2 fetch (#14)**: on macOS, the Ghost browser was frozen with SIGSTOP after use, leaving a visible, unresponsive Chrome window on the desktop for up to 10 minutes. macOS now kills the browser on `GhostGuard::drop` (same fix as Windows in #11). The version probe (`probe_installed_major` and `check_chrome` in doctor) now passes `--headless=new` + temp `--user-data-dir` on macOS to avoid opening a visible window during version detection.
+
+- **Termux (Android) build fails at 3 points (#16)**: (1) `boring-sys` panics on Android targets without `ANDROID_NDK_HOME`. Documented workaround: `export ANDROID_NDK_HOME=$PREFIX` before building. (2) `build.rs` panicked on `target_os = "android"` with no PDFium source. Android now uses bblanchon's shared library (`libpdfium.so`) instead of kognitos' glibc-targeted static archive (`libpdfium.a`), linked as `dylib=pdfium` with `c++_shared` and `log`. (3) `known_chrome_paths()` was `#[cfg(target_os = "linux")]` only, so Android failed to compile. Introduced `linux_like` cfg flag (emitted by `build.rs` for both `linux` and `android` targets) to share all Linux code paths with Android.
+
+- **Linux headless fallback**: when no Xvfb and no DISPLAY are available on Linux (WSL, headless server, container), Ghost now falls back to `--headless=new` mode instead of silently failing.
 
 ## [2.3.5] - 2026-08-19
 

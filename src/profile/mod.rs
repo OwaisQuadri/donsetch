@@ -169,11 +169,10 @@ pub fn probe_installed_major() -> Option<u32> {
         let bin = crate::ghost::chrome_binary().ok()?;
         let mut cmd = std::process::Command::new(&bin);
         cmd.arg("--version");
-        // On Windows, --version without --headless opens a GUI window.
-        // Pass --headless=new + a temp --user-data-dir so Chrome exits
-        // silently. Harmless on Linux/macOS (they ignore --headless
-        // with --version).
-        #[cfg(target_os = "windows")]
+        // On Windows and macOS, --version without --headless may open a
+        // GUI window. Pass --headless=new + a temp --user-data-dir so Chrome
+        // exits silently. Harmless on Linux (ignores --headless with --version).
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
             let tmp = std::env::temp_dir().join("donsetch-chrome-probe");
             let _ = std::fs::create_dir_all(&tmp);

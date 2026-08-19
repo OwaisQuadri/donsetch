@@ -132,9 +132,34 @@ Binary lands at `target/release/donsetch`. First build takes ~2 min (compiling B
 - **Linux Xvfb**: for headful Chrome on Linux, `xorg-server-xvfb` is needed (`apt install xvfb`). DonSeTch starts Xvfb automatically on `:99`. If your distro uses a regional Ubuntu Ports mirror that is down, fix it: `sudo sed -i 's|http://.*\.clouds\.ports\.ubuntu\.com|http://ports.ubuntu.com|' /etc/apt/sources.list.d/ubuntu.sources && sudo apt-get update`.
 - **Linux ARM64 (aarch64)**: the default build (no features) works out of the box. Requires `lld` + `clang libclang-dev` for PDFium + boring-sys: `apt install lld clang libclang-dev` (fix mirror first if needed, see above). If you enable `--features ocr,rerank`, ONNX Runtime's C++ global constructors may deadlock at startup on aarch64.
 - **AppArmor / sandbox** (Ubuntu 23.10+): unprivileged user namespaces are disabled by default, so Chromium fails with `No usable sandbox!`. DonSeTch now passes `--no-sandbox --disable-setuid-sandbox` automatically — no manual fix needed.
-- **Termux (Android)**: the default build works. Install `pkg install rust clang make pkg-config go` and `cargo build --release`. Chromium: `pkg install x11-repo && pkg install chromium`. DonSeTch auto-detects Termux and uses headless mode (no Xvfb needed). Install `lld` for PDFium linking: `pkg install lld`.
+- **Termux (Android)**: `pkg install rust clang make pkg-config go lld && cargo build --release`. Chromium: `pkg install x11-repo && pkg install chromium`. DonSeTch auto-detects Termux and uses headless mode (no Xvfb needed). **boring-sys NDK workaround**: boring-sys's build script panics on Android targets without `ANDROID_NDK_HOME`. Run `export ANDROID_NDK_HOME=$PREFIX` before `cargo build` to satisfy the check (Termux IS the native Android environment, its toolchain lives in `$PREFIX`). PDFium uses bblanchon's Android shared library (`libpdfium.so`), not the glibc-targeted static archive.
 
 </details>
+
+---
+
+## 🔀 HTTP Proxy
+
+DonSeTch respects standard proxy environment variables, following the curl/wget convention:
+
+```bash
+# All HTTPS traffic through a proxy
+export HTTPS_PROXY=http://proxy.example.com:8080
+
+# All HTTP traffic through a proxy
+export HTTP_PROXY=http://proxy.example.com:8080
+
+# Both HTTP and HTTPS (fallback when scheme-specific var is absent)
+export ALL_PROXY=socks5://proxy.example.com:1080
+
+# Bypass proxy for specific hosts (comma-separated, suffix match)
+export NO_PROXY=localhost,127.0.0.1,.internal.example.com
+
+# Bypass proxy for everything
+export NO_PROXY=*
+```
+
+Both HTTP CONNECT and SOCKS5 proxies are supported. Credentials in the URL (`http://user:pass@host:port`) are honored. The Ghost browser (tier 2) also routes through the proxy via Chrome's `--proxy-server` flag.
 
 ---
 
