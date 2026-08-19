@@ -284,7 +284,9 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
         .arg(&tgz)
         .arg(&url)
         .status()
-        .unwrap_or_else(|e| panic!("pdfium: failed to spawn curl ({e}) — install curl: apt install curl"));
+        .unwrap_or_else(|e| {
+            panic!("pdfium: failed to spawn curl ({e}) — install curl: apt install curl")
+        });
     if !status.success() {
         panic!("pdfium: curl download failed for {url}");
     }
@@ -313,7 +315,9 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
         .arg("-C")
         .arg(vendored)
         .status()
-        .unwrap_or_else(|e| panic!("pdfium: failed to spawn tar ({e}) — install tar: apt install tar"));
+        .unwrap_or_else(|e| {
+            panic!("pdfium: failed to spawn tar ({e}) — install tar: apt install tar")
+        });
     if !status.success() {
         panic!("pdfium: tar extraction failed for {tgz:?}");
     }
