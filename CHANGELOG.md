@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Linux ARM64 (aarch64) prebuilt binaries**: GitHub Actions release workflow now builds `donsetch-linux-arm64.tar.gz` on `ubuntu-24.04-arm` (native ARM64), and the npm `install.js` postinstall script recognizes the `linux-arm64` platform (`process.platform=linux` + `process.arch=arm64`). `npm install -g donsetch` now works on aarch64 Linux. CI also runs the full test suite on `ubuntu-24.04-arm`.
+
 ## [2.3.4] - 2026-08-19
 
 ### Added

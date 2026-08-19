@@ -19,6 +19,7 @@ Downloads the prebuilt binary for your platform from [GitHub Releases](https://g
 | Platform | Binary |
 |---|---|
 | Linux x86_64 | `donsetch-linux-x64.tar.gz` |
+| Linux arm64 | `donsetch-linux-arm64.tar.gz` |
 | macOS arm64 | `donsetch-darwin-arm64.tar.gz` |
 | Windows x86_64 | `donsetch-win32-x64.tar.gz` |
 

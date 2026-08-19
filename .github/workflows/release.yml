@@ -6,6 +6,7 @@
 #
 # Artifact naming (npm-compatible for the npm wrapper package):
 #   donsetch-linux-x64.tar.gz       (Linux x86_64)
+#   donsetch-linux-arm64.tar.gz     (Linux ARM64 / aarch64)
 #   donsetch-darwin-arm64.tar.gz    (macOS arm64)
 #   donsetch-win32-x64.zip          (Windows x86_64 + pdfium.dll)
 #
@@ -41,6 +42,9 @@ jobs:
           - name: linux-x64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - name: darwin-arm64
             os: macos-latest
             target: aarch64-apple-darwin
@@ -64,6 +68,10 @@ jobs:
       - name: Install NASM (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y nasm
+
+      - name: Install LLD (Linux ARM64)
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: sudo apt-get update && sudo apt-get install -y lld
 
       - name: Install NASM (macOS)
         if: matrix.os == 'macos-latest'

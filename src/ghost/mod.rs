@@ -107,6 +107,24 @@ fn known_chrome_paths() -> Vec<PathBuf> {
         PathBuf::from("/snap/chromium/current/usr/lib/chromium-browser/chrome"),
         PathBuf::from("/snap/bin/chromium"),
     ];
+    // Playwright cache: ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome
+    // Many devs have Chromium via `npx playwright install` but not as a
+    // system package. Auto-discover it so `donsetch doctor` just works.
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let base = home.join(".cache/ms-playwright");
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("chromium-") {
+                    let candidate = entry.path().join("chrome-linux/chrome");
+                    if candidate.is_file() {
+                        paths.push(candidate);
+                    }
+                }
+            }
+        }
+    }
     // Termux: $PREFIX/bin/chromium-browser or chromium.
     // $PREFIX is /data/data/com.termux/files/usr.
     if let Some(prefix) = std::env::var_os("PREFIX") {
@@ -248,6 +266,8 @@ impl Ghost {
             "--disable-background-networking".into(),
             "--disable-component-update".into(),
             "--disable-sync".into(),
+            "--no-sandbox".into(),
+            "--disable-setuid-sandbox".into(),
             "--disable-translate".into(),
             "--mute-audio".into(),
             // ── Disk cache suppression ──

@@ -11,6 +11,7 @@
 //
 // Supported platforms:
 //   linux-x64      Linux x86_64
+//   linux-arm64    Linux ARM64 (aarch64)
 //   darwin-arm64   macOS Apple Silicon
 //   win32-x64      Windows x86_64
 
@@ -27,6 +28,7 @@ const TAG = `v${VERSION}`;
 // ── platform mapping ────────────────────────────────────────────
 const PLATFORMS = {
   'linux-x64':    { asset: 'donsetch-linux-x64.tar.gz',    binary: 'donsetch'     },
+  'linux-arm64':  { asset: 'donsetch-linux-arm64.tar.gz',  binary: 'donsetch'     },
   'darwin-arm64': { asset: 'donsetch-darwin-arm64.tar.gz', binary: 'donsetch'     },
   'win32-x64':    { asset: 'donsetch-win32-x64.tar.gz',    binary: 'donsetch.exe' },
 };
@@ -39,6 +41,7 @@ if (!plat) {
   console.error('');
   console.error('Supported platforms:');
   console.error('  linux-x64      Linux x86_64');
+  console.error('  linux-arm64    Linux ARM64 (aarch64)');
   console.error('  darwin-arm64   macOS Apple Silicon');
   console.error('  win32-x64      Windows x86_64');
   console.error('');

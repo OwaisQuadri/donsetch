@@ -86,6 +86,7 @@ Downloads the prebuilt binary for your platform from GitHub Releases with SHA256
 | Platform | Binary |
 |---|---|
 | Linux x86_64 | `donsetch-linux-x64.tar.gz` |
+| Linux arm64 | `donsetch-linux-arm64.tar.gz` |
 | macOS arm64 | `donsetch-darwin-arm64.tar.gz` |
 | Windows x86_64 | `donsetch-win32-x64.tar.gz` |
 | Termux (Android) | Build from source (see build notes) |
@@ -105,9 +106,11 @@ Update with `pi update --extensions` — both the binary and extension update to
 | Dependency | Why | Linux | macOS | Windows |
 |---|---|---|---|---|
 | **Rust** | Build toolchain | `rustup` | `rustup` | `rustup` |
-| **Go** | BoringSSL build | `pacman -S go` | `brew install go` | `winget install GoLang.Go` |
-| **NASM** | BoringSSL assembly | `pacman -S nasm` | `brew install nasm` | `choco install nasm` |
-| **CMake** | BoringSSL build | `pacman -S cmake` | `brew install cmake` | `winget install cmake` |
+| **Go** | BoringSSL build | `pacman -S go` / `apt install golang-go` | `brew install go` | `winget install GoLang.Go` |
+| **NASM** | BoringSSL assembly | `pacman -S nasm` / `apt install nasm` | `brew install nasm` | `choco install nasm` |
+| **CMake** | BoringSSL build | `pacman -S cmake` / `apt install cmake` | `brew install cmake` | `winget install cmake` |
+| **Clang** | bindgen (boring-sys) | `apt install clang libclang-dev` | *(bundled on macOS)* | `choco install llvm` |
+| **LLD** | PDFium link (aarch64) | `apt install lld` *(aarch64 only)* | — | — |
 
 ```bash
 git clone https://github.com/dondai44423/donsetch.git
@@ -125,9 +128,10 @@ Binary lands at `target/release/donsetch`. First build takes ~2 min (compiling B
 - **ONNX Runtime** is downloaded at build time by `oar-ocr` (OCR) and `ort` (reranker) when those features are enabled.
 - **Models** (OCR + reranker) download on first use to `~/.cache/donsetch/`, not bundled in the binary.
 - **Feature flags**: `default = []` — the core tool (fetch, search, crawl, PDF) works standalone. Build with `--features ocr,rerank` for OCR + semantic reranking (pulls in ONNX Runtime). The prebuilt npm binary ships with both features enabled.
-- **Chromium** (optional): needed for tier 2 browser escalation on bot-walled sites. Linux: `pacman -S chromium`. macOS: `brew install chromium`. Windows: Edge works. **Ubuntu Snap**: set `DONGHOST_CHROME=/snap/chromium/current/usr/lib/chromium-browser/chrome` — the `/snap/bin/chromium` wrapper doesn't reliably pass CDP flags.
-- **Linux Xvfb**: for headful Chrome on Linux, `xorg-server-xvfb` is needed. DonSeTch starts Xvfb automatically.
-- **Linux ARM64 (aarch64)**: the default build (no features) works out of the box. If you enable `--features ocr,rerank`, ONNX Runtime's C++ global constructors may deadlock at startup on aarch64. Install `lld` for linking LLVM-produced PDFium archives (`apt install lld`).
+- **Chromium** (optional): needed for tier 2 browser escalation on bot-walled sites. Linux: `pacman -S chromium` / `apt install chromium-browser`. macOS: `brew install chromium`. Windows: Edge works. **Playwright**: if you already have `npx playwright install`, DonSeTch auto-discovers `~/.cache/ms-playwright/chromium-*/chrome-linux/chrome` — no manual `DONGHOST_CHROME` needed. **Ubuntu Snap**: set `DONGHOST_CHROME=/snap/chromium/current/usr/lib/chromium-browser/chrome` — the `/snap/bin/chromium` wrapper doesn't reliably pass CDP flags.
+- **Linux Xvfb**: for headful Chrome on Linux, `xorg-server-xvfb` is needed (`apt install xvfb`). DonSeTch starts Xvfb automatically on `:99`. If your distro uses a regional Ubuntu Ports mirror that is down, fix it: `sudo sed -i 's|http://.*\.clouds\.ports\.ubuntu\.com|http://ports.ubuntu.com|' /etc/apt/sources.list.d/ubuntu.sources && sudo apt-get update`.
+- **Linux ARM64 (aarch64)**: the default build (no features) works out of the box. Requires `lld` + `clang libclang-dev` for PDFium + boring-sys: `apt install lld clang libclang-dev` (fix mirror first if needed, see above). If you enable `--features ocr,rerank`, ONNX Runtime's C++ global constructors may deadlock at startup on aarch64.
+- **AppArmor / sandbox** (Ubuntu 23.10+): unprivileged user namespaces are disabled by default, so Chromium fails with `No usable sandbox!`. DonSeTch now passes `--no-sandbox --disable-setuid-sandbox` automatically — no manual fix needed.
 - **Termux (Android)**: the default build works. Install `pkg install rust clang make pkg-config go` and `cargo build --release`. Chromium: `pkg install x11-repo && pkg install chromium`. DonSeTch auto-detects Termux and uses headless mode (no Xvfb needed). Install `lld` for PDFium linking: `pkg install lld`.
 
 </details>
