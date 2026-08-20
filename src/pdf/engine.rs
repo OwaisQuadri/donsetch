@@ -137,8 +137,20 @@ pub fn core() -> MutexGuard<'static, PdfiumCore> {
 /// `None` if a previous PDFium call is hung (the lock is held forever by a
 /// leaked blocking thread). This prevents a single hung PDF from
 /// dead-locking all future PDF extractions.
+#[allow(dead_code)]
 fn try_core_timeout(dur: std::time::Duration) -> Option<MutexGuard<'static, PdfiumCore>> {
-    let core = CORE.get()?;
+    // Ensure the library is initialized (same init as core()).
+    let core = CORE.get_or_init(|| {
+        unsafe {
+            FPDF_InitLibraryWithConfig(&FpdfLibraryConfig {
+                version: 2,
+                m_pUserFontPaths: std::ptr::null_mut(),
+                m_pIsolate: std::ptr::null_mut(),
+                m_pV8EmbedderSlot: std::ptr::null_mut(),
+            });
+        }
+        Mutex::new(PdfiumCore { _priv: () })
+    });
     let start = std::time::Instant::now();
     loop {
         if let Ok(g) = core.try_lock() {
@@ -159,6 +171,7 @@ fn try_core_timeout(dur: std::time::Duration) -> Option<MutexGuard<'static, Pdfi
 /// This check is intentionally strict on obvious corruption but
 /// permissive for indirect Lengths, incremental updates, and repaired
 /// files.
+#[allow(dead_code)]
 fn quick_validate(bytes: &[u8]) -> Result<(), LoadError> {
     if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
         return Err(LoadError::NotPdf);
@@ -186,7 +199,9 @@ fn quick_validate(bytes: &[u8]) -> Result<(), LoadError> {
     while pos + 7 < bytes.len() {
         // find next "/Length"
         let rel = bytes[pos..].windows(7).position(|w| w == b"/Length");
-        let Some(rel) = rel else { break; };
+        let Some(rel) = rel else {
+            break;
+        };
         let abs = pos + rel;
         let mut p = abs + 7;
         // skip whitespace
@@ -238,7 +253,10 @@ fn quick_validate(bytes: &[u8]) -> Result<(), LoadError> {
             if data_start < bytes.len() && bytes[data_start] == b'\n' {
                 data_start += 1;
             }
-            if let Some(e_rel) = bytes[data_start..].windows(9).position(|w| w == b"endstream") {
+            if let Some(e_rel) = bytes[data_start..]
+                .windows(9)
+                .position(|w| w == b"endstream")
+            {
                 let e_abs = data_start + e_rel;
                 let mut actual = e_abs.saturating_sub(data_start);
                 // trim trailing CRLF before endstream
@@ -248,11 +266,7 @@ fn quick_validate(bytes: &[u8]) -> Result<(), LoadError> {
                         actual = actual.saturating_sub(1);
                     }
                 }
-                let diff = if claimed > actual {
-                    claimed - actual
-                } else {
-                    actual - claimed
-                };
+                let diff = claimed.abs_diff(actual);
                 // Permissive threshold: only flag clear mismatches.
                 // Tiny whitespace differences (CRLF/LF, 1-2 bytes) are
                 // common in repaired / incremental PDFs. Diff > 10
@@ -288,92 +302,85 @@ fn quick_validate(bytes: &[u8]) -> Result<(), LoadError> {
         while p < bytes.len() && bytes[p].is_ascii_digit() {
             p += 1;
         }
-        if start != p {
-            if let Ok(val) = std::str::from_utf8(&bytes[start..p])
+        if start != p
+            && let Ok(val) = std::str::from_utf8(&bytes[start..p])
                 .unwrap_or("0")
                 .parse::<usize>()
-            {
-                if val >= bytes.len() {
-                    return Err(LoadError::Corrupt(super::sys::FPDF_ERR_FORMAT));
+        {
+            if val >= bytes.len() {
+                return Err(LoadError::Corrupt(super::sys::FPDF_ERR_FORMAT));
+            }
+            // Permissive secondary check: does val point near an xref
+            // or obj? Allow up to 1000 bytes slack for
+            // whitespace/comments between the offset and the keyword.
+            // Incremental PDFs may have the last xref far from the
+            // first, so distance to first xref is irrelevant – check
+            // against the last xref instead.
+            if let Some(xref_pos) = bytes.windows(4).rposition(|w| w == b"xref") {
+                let dist = val.abs_diff(xref_pos);
+                // Only consider egregious mismatches (>1000) and
+                // even then only if the target doesn't look like
+                // xref/obj. Otherwise rely on PDFium to handle
+                // repaired files. The old threshold of 50
+                // false-positived on incremental PDFs where
+                // startxref points to the last of several xrefs.
+                if dist > 1000 {
+                    let window_end = (val + 1024).min(bytes.len());
+                    let probe = &bytes[val..window_end];
+                    let looks_like_xref = probe.starts_with(b"xref")
+                        || probe.windows(4).any(|w| w == b"xref")
+                        || probe.windows(3).any(|w| w == b"obj");
+                    // Only hard-fail if distance is huge (>5000) and
+                    // target doesn't look like a PDF structure at all.
+                    if !looks_like_xref && dist > 5000 {
+                        return Err(LoadError::Corrupt(super::sys::FPDF_ERR_FORMAT));
+                    }
                 }
-                // Permissive secondary check: does val point near an xref
-                // or obj? Allow up to 1000 bytes slack for
-                // whitespace/comments between the offset and the keyword.
-                // Incremental PDFs may have the last xref far from the
-                // first, so distance to first xref is irrelevant – check
-                // against the last xref instead.
-                if let Some(xref_pos) = bytes.windows(4).rposition(|w| w == b"xref") {
-                    let dist = if val > xref_pos {
-                        val - xref_pos
-                    } else {
-                        xref_pos - val
-                    };
-                    // Only consider egregious mismatches (>1000) and
-                    // even then only if the target doesn't look like
-                    // xref/obj. Otherwise rely on PDFium to handle
-                    // repaired files. The old threshold of 50
-                    // false-positived on incremental PDFs where
-                    // startxref points to the last of several xrefs.
-                    if dist > 1000 {
-                        let window_end = (val + 1024).min(bytes.len());
-                        let probe = &bytes[val..window_end];
-                        let looks_like_xref = probe.starts_with(b"xref")
-                            || probe.windows(4).any(|w| w == b"xref")
-                            || probe.windows(3).any(|w| w == b"obj");
-                        // Only hard-fail if distance is huge (>5000) and
-                        // target doesn't look like a PDF structure at all.
-                        if !looks_like_xref && dist > 5000 {
+                // Xref entry sanity: only fail if an entry offset is
+                // beyond EOF (points outside file). Missing "obj"
+                // markers are ignored – PDFium repairs them and we
+                // must not false-positive on real-world files.
+                let mut off = xref_pos + 4;
+                // skip whitespace and possible "0 N" header line
+                while off < bytes.len() && matches!(bytes[off], b' ' | b'\t' | b'\n' | b'\r') {
+                    off += 1;
+                }
+                // skip the "0 N" line
+                while off < bytes.len() && bytes[off] != b'\n' {
+                    off += 1;
+                }
+                if off < bytes.len() {
+                    off += 1;
+                }
+                let mut checked = 0;
+                while checked < 6 && off + 18 < bytes.len() {
+                    if bytes[off].is_ascii_digit() {
+                        // parse 10-digit offset
+                        let end = (off + 10).min(bytes.len());
+                        if let Ok(off_val) = std::str::from_utf8(&bytes[off..end])
+                            .unwrap_or("")
+                            .trim()
+                            .parse::<usize>()
+                            && off_val >= bytes.len()
+                            && off_val != 0
+                        {
                             return Err(LoadError::Corrupt(super::sys::FPDF_ERR_FORMAT));
                         }
                     }
-                    // Xref entry sanity: only fail if an entry offset is
-                    // beyond EOF (points outside file). Missing "obj"
-                    // markers are ignored – PDFium repairs them and we
-                    // must not false-positive on real-world files.
-                    let mut off = xref_pos + 4;
-                    // skip whitespace and possible "0 N" header line
-                    while off < bytes.len()
-                        && matches!(bytes[off], b' ' | b'\t' | b'\n' | b'\r')
-                    {
-                        off += 1;
-                    }
-                    // skip the "0 N" line
+                    // move to next line
                     while off < bytes.len() && bytes[off] != b'\n' {
                         off += 1;
                     }
                     if off < bytes.len() {
                         off += 1;
                     }
-                    let mut checked = 0;
-                    while checked < 6 && off + 18 < bytes.len() {
-                        if bytes[off].is_ascii_digit() {
-                            // parse 10-digit offset
-                            let end = (off + 10).min(bytes.len());
-                            if let Ok(off_val) = std::str::from_utf8(&bytes[off..end])
-                                .unwrap_or("")
-                                .trim()
-                                .parse::<usize>()
-                            {
-                                if off_val >= bytes.len() && off_val != 0 {
-                                    return Err(LoadError::Corrupt(super::sys::FPDF_ERR_FORMAT));
-                                }
-                            }
-                        }
-                        // move to next line
-                        while off < bytes.len() && bytes[off] != b'\n' {
-                            off += 1;
-                        }
-                        if off < bytes.len() {
-                            off += 1;
-                        }
-                        checked += 1;
-                    }
-                } else {
-                    // No xref keyword found (object streams / linearized
-                    // PDFs use different structures). Only the
-                    // val >= len check matters here; be permissive.
-                    let _ = &bytes[val..(val + 1024).min(bytes.len())];
+                    checked += 1;
                 }
+            } else {
+                // No xref keyword found (object streams / linearized
+                // PDFs use different structures). Only the
+                // val >= len check matters here; be permissive.
+                let _ = &bytes[val..(val + 1024).min(bytes.len())];
             }
         }
     }
@@ -596,13 +603,7 @@ pub fn rasterize_pages(
     if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
         return Err(LoadError::NotPdf);
     }
-    if let Err(e) = quick_validate(bytes) {
-        return Err(e);
-    }
-    let _lock = match try_core_timeout(std::time::Duration::from_secs(3)) {
-        Some(g) => g,
-        None => return Err(LoadError::Corrupt(super::sys::FPDF_ERR_FORMAT)),
-    };
+    let _lock = core();
     unsafe {
         let doc = FPDF_LoadMemDocument64(
             bytes.as_ptr() as *const c_void,
@@ -668,13 +669,7 @@ where
     if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
         return Err(LoadError::NotPdf);
     }
-    if let Err(e) = quick_validate(bytes) {
-        return Err(e);
-    }
-    let _lock = match try_core_timeout(std::time::Duration::from_secs(3)) {
-        Some(g) => g,
-        None => return Err(LoadError::Corrupt(super::sys::FPDF_ERR_FORMAT)),
-    };
+    let _lock = core();
     unsafe {
         let doc = FPDF_LoadMemDocument64(
             bytes.as_ptr() as *const c_void,

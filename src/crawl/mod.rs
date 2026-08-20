@@ -804,32 +804,36 @@ impl Crawler {
                     // pool with a 10s timeout; HTML stays on the fast path.
                     let is_pdf = body_bytes.starts_with(b"%PDF-")
                         || body_ctype.to_ascii_lowercase().contains("pdf");
-                    let extract_res: Result<crate::extract::Extracted, crate::extract::ExtractError> =
-                        if is_pdf {
-                            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                                let body_owned = body_bytes.to_vec();
-                                let ctype_owned = body_ctype.to_owned();
-                                let url_owned = page_url.clone();
-                                let eo_owned = eo.clone();
-                                let task = handle.spawn_blocking(move || {
-                                    extract::extract(&body_owned, &ctype_owned, &url_owned, &eo_owned)
-                                });
-                                match tokio::time::timeout(Duration::from_secs(3), task).await {
-                                    Ok(Ok(Ok(r))) => Ok(r),
-                                    Ok(Ok(Err(e))) => Err(e),
-                                    Ok(Err(join_err)) => Err(crate::extract::ExtractError::BadSelector(
-                                        format!("extract task failed: {join_err}"),
-                                    )),
-                                    Err(_) => Err(crate::extract::ExtractError::BadSelector(
-                                        "extract timed out after 3s".into(),
-                                    )),
+                    let extract_res: Result<
+                        crate::extract::Extracted,
+                        crate::extract::ExtractError,
+                    > = if is_pdf {
+                        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                            let body_owned = body_bytes.to_vec();
+                            let ctype_owned = body_ctype.to_owned();
+                            let url_owned = page_url.clone();
+                            let eo_owned = eo.clone();
+                            let task = handle.spawn_blocking(move || {
+                                extract::extract(&body_owned, &ctype_owned, &url_owned, &eo_owned)
+                            });
+                            match tokio::time::timeout(Duration::from_secs(3), task).await {
+                                Ok(Ok(Ok(r))) => Ok(r),
+                                Ok(Ok(Err(e))) => Err(e),
+                                Ok(Err(join_err)) => {
+                                    Err(crate::extract::ExtractError::BadSelector(format!(
+                                        "extract task failed: {join_err}"
+                                    )))
                                 }
-                            } else {
-                                extract::extract(body_bytes, body_ctype, &page_url, &eo)
+                                Err(_) => Err(crate::extract::ExtractError::BadSelector(
+                                    "extract timed out after 3s".into(),
+                                )),
                             }
                         } else {
                             extract::extract(body_bytes, body_ctype, &page_url, &eo)
-                        };
+                        }
+                    } else {
+                        extract::extract(body_bytes, body_ctype, &page_url, &eo)
+                    };
                     let mut r = match extract_res {
                         Ok(r) => r,
                         Err(e) => {
