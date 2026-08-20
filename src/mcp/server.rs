@@ -1567,12 +1567,25 @@ fn finish_result(
     url: &str,
     trace: &Trace,
 ) -> Value {
-    // PDF per-page stats: chars, ocr flag, per-page confidence —
-    // page boundaries preserved (the 50-case report's ask).
+    // PDF per-page stats: chars, ocr flag, per-page confidence.
+    // Cap at 50 pages to avoid blowing up the response on large
+    // PDFs (a 1000-page PDF produces 60K of per-page JSON alone).
+    // The summary (total pages, ocr pages, mean confidence) is
+    // always included; per_page detail is capped.
     let pdf = ex.pdf_pages.as_ref().map(|pages| {
+        let ocr_pages = pages.iter().filter(|p| p.ocr).count();
+        let mean_conf = if pages.is_empty() {
+            0.0
+        } else {
+            pages.iter().map(|p| p.confidence).sum::<f32>() / pages.len() as f32
+        };
+        let capped: Vec<_> = pages.iter().take(50).collect();
         json!({
             "pages": pages.len(),
-            "per_page": pages,
+            "ocr_pages": ocr_pages,
+            "mean_confidence": mean_conf,
+            "per_page": capped,
+            "per_page_capped": pages.len() > 50,
         })
     });
     json!({

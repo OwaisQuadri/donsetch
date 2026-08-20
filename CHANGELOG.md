@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.9] - 2026-08-20
+
+### Fixed
+
+- **`max_chars` ignored on PDF fetch (#25)**: the markdown output was correctly paginated, but the MCP `structuredContent` included the full `pdf.per_page` array with one entry per page. A 1032-page PDF produced 60K of per-page JSON alone, blowing past the MCP response limit even with `max_chars=400`. The `per_page` array is now capped at 50 entries; a summary (total pages, OCR pages, mean confidence) is always included, and `per_page_capped` signals when the detail was truncated.
+
 ## [2.3.8] - 2026-08-20
 
 ### Fixed
