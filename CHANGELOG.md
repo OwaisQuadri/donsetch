@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.8] - 2026-08-20
+
+### Fixed
+
+- **Chinese/CJK text shows tofu boxes and garbled encoding (#24)**: three bugs in charset detection caused Chinese (and Korean) text to decode incorrectly:
+  1. **Content-Type charset was case-sensitive**: HTTP headers are case-insensitive, but `charset=` was matched case-sensitively. `Content-Type: text/html; Charset=GBK` fell through to the meta sniff, and if the page had no `<meta charset>`, the fallback was UTF-8 lossy, producing U+FFFD tofu for every CJK byte pair. Now case-insensitive.
+  2. **Quoted charset values were dropped**: `charset="utf-8"` (with quotes) produced an empty label because the quote character was used as a split delimiter before the value was extracted. Now handles double and single quotes.
+  3. **No statistical fallback for undeclared CJK encodings**: pages with no charset in Content-Type, no BOM, and no `<meta charset>` fell back to `String::from_utf8_lossy`, which turns GBK/Big5/EUC-KR bytes into replacement characters. Added byte-pattern analysis that distinguishes GBK, Big5, and EUC-KR by their lead/trail byte ranges, with a decode-and-compare fallback for ambiguous cases (all bytes in 0xA1-0xFE). The meta charset scan window also grew from 2 KB to 4 KB.
+
+- **CJK Unicode ranges incomplete**: `char_script()` only recognized CJK Unified Ideographs (U+4E00-U+9FFF), Extension A (U+3400-U+4DBF), and Extension B (U+20000-U+2A6DF). Now also covers Extensions C-F, Compatibility Ideographs, Compatibility Supplement, Radicals Supplement, Kangxi Radicals, and CJK Strokes.
+
 ## [2.3.7] - 2026-08-19
 
 ### Fixed

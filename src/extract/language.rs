@@ -39,10 +39,21 @@ pub struct LanguageInfo {
 /// Classify a single character's script.
 pub fn char_script(c: char) -> Script {
     let u = c as u32;
-    // CJK Unified Ideographs + Extensions A/B/C/D/E/F/G
+    // CJK Unified Ideographs + Extensions A/B/C/D/E/F
+    // + Compatibility Ideographs + Radicals + Strokes
     if (0x4E00..=0x9FFF).contains(&u)
-        || (0x3400..=0x4DBF).contains(&u)
-        || (0x20000..=0x2A6DF).contains(&u)
+        || (0x3400..=0x4DBF).contains(&u)      // Ext A
+        || (0x20000..=0x2A6DF).contains(&u)    // Ext B
+        || (0x2A700..=0x2B73F).contains(&u)   // Ext C
+        || (0x2B740..=0x2B81F).contains(&u)    // Ext D
+        || (0x2B820..=0x2CEAF).contains(&u)    // Ext E
+        || (0x2CEB0..=0x2EBEF).contains(&u)    // Ext F
+        || (0xF900..=0xFAFF).contains(&u)      // Compatibility Ideographs
+        || (0x2F800..=0x2FA1F).contains(&u)   // Compatibility Supplement
+        || (0x2E80..=0x2EFF).contains(&u)      // Radicals Supplement
+        || (0x2F00..=0x2FDF).contains(&u)      // Kangxi Radicals
+        || (0x31C0..=0x31EF).contains(&u)
+    // CJK Strokes
     {
         return Script::Han;
     }
