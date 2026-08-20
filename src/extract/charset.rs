@@ -108,10 +108,9 @@ fn sniff_meta(body: &[u8]) -> Option<&'static encoding_rs::Encoding> {
 /// 2. Not valid UTF-8 -> CJK byte-pattern analysis. GBK is a
 ///    superset of Big5 and EUC-KR in valid byte patterns, so
 ///    we look for encoding-specific markers:
-///   GBK-only:  lead byte 0x81-0xA0 (Big5/EUC-KR start at 0xA1)
-///   GBK-only:  trail byte 0x80-0xA0 (Big5/EUC-KR skip this range)
-///   Big5-only: trail byte 0x40-0x7E (EUC-KR requires >= 0xA1)
-///   EUC-KR:    all lead+trail bytes in 0xA1-0xFE
+///    - GBK-only: lead byte 0x81-0xA0 or trail byte 0x80-0xA0
+///    - Big5-only: trail byte 0x40-0x7E (EUC-KR requires >= 0xA1)
+///    - EUC-KR: all lead+trail bytes in 0xA1-0xFE
 /// 3. No CJK pattern -> None (caller falls back to UTF-8 lossy).
 fn statistical_detect(body: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     if body.is_empty() {
