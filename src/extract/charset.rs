@@ -185,17 +185,38 @@ fn statistical_detect(body: &[u8]) -> Option<&'static encoding_rs::Encoding> {
     }
 
     if gbk_only > 0 {
-        Some(encoding_rs::GBK)
+        // Could be GBK (Chinese) or Shift-JIS (Japanese), since both
+        // use lead bytes 0x81-0x9F. Decode a sample with Shift-JIS
+        // and check for kana: Japanese text produces hiragana/katakana,
+        // Chinese text produces only Han.
+        let sample = &body[..body.len().min(4096)];
+        let sjis_text = encoding_rs::SHIFT_JIS.decode(sample).0.into_owned();
+        let kana = sjis_text
+            .chars()
+            .filter(|c| {
+                let u = *c as u32;
+                (0x3040..=0x30FF).contains(&u) // Hiragana + Katakana
+                    || (0xFF66..=0xFF9F).contains(&u) // half-width katakana
+            })
+            .count();
+        if kana > 5 {
+            Some(encoding_rs::SHIFT_JIS)
+        } else {
+            Some(encoding_rs::GBK)
+        }
     } else if low_trail > 0 {
         Some(encoding_rs::BIG5)
     } else if all_trail_high {
         // Ambiguous: all lead+trail bytes in 0xA1-0xFE. Could be
-        // GBK, Big5, or EUC-KR. Decode a sample with both GBK and
-        // EUC-KR: Chinese text in GBK produces more Han than the
-        // EUC-KR decode produces Hangul; Korean text is the reverse.
+        // GBK, Big5, EUC-KR, or EUC-JP. Decode samples with each and
+        // check for script-specific characters:
+        //   Korean -> Hangul (EUC-KR decode)
+        //   Japanese -> kana (EUC-JP decode)
+        //   Chinese -> Han only (GBK decode)
         let sample = &body[..body.len().min(4096)];
         let gbk_text = encoding_rs::GBK.decode(sample).0.into_owned();
         let euckr_text = encoding_rs::EUC_KR.decode(sample).0.into_owned();
+        let eucjp_text = encoding_rs::EUC_JP.decode(sample).0.into_owned();
         let gbk_han = gbk_text
             .chars()
             .filter(|c| ('\u{4E00}'..='\u{9FFF}').contains(c))
@@ -204,8 +225,17 @@ fn statistical_detect(body: &[u8]) -> Option<&'static encoding_rs::Encoding> {
             .chars()
             .filter(|c| ('\u{AC00}'..='\u{D7AF}').contains(c))
             .count();
+        let eucjp_kana = eucjp_text
+            .chars()
+            .filter(|c| {
+                let u = *c as u32;
+                (0x3040..=0x30FF).contains(&u) || (0xFF66..=0xFF9F).contains(&u)
+            })
+            .count();
         if euckr_hangul > 0 && euckr_hangul >= gbk_han {
             Some(encoding_rs::EUC_KR)
+        } else if eucjp_kana > 5 {
+            Some(encoding_rs::EUC_JP)
         } else {
             Some(encoding_rs::GBK)
         }
@@ -520,5 +550,69 @@ mod tests {
         };
         let decoded = decode(&html, "text/html");
         assert!(decoded.contains("안녕하세요"), "decoded: {decoded}");
+    }
+
+    // ── Japanese encoding detection ──
+
+    #[test]
+    fn stat_detect_shiftjis_no_meta() {
+        let japanese = "これは日本語のテキストです。機械学習の分野。";
+        let (sjis_bytes, _, had_unmappable) = encoding_rs::SHIFT_JIS.encode(japanese);
+        assert!(!had_unmappable, "Shift-JIS test text has unmappable chars");
+        let html = {
+            let mut p = Vec::new();
+            p.extend_from_slice(b"<html><head><title>Test</title></head><body><p>");
+            p.extend_from_slice(&sjis_bytes);
+            p.extend_from_slice(b"</p></body></html>");
+            p
+        };
+        let enc = statistical_detect(&html);
+        assert_eq!(enc, Some(encoding_rs::SHIFT_JIS), "expected Shift-JIS");
+    }
+
+    #[test]
+    fn decode_shiftjis_no_charset() {
+        let japanese = "これは日本語のテキストです。機械学習の分野。";
+        let (sjis_bytes, _, _) = encoding_rs::SHIFT_JIS.encode(japanese);
+        let html = {
+            let mut p = Vec::new();
+            p.extend_from_slice(b"<html><head><title>Test</title></head><body><p>");
+            p.extend_from_slice(&sjis_bytes);
+            p.extend_from_slice(b"</p></body></html>");
+            p
+        };
+        let decoded = decode(&html, "text/html");
+        assert!(decoded.contains("日本語"), "decoded: {decoded}");
+        assert!(decoded.contains("機械学習"), "decoded: {decoded}");
+    }
+
+    #[test]
+    fn decode_shiftjis_with_meta() {
+        let japanese = "これは日本語のテキストです。";
+        let (sjis_bytes, _, _) = encoding_rs::SHIFT_JIS.encode(japanese);
+        let html = {
+            let mut p = Vec::new();
+            p.extend_from_slice(b"<html><head><meta charset=\"shift_jis\"></head><body><p>");
+            p.extend_from_slice(&sjis_bytes);
+            p.extend_from_slice(b"</p></body></html>");
+            p
+        };
+        let decoded = decode(&html, "text/html");
+        assert!(decoded.contains("日本語"), "decoded: {decoded}");
+    }
+
+    #[test]
+    fn decode_eucjp_no_charset() {
+        let japanese = "これは日本語のテキストです。機械学習の分野。";
+        let (eucjp_bytes, _, _) = encoding_rs::EUC_JP.encode(japanese);
+        let html = {
+            let mut p = Vec::new();
+            p.extend_from_slice(b"<html><head><title>Test</title></head><body><p>");
+            p.extend_from_slice(&eucjp_bytes);
+            p.extend_from_slice(b"</p></body></html>");
+            p
+        };
+        let decoded = decode(&html, "text/html");
+        assert!(decoded.contains("日本語"), "decoded: {decoded}");
     }
 }

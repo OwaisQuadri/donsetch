@@ -385,7 +385,15 @@ export default function (pi: ExtensionAPI) {
 
           try {
             const result = await callMcpTool(toolName, params);
-            const text = result?.content?.[0]?.text ?? "";
+            // Join all content text blocks, skipping [meta] blocks.
+            // [meta] blocks contain compact metadata for clients
+            // (Claude Code, VSCode) that drop text when
+            // structuredContent is present. Pi reads structuredContent
+            // directly for details, so meta blocks are redundant here.
+            const text = (result?.content ?? [])
+              .map((b: any) => b?.text ?? "")
+              .filter((t: string) => !t.startsWith("[meta]"))
+              .join("") || "";
             const isErr = result?.isError ?? false;
             const sc = result?.structuredContent ?? null;
 
