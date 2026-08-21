@@ -429,8 +429,23 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         "resume": result.resume,
         "next_action": next_action,
     });
+    let mut meta = json!({
+        "seed": result.seed,
+        "pages": result.pages.iter().filter(|p| !p.duplicate).count(),
+        "stop": format!("{:?}", result.stop),
+        "elapsed_s": (result.elapsed.as_secs_f64() * 10.0).round() / 10.0,
+    });
+    if let Some(tok) = &result.resume {
+        meta["resume"] = json!(tok);
+    }
+    if !next_action.is_empty() {
+        meta["next_action"] = json!(next_action);
+    }
     json!({
-        "content": [{"type": "text", "text": text}],
+        "content": [
+            {"type": "text", "text": format!("[meta] {}", compact_json(&meta))},
+            {"type": "text", "text": text},
+        ],
         "structuredContent": structured
     })
 }
@@ -1559,6 +1574,14 @@ async fn fetch_with_actions(
     res
 }
 
+/// Compact JSON string (no whitespace) for embedding in text
+/// content blocks. Used for [meta] blocks that give clients
+/// (Claude Code, VSCode) essential fields they'd otherwise
+/// only get from structuredContent.
+fn compact_json(v: &Value) -> String {
+    serde_json::to_string(v).unwrap_or_default()
+}
+
 fn finish_result(
     ex: &extract::Extracted,
     tier: &str,
@@ -1588,30 +1611,58 @@ fn finish_result(
             "per_page_capped": pages.len() > 50,
         })
     });
+    let structured = json!({
+        "status": status,
+        "tier": tier,
+        "verdict": verdict,
+        "content_ok": !ex.thin && verdict == "ContentOk",
+        "thin": ex.thin,
+        "content_kind": format!("{:?}", ex.content_kind),
+        "quality": ex.quality,
+        "lang": ex.lang,
+        "title": ex.title,
+        "byline": ex.byline,
+        "published": ex.published,
+        "site": ex.site,
+        "blocks_shown": ex.blocks_shown,
+        "blocks_total": ex.blocks_total,
+        "total_chars": ex.total_chars,
+        "next_offset": ex.next_offset,
+        "tokens_est": ex.tokens_est,
+        "escalation": trace.value(),
+        "pdf": pdf,
+        "url": url,
+    });
+    // Compact metadata text block prepended for clients (Claude Code,
+    // VSCode) that drop text content when structuredContent is present.
+    let mut meta = json!({
+        "url": url,
+        "tier": tier,
+        "verdict": verdict,
+        "content_ok": !ex.thin && verdict == "ContentOk",
+        "thin": ex.thin,
+        "tokens_est": ex.tokens_est,
+        "total_chars": ex.total_chars,
+        "lang": ex.lang,
+    });
+    if let Some(n) = ex.next_offset {
+        meta["next_offset"] = json!(n);
+    }
+    if let Some(t) = &ex.title {
+        meta["title"] = json!(t);
+    }
+    if let Some(p) = &pdf {
+        meta["pdf_pages"] = json!(p["pages"]);
+        if p["ocr_pages"].as_u64().unwrap_or(0) > 0 {
+            meta["pdf_ocr"] = json!(p["ocr_pages"]);
+        }
+    }
     json!({
-        "content": [{ "type": "text", "text": ex.markdown }],
-        "structuredContent": {
-            "status": status,
-            "tier": tier,
-            "verdict": verdict,
-            "content_ok": !ex.thin && verdict == "ContentOk",
-            "thin": ex.thin,
-            "content_kind": format!("{:?}", ex.content_kind),
-            "quality": ex.quality,
-            "lang": ex.lang,
-            "title": ex.title,
-            "byline": ex.byline,
-            "published": ex.published,
-            "site": ex.site,
-            "blocks_shown": ex.blocks_shown,
-            "blocks_total": ex.blocks_total,
-            "total_chars": ex.total_chars,
-            "next_offset": ex.next_offset,
-            "tokens_est": ex.tokens_est,
-            "escalation": trace.value(),
-            "pdf": pdf,
-            "url": url,
-        },
+        "content": [
+            {"type": "text", "text": format!("[meta] {}", compact_json(&meta))},
+            {"type": "text", "text": ex.markdown},
+        ],
+        "structuredContent": structured,
     })
 }
 
@@ -1726,8 +1777,18 @@ fn tool_error_structured(
     kind: &str,
     structured: Option<Value>,
 ) -> Value {
+    let mut text = message.into();
+    // Fold next_action from structured into the text for clients
+    // (Claude Code, VSCode) that drop text when structuredContent
+    // is present. next_action is critical for agent recovery.
+    if let Some(ref s) = structured
+        && let Some(action) = s.get("next_action").and_then(Value::as_str)
+        && !action.is_empty()
+    {
+        text.push_str(&format!("\n\nNext action: {action}"));
+    }
     let mut v = json!({
-        "content": [{ "type": "text", "text": message.into() }],
+        "content": [{ "type": "text", "text": text }],
         "isError": true,
         "errorKind": kind
     });

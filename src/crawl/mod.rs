@@ -795,13 +795,15 @@ impl Crawler {
                     } else {
                         ctype
                     };
-                    // ── ARM64 PDFium hang isolation ──
+                    // ── PDFium hang isolation ──
                     // `extract::extract` -> `pdf::parse` -> `engine::load_document`
                     // holds a global `Mutex<PdfiumCore>` and calls blocking
                     // `FPDF_RenderPageBitmap`. On aarch64 a malformed PDF can
                     // hang indefinitely while holding the lock, stalling the
                     // tokio worker thread. Offload PDF bodies to the blocking
-                    // pool with a 10s timeout; HTML stays on the fast path.
+                    // pool with a generous timeout (5 min) that covers large
+                    // PDFs (a 28 MB archive.org PDF takes ~70s) while still
+                    // preventing infinite hangs. HTML stays on the fast path.
                     let is_pdf = body_bytes.starts_with(b"%PDF-")
                         || body_ctype.to_ascii_lowercase().contains("pdf");
                     let extract_res: Result<
@@ -816,7 +818,7 @@ impl Crawler {
                             let task = handle.spawn_blocking(move || {
                                 extract::extract(&body_owned, &ctype_owned, &url_owned, &eo_owned)
                             });
-                            match tokio::time::timeout(Duration::from_secs(3), task).await {
+                            match tokio::time::timeout(Duration::from_secs(300), task).await {
                                 Ok(Ok(Ok(r))) => Ok(r),
                                 Ok(Ok(Err(e))) => Err(e),
                                 Ok(Err(join_err)) => {
@@ -825,7 +827,7 @@ impl Crawler {
                                     )))
                                 }
                                 Err(_) => Err(crate::extract::ExtractError::BadSelector(
-                                    "extract timed out after 3s".into(),
+                                    "extract timed out after 300s".into(),
                                 )),
                             }
                         } else {

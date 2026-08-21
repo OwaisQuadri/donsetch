@@ -170,13 +170,22 @@ fn render_result(result: &Value, json_mode: bool, quiet: bool, cmd: &str) -> u8 
         return exit;
     }
 
-    // Extract content text.
+    // Extract content text. Skip [meta] blocks (metadata
+    // embedded for MCP clients that drop text when
+    // structuredContent is present; the CLI uses
+    // structuredContent directly for its stats line).
     let content = result
         .get("content")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("text"))
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
+        .and_then(|c| c.as_array())
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                .filter(|t| !t.starts_with("[meta]"))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
 
     let is_error = result
         .get("isError")
@@ -191,7 +200,7 @@ fn render_result(result: &Value, json_mode: bool, quiet: bool, cmd: &str) -> u8 
         let msg = if content.starts_with(sep.as_str()) {
             &content[sep.len()..]
         } else {
-            content
+            content.as_str()
         };
         eprintln!("[{cmd}] error: {msg}");
     } else {
@@ -335,10 +344,16 @@ fn render_json_envelope(result: &Value, url: &str) -> Value {
         .unwrap_or(false);
     let content = result
         .get("content")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("text"))
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
+        .and_then(|c| c.as_array())
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                .filter(|t| !t.starts_with("[meta]"))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
     let sc = result
         .get("structuredContent")
         .cloned()

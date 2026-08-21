@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-08-20
+
+### Fixed
+
+- **Crawl fails on PDF with 3-second timeout (#26)**: PR #23 added a 3-second `spawn_blocking` timeout for PDF extraction in crawl to isolate ARM64 PDFium hangs. But 3 seconds is far too short for real PDFs: a 28 MB archive.org PDF takes ~70 seconds to process. The timeout is now 300 seconds (5 minutes), covering large PDFs while still preventing infinite hangs. `fetch` was never affected (it has no timeout on PDF extraction).
+
+- **Claude Code and VSCode ignore text content when structuredContent is present (#27)**: some MCP clients (Claude Code, VSCode) show only one form of response, either text content blocks or structuredContent, and structuredContent takes precedence. When both are present, the text content (actual page markdown) is dropped, and the agent sees only metadata. Fix: all MCP responses now prepend a compact `[meta]` JSON text block containing essential fields (url, tier, verdict, content_ok, thin, next_offset, tokens_est, lang, title, pdf_pages) before the content. Clients that only show text now see both metadata and content. Clients that show both see slight redundancy (meta block + structuredContent), which is acceptable. Search results keep structuredContent-only (the user confirmed structured is more useful there). Error responses now include `next_action` in the text content for the same reason.
+
+- **CLI output broken by [meta] block**: the CLI tool only extracted `content[0].text`, which became the `[meta]` block. Fixed to iterate all content blocks and skip `[meta]`-prefixed ones.
+
 ## [2.3.9] - 2026-08-20
 
 ### Fixed
