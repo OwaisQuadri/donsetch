@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-08-20
+
+### Fixed
+
+- **pi-extension.ts broke on [meta] block**: the pi extension read `content[0].text` which is now the `[meta]` block, not page content. Fixed to join all content blocks and skip `[meta]`-prefixed ones.
+
+- **Japanese legacy encoding detection (Shift-JIS, EUC-JP)**: same tofu problem as Chinese GBK/Big5. Pages with no charset declaration in Shift-JIS or EUC-JP fell back to UTF-8 lossy, producing replacement characters. Statistical detection now covers Shift-JIS (detected by kana presence in decode) and EUC-JP (detected in the ambiguous 0xA1-0xFE range by kana in EUC-JP decode vs Hangul in EUC-KR decode).
+
 ## [2.4.0] - 2026-08-20
 
 ### Fixed
