@@ -11,9 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cyrillic search results mangled (#28)**: search engine result pages were decoded with `String::from_utf8_lossy`, which produces replacement characters for non-UTF-8 encodings. A page in Windows-1251 (Cyrillic) showed question marks instead of text. Search now uses the full charset detection pipeline (`charset::decode`) that handles Content-Type, BOM, meta charset, and statistical detection.
+
+- **Cached search results ignore max-results (#29)**: `rank::merge` trimmed results to `max_results` before caching. A first search with max=2 cached only 2 results; a later search with max=10 got the stale 2 from cache. Merge now always produces 12 results (the cache ceiling), the response trims to `max_results`, and the cache stores the full 12.
+
 - **pi-extension.ts broke on [meta] block**: the pi extension read `content[0].text` which is now the `[meta]` block, not page content. Fixed to join all content blocks and skip `[meta]`-prefixed ones.
 
 - **Japanese legacy encoding detection (Shift-JIS, EUC-JP)**: same tofu problem as Chinese GBK/Big5. Pages with no charset declaration in Shift-JIS or EUC-JP fell back to UTF-8 lossy, producing replacement characters. Statistical detection now covers Shift-JIS (detected by kana presence in decode) and EUC-JP (detected in the ambiguous 0xA1-0xFE range by kana in EUC-JP decode vs Hangul in EUC-KR decode).
+
+### Changed
+
+- Bump boring 5.1.0 -> 5.2.0, boring-sys 5.1.0 -> 5.2.0, tokio-boring 5.0.0 -> 5.2.0, futures-util 0.3.33 -> 0.3.34, actions/download-artifact v4 -> v8.
 
 ## [2.4.0] - 2026-08-20
 

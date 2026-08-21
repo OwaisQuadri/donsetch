@@ -508,7 +508,11 @@ impl Searcher {
 
         let trust = self.trust.lock().unwrap().clone();
         let total = rank::merged_total(&per_engine);
-        let mut results = rank::merge(&per_engine, query, intent, &trust, max_results);
+        // Always merge 12 results for the cache, then trim to
+        // max_results for the response. Without this, a first
+        // search with max=2 caches only 2 results, and a later
+        // search with max=10 returns the stale 2 from cache.
+        let mut results = rank::merge(&per_engine, query, intent, &trust, 12);
         let weak = rank::is_weak(&results, total);
 
         // ── Result enrichment: prefetch top results to extract
@@ -550,7 +554,7 @@ impl Searcher {
         }
 
         Ok(SearchOutcome {
-            results,
+            results: results.into_iter().take(max_results).collect(),
             weak,
             intent,
             report,
@@ -619,7 +623,14 @@ impl Searcher {
                         if !matches!(o.verdict, Verdict::ContentOk) {
                             return (i, None, Some(String::new()));
                         }
-                        let html = String::from_utf8_lossy(&o.body);
+                        let html = crate::extract::charset::decode(
+                            &o.body,
+                            o.headers
+                                .iter()
+                                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                                .map(|(_, v)| v.as_str())
+                                .unwrap_or(""),
+                        );
                         let title = extract_title(&html);
                         let desc = extract_description(&html);
                         (i, title, desc)
@@ -710,7 +721,14 @@ async fn engine_task(
             Err((format!("blocked:{}", out.status), egress_id, true)),
         );
     }
-    let html = String::from_utf8_lossy(&out.body).to_string();
+    let html = crate::extract::charset::decode(
+        &out.body,
+        out.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.as_str())
+            .unwrap_or(""),
+    );
     let hits = engines::parse(&engine, &html);
     if hits.len() < 3 {
         // Honest "no results" is NOT an engine failure —
