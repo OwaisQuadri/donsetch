@@ -276,6 +276,7 @@ pub fn extract(html: &str, url: &str, opts: &ExtractOptions) -> Option<Extracted
         lang: guess_lang(&md),
         quality: 0.7,
         pdf_pages: None,
+        images: Vec::new(),
     })
 }
 
@@ -939,6 +940,7 @@ mod tests {
             include_links: false,
             include_media: false,
             section: None,
+            ..Default::default()
         }
     }
 

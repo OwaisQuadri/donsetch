@@ -82,7 +82,21 @@ fn walk<'a>(el: ElementRef<'a>, depth: usize) -> (Stats, Option<(f64, ElementRef
                 let Some(child_el) = ElementRef::wrap(child) else {
                     continue;
                 };
+                // Image alt text is content text: pages whose
+                // meaning is carried by images (comics,
+                // infographics) must still scope to the image
+                // container, not lose it to a text-y sidebar.
+                if child_el.value().name() == "img"
+                    && let Some(alt) = child_el.value().attr("alt")
+                {
+                    stats.text_len += alt.chars().count().min(400);
+                }
                 if crate::extract::junk::skip(child_el) {
+                    continue;
+                }
+                // Structural-region IDs (footer/bottom/sidebar/…):
+                // never main content, at any size.
+                if crate::extract::junk::structural_negative(child_el.value()) {
                     continue;
                 }
                 // Class-negative subtrees: skip only when small.
@@ -120,9 +134,15 @@ fn walk<'a>(el: ElementRef<'a>, depth: usize) -> (Stats, Option<(f64, ElementRef
     // ancestor wrappers that merely contain it.
     if stats.text_len >= 140 {
         let link_density = stats.link_text_len as f64 / (stats.text_len.max(1) as f64);
-        let score = stats.text_len as f64 * (1.0 - link_density).max(0.0).powi(2)
-            + stats.punct as f64 * 15.0
-            + stats.paras as f64 * 40.0
+        // Link density discounts EVERYTHING, not just raw text:
+        // a sidebar of link lists used to win on punctuation and
+        // paragraph counts inside the link labels themselves
+        // (xkcd: #bottom "Comics I enjoy: ..." outranked the comic).
+        // Content containers keep ~full weight; nav/sidebar
+        // collapse to ~0.
+        let content_factor = (1.0 - link_density).clamp(0.0, 1.0).powi(2);
+        let score = (stats.text_len as f64 + stats.punct as f64 * 15.0 + stats.paras as f64 * 40.0)
+            * content_factor
             + tag_prior(name)
             + class_prior(el.value());
         // Body is always a wrapper — it includes nav, sidebar,

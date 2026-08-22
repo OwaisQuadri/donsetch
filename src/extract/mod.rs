@@ -48,6 +48,30 @@ pub struct ExtractOptions {
     /// Scope to one heading section (substring, case-
     /// insensitive). Pairs with toc.
     pub section: Option<String>,
+    /// Probe (v3): verification query — when set, the extraction
+    /// runs in full but the output is reduced to hit/no-hit plus
+    /// short context excerpts around matches. The page never
+    /// enters the agent's context wholesale. Case-insensitive
+    /// substring; `/re/` syntax = regex.
+    pub must_contain: Option<String>,
+}
+
+impl ExtractOptions {
+    /// A regex probe: `must_contain` wrapped in slashes.
+    pub fn probe_is_regex(&self) -> bool {
+        self.must_contain
+            .as_deref()
+            .is_some_and(|m| m.len() >= 2 && m.starts_with('/') && m.ends_with('/'))
+    }
+
+    /// The probe pattern with regex slashes stripped.
+    pub fn probe_pattern(&self) -> &str {
+        match &self.must_contain {
+            Some(m) if self.probe_is_regex() => &m[1..m.len() - 1],
+            Some(m) => m,
+            None => "",
+        }
+    }
 }
 
 pub struct Extracted {
@@ -87,6 +111,10 @@ pub struct Extracted {
     /// across page breaks for reading continuity — page
     /// boundaries are preserved HERE instead.
     pub pdf_pages: Option<Vec<crate::pdf::PageMeta>>,
+    /// Content-area images (alt, src) capped at 12 — collected
+    /// whether or not media lines are rendered, so image-text OCR
+    /// (v3) can run on demand.
+    pub images: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,6 +334,7 @@ pub fn extract(
             lang: "unknown".to_string(),
             quality: 0.0,
             pdf_pages: None,
+            images: Vec::new(),
         });
     }
 
@@ -425,9 +454,14 @@ pub fn extract(
     // richer, it wins. This is the tier-1 unlock for the SPA
     // class of sites.
     if (extracted.thin || extracted.total_chars < 600)
-        && let Some(js) = jsdata::extract(&html_text, url, opts)
+        && let Some(mut js) = jsdata::extract(&html_text, url, opts)
         && js.total_chars > extracted.total_chars
     {
+        // The fallback wins on text, but the scoped segment's
+        // image list is still the best image list.
+        if js.images.is_empty() {
+            js.images = extracted.images.clone();
+        }
         return Ok(js);
     }
 
@@ -439,7 +473,13 @@ pub fn extract(
     // better than returning nothing. The fallback preserves heading
     // structure (h1-h6 → markdown headings) and paragraph breaks.
     let needs_fallback = extracted.thin || extracted.total_chars < 200;
-    if needs_fallback && let Some(fb) = text_fallback(&html_text, &meta, url, opts, max_chars) {
+    if needs_fallback && let Some(mut fb) = text_fallback(&html_text, &meta, url, opts, max_chars) {
+        // Comic/gallery pages go thin and fall back here; the
+        // scoped Media blocks (the actual content images) must
+        // survive the handoff for on-demand OCR.
+        if fb.images.is_empty() {
+            fb.images = extracted.images.clone();
+        }
         return Ok(fb);
     }
     Ok(extracted)
@@ -528,6 +568,7 @@ pub fn text_fallback(
         lang: "unknown".to_string(),
         quality: 0.3, // lower quality than block-based extraction
         pdf_pages: None,
+        images: Vec::new(),
     })
 }
 
@@ -635,6 +676,7 @@ fn empty_pdf(url: &str, reason: &str) -> Extracted {
         lang: "unknown".to_string(),
         quality: 0.0,
         pdf_pages: None,
+        images: Vec::new(),
     }
 }
 
@@ -656,22 +698,33 @@ fn downstream(
     opts: &ExtractOptions,
     max_chars: usize,
 ) -> Result<Extracted, ExtractError> {
-    // TOC mode: heading tree only.
+    // TOC mode: heading tree only, with stable section IDs and
+    // per-section size labels so the agent can target and budget
+    // before reading anything.
     if opts.toc {
         let mut md = String::new();
         if let Some(t) = &meta.title {
             md.push_str(&format!("# {t}\n\n"));
         }
         let mut shown = 0usize;
+        let sizes = section_sizes(&all_blocks);
         for b in &all_blocks {
             if let blocks::Block::Heading { level, text, .. } = b {
                 let indent = "  ".repeat((*level as usize).saturating_sub(1));
-                md.push_str(&format!("{indent}- {text}\n"));
+                let size = sizes.get(shown).copied().unwrap_or(0);
+                md.push_str(&format!(
+                    "{indent}- [s{}] {} · {}\n",
+                    shown + 1,
+                    text,
+                    size_label(size)
+                ));
                 shown += 1;
             }
         }
         if shown == 0 {
             md.push_str("*(no headings — flat page)*\n");
+        } else {
+            md.push_str("\n*fetch with section=\"sN\" (or a heading name) to read that part*\n");
         }
         return Ok(Extracted {
             tokens_est: md.len() / 4,
@@ -689,14 +742,24 @@ fn downstream(
             lang: lang_info.code.clone(),
             quality: 0.0,
             pdf_pages: None,
+            images: Vec::new(),
         });
     }
 
     // Section scope: keep blocks under a matching heading.
+    // v3: "sN" (case-insensitive) targets the Nth heading exactly
+    // as the toc numbered it; anything else is a substring match
+    // on heading text.
     let mut section_missed = false;
     let mut section_hit = false;
     if let Some(sec) = &opts.section {
         let needle = sec.to_lowercase();
+        let by_id: Option<usize> = needle
+            .strip_prefix('s')
+            .filter(|_| needle.len() >= 2 && needle[1..].chars().all(|c| c.is_ascii_digit()))
+            .and_then(|n| n.parse::<usize>().ok())
+            .map(|n| n.saturating_sub(1));
+        let mut heading_idx = 0usize;
         let mut in_section = false;
         let mut section_level = 0u8;
         let mut kept_idx: Vec<usize> = Vec::new();
@@ -707,10 +770,17 @@ fn downstream(
                     // of same-or-higher level.
                     in_section = false;
                 }
-                if !in_section && text.to_lowercase().contains(&needle) {
-                    in_section = true;
-                    section_level = *level;
+                if !in_section {
+                    let matched = match by_id {
+                        Some(id) => heading_idx == id,
+                        None => text.to_lowercase().contains(&needle),
+                    };
+                    if matched {
+                        in_section = true;
+                        section_level = *level;
+                    }
                 }
+                heading_idx += 1;
             }
             if in_section {
                 kept_idx.push(i);
@@ -730,6 +800,16 @@ fn downstream(
 
     let blocks_total = all_blocks.len();
 
+    // Content images for on-demand OCR (v3) — capped, order kept.
+    let images: Vec<(String, String)> = all_blocks
+        .iter()
+        .filter_map(|b| match b {
+            blocks::Block::Media { alt, src, .. } => Some((alt.clone(), src.clone())),
+            _ => None,
+        })
+        .take(12)
+        .collect();
+
     // Focus: BM25 block filter. fell_back = query matched
     // nothing → full content returned, MUST be signaled.
     let (kept, focus_fell_back): (Vec<&blocks::Block>, bool) = match &opts.focus {
@@ -737,6 +817,16 @@ fn downstream(
         None => (all_blocks.iter().collect(), false),
     };
     let blocks_shown = kept.len();
+
+    // Dropped-content manifest (v3): when focus removed blocks,
+    // one accounting line so omission is audited, never silent.
+    // None when nothing was dropped or focus fell back (that case
+    // gets its own full-content notice).
+    let dropped_note = if opts.focus.is_some() && !focus_fell_back && kept.len() < blocks_total {
+        dropped_manifest(&all_blocks, &kept)
+    } else {
+        None
+    };
 
     // Render markdown (frontmatter + blocks) then paginate.
     let mut full = render::render(meta, url, &kept, opts);
@@ -760,6 +850,12 @@ fn downstream(
         }
     } else if full.trim().is_empty() || (blocks_total == 0 && meta.title.is_none()) {
         full = format!("{url}\n\n*(no extractable content)*\n");
+    }
+
+    // The manifest goes after the fell-back/missed notices (which
+    // are rarer and more important) but before any body content.
+    if let Some(m) = dropped_note {
+        full = format!("*[{m}]*\n\n{full}");
     }
 
     // JS-shell warning: agent must know the content
@@ -808,6 +904,35 @@ fn downstream(
 
     let content_kind = classify(&kept);
     let quality = quality_score(meta, &kept, blocks_total, raw_len, &lang_info);
+
+    // Probe mode (v3): the page resolved fully (tiers, walls and
+    // all) but the agent only asked a verification question. The
+    // output collapses to a verdict + short context excerpts —
+    // the page itself never enters the agent's context.
+    if let Some(pattern) = &opts.must_contain
+        && !pattern.trim().is_empty()
+    {
+        let md = probe_render(&full, opts.probe_pattern(), opts.probe_is_regex());
+        return Ok(Extracted {
+            tokens_est: md.len() / 4,
+            total_chars: full.len(),
+            markdown: md,
+            next_offset: None,
+            thin: false,
+            content_kind: ContentKind::Page,
+            title: meta.title.clone(),
+            byline: meta.byline.clone(),
+            published: meta.published.clone(),
+            site: meta.site.clone(),
+            blocks_total,
+            blocks_shown,
+            lang: lang_info.code.clone(),
+            quality,
+            pdf_pages,
+            images,
+        });
+    }
+
     Ok(Extracted {
         markdown: slice,
         title: meta.title.clone(),
@@ -824,7 +949,178 @@ fn downstream(
         lang: lang_info.code.clone(),
         quality,
         pdf_pages,
+        images,
     })
+}
+
+/// Probe rendering (v3): verdict + up to three context excerpts
+/// around matches, whitespace-collapsed to one line each. The
+/// honest answer to "does this page mention X?" at ~3 lines of
+/// output instead of 16k chars.
+pub fn probe_render(text: &str, pattern: &str, is_regex: bool) -> String {
+    let total = text.chars().count();
+    let report = |hits: Option<Vec<(usize, usize)>>| -> String {
+        match hits {
+            None => format!("probe: invalid regex /{pattern}/ — use a plain substring instead"),
+            Some(v) if v.is_empty() => {
+                format!("probe: NO MATCH for {pattern:?} in {total} chars of content")
+            }
+            Some(v) => {
+                let mut out = format!(
+                    "probe: MATCH — {} hit{} for {pattern:?}\n",
+                    v.len(),
+                    if v.len() == 1 { "" } else { "s" }
+                );
+                for (i, (s, e)) in v.iter().take(3).enumerate() {
+                    let ctx = context_around(text, *s, *e, 90);
+                    out.push_str(&format!("[{}] {ctx}\n", i + 1));
+                }
+                if v.len() > 3 {
+                    out.push_str(&format!("(+{} more)\n", v.len() - 3));
+                }
+                out
+            }
+        }
+    };
+
+    if is_regex {
+        match regex::RegexBuilder::new(pattern)
+            .case_insensitive(true)
+            .size_limit(1 << 20)
+            .build()
+        {
+            Ok(re) => {
+                let hits: Vec<(usize, usize)> = re
+                    .find_iter(text)
+                    .map(|m| (m.start(), m.end()))
+                    .take(50)
+                    .collect();
+                report(Some(hits))
+            }
+            Err(_) => report(None),
+        }
+    } else {
+        // Case-insensitive substring: lowercase both sides on
+        // ASCII (the dominant case) without allocating a regex.
+        let hay = text.to_lowercase();
+        let needle = pattern.to_lowercase();
+        let mut hits = Vec::new();
+        let mut from = 0;
+        while let Some(pos) = hay[from..].find(&needle) {
+            hits.push((from + pos, from + pos + needle.len()));
+            from += pos + needle.len().max(1);
+            if hits.len() >= 50 {
+                break;
+            }
+        }
+        report(Some(hits))
+    }
+}
+
+/// One-line context window around a match, ellipsized and
+/// whitespace-collapsed.
+fn context_around(text: &str, start: usize, end: usize, pad: usize) -> String {
+    let char_count = text.chars().count();
+    let lo = start.saturating_sub(pad);
+    let hi = (end + pad).min(char_count);
+    // Convert char indices to byte indices safely.
+    let byte_lo = char_to_byte(text, lo);
+    let byte_hi = char_to_byte(text, hi);
+    let window = &text[byte_lo..byte_hi];
+    let collapsed: String = window.split_whitespace().collect::<Vec<_>>().join(" ");
+    let prefix = if lo > 0 { "…" } else { "" };
+    let suffix = if hi < char_count { "…" } else { "" };
+    format!("{prefix}{collapsed}{suffix}")
+}
+
+fn char_to_byte(text: &str, char_idx: usize) -> usize {
+    text.char_indices()
+        .nth(char_idx)
+        .map(|(b, _)| b)
+        .unwrap_or(text.len())
+}
+
+/// One-line accounting of what the focus filter dropped: block
+/// count, word estimate, and up to four section names the dropped
+/// content lived under. Omission must be audited, never silent —
+/// but the audit itself must never cost more than one line.
+fn dropped_manifest(all: &[blocks::Block], kept: &[&blocks::Block]) -> Option<String> {
+    let kept_ptrs: std::collections::HashSet<usize> = kept
+        .iter()
+        .map(|b| std::ptr::from_ref::<blocks::Block>(b) as usize)
+        .collect();
+    let mut dropped_blocks = 0usize;
+    let mut dropped_chars = 0usize;
+    let mut sections: Vec<&str> = Vec::new();
+    for b in all {
+        if kept_ptrs.contains(&(std::ptr::from_ref(b) as usize)) {
+            continue;
+        }
+        dropped_blocks += 1;
+        dropped_chars += b.chars();
+        if let Some(name) = b.path().last()
+            && !name.is_empty()
+            && name.len() <= 32
+            && !sections.contains(&name.as_str())
+        {
+            sections.push(name);
+        }
+    }
+    if dropped_blocks == 0 {
+        return None;
+    }
+    let words = dropped_chars / 6;
+    let words_fmt = if words >= 1000 {
+        format!("{:.1}k", words as f64 / 1000.0)
+    } else {
+        words.to_string()
+    };
+    let mut line = format!("dropped by focus: {dropped_blocks} blocks (~{words_fmt} words)");
+    if !sections.is_empty() {
+        let names: Vec<&str> = sections.iter().take(4).copied().collect();
+        line.push_str(&format!(" — {}", names.join(", ")));
+    }
+    // Hard cap: the audit line must never outweigh what it audits.
+    if line.chars().count() > 160 {
+        line = line.chars().take(157).collect::<String>() + "…";
+    }
+    Some(line)
+}
+
+/// Compact char-count label for toc lines: "1.2k", "840".
+fn size_label(chars: usize) -> String {
+    if chars >= 1000 {
+        format!("{:.1}k", chars as f64 / 1000.0)
+    } else {
+        chars.to_string()
+    }
+}
+
+/// Per-heading content size, in heading order: the heading's own
+/// chars plus every following block until the next heading of
+/// same-or-higher level (subsections included). Powers the toc's
+/// size labels — the agent's fetch-cost signal before it reads.
+fn section_sizes(all: &[blocks::Block]) -> Vec<usize> {
+    let mut sizes = Vec::new();
+    let mut i = 0;
+    while i < all.len() {
+        if let blocks::Block::Heading { level, .. } = &all[i] {
+            let mut size = all[i].chars();
+            let mut j = i + 1;
+            while j < all.len() {
+                if let blocks::Block::Heading { level: l2, .. } = &all[j]
+                    && *l2 <= *level
+                {
+                    break;
+                }
+                size += all[j].chars();
+                j += 1;
+            }
+            sizes.push(size);
+        }
+        i += 1;
+    }
+    sizes
 }
 
 /// Char-budget slice at a UTF-8 boundary, preferring a block

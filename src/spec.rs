@@ -30,6 +30,9 @@ pub enum ParamKind {
     Str,
     /// JSON integer; CLI `--flag <N>` (usize-parsed).
     Usize,
+    /// JSON string OR array of strings; CLI `--flag <value>` /
+    /// positional bulk. Schema type: ["string", "array"].
+    StrOrList,
     /// JSON string from a fixed set; CLI validated choices.
     Enum(&'static [&'static str]),
     /// JSON array of strings; CLI repeatable + comma-splittable.
@@ -93,10 +96,18 @@ const FETCH_PARAMS: &[ParamSpec] = &[
     ParamSpec {
         name: "url",
         flag: "",
-        kind: ParamKind::Str,
+        kind: ParamKind::StrOrList,
         cli: CliKind::PositionalBulk,
         required: true,
-        help: "http(s) URL to fetch.",
+        help: "URL to fetch: http(s) URL, a handle (L1/S2 from earlier results), or an array of up to 12 for one parallel batch call.",
+    },
+    ParamSpec {
+        name: "budget_tokens",
+        flag: "budget-tokens",
+        kind: ParamKind::Usize,
+        cli: CliKind::Flag,
+        required: false,
+        help: "Batch mode (array url): total output token budget shared across all results (200-500k). DonSeTch allocates it across pages by size — small pages stay whole, big ones get sliced with a resume note. Without it each page uses max_chars independently.",
     },
     ParamSpec {
         name: "focus",
@@ -137,6 +148,22 @@ const FETCH_PARAMS: &[ParamSpec] = &[
         cli: CliKind::Flag,
         required: false,
         help: "true = heading outline only, no body text. Read structure first, then target with section or focus.",
+    },
+    ParamSpec {
+        name: "image_text",
+        flag: "image-text",
+        kind: ParamKind::SetTrue,
+        cli: CliKind::Flag,
+        required: false,
+        help: "OCR the page's content images (up to 4) and append an 'image text' section. For infographics/comics/screenshots whose meaning IS the image. Costs extra fetch+compute — only when image content matters.",
+    },
+    ParamSpec {
+        name: "must_contain",
+        flag: "must-contain",
+        kind: ParamKind::Str,
+        cli: CliKind::Flag,
+        required: false,
+        help: "Probe mode: verify the page mentions a string/pattern WITHOUT loading it into context. Output = MATCH/NO-MATCH verdict + up to 3 short context excerpts. Case-insensitive substring, or /regex/ (e.g. \"/CVE-2026-\\d+/\"). Full fetch still happens (tiers, walls, PDFs) — only the output collapses. For verification questions, not reading.",
     },
     ParamSpec {
         name: "selector",
@@ -390,6 +417,16 @@ pub fn mcp_schema(tool: &ToolSpec) -> Value {
         let mut schema = serde_json::Map::new();
         let ty = match p.kind {
             ParamKind::Str | ParamKind::Enum(_) => "string",
+            ParamKind::StrOrList => {
+                schema.insert("type".into(), json!(["string", "array"]));
+                schema.insert("items".into(), json!({ "type": "string" }));
+                schema.insert("description".into(), json!(p.help));
+                props.insert(p.name.into(), Value::Object(schema));
+                if p.required {
+                    required.push(json!(p.name));
+                }
+                continue;
+            }
             ParamKind::Usize => "integer",
             ParamKind::StrList | ParamKind::JsonStr => "array",
             ParamKind::SetTrue | ParamKind::SetFalse => "boolean",
@@ -466,7 +503,7 @@ fn cli_arg(p: &ParamSpec) -> Arg {
         CliKind::Flag => {
             let arg = arg.long(p.flag);
             match p.kind {
-                ParamKind::Str => arg.value_name("VALUE"),
+                ParamKind::Str | ParamKind::StrOrList => arg.value_name("VALUE"),
                 ParamKind::Usize => arg.value_name("N").value_parser(clap::value_parser!(usize)),
                 ParamKind::Enum(variants) => {
                     arg.value_name("VALUE")
@@ -508,7 +545,7 @@ pub fn matches_to_json(tool: &ToolSpec, m: &clap::ArgMatches) -> Value {
                 }
             }
             CliKind::Flag => match p.kind {
-                ParamKind::Str | ParamKind::Enum(_) => {
+                ParamKind::Str | ParamKind::StrOrList | ParamKind::Enum(_) => {
                     if let Some(v) = m.get_one::<String>(p.name) {
                         map.insert(p.name.into(), json!(v));
                     }

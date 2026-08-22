@@ -35,6 +35,7 @@ pub struct Daemon {
     searcher: Arc<Searcher>,
     byok: ByokSearcher,
     crawler: Crawler,
+    handles: Arc<Mutex<crate::handles::HandleTable>>,
 }
 
 impl Daemon {
@@ -125,6 +126,7 @@ impl Daemon {
             searcher,
             byok: ByokSearcher::new(),
             crawler,
+            handles: Arc::new(Mutex::new(crate::handles::HandleTable::load())),
         })
     }
 
@@ -646,14 +648,284 @@ fn verdict_error(verdict: Verdict, status: u16, url: &str) -> String {
 /// with warm-start and render cache.
 #[allow(clippy::field_reassign_with_default)]
 async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
-    let url = match args.get("url").and_then(Value::as_str) {
-        Some(u) if u.starts_with("http://") || u.starts_with("https://") => u.to_string(),
+    // v3: url accepts one URL/handle OR an array of them — batch
+    // fetch in a single call, optionally under a shared token
+    // budget (budget_tokens) allocated across results.
+    let urls: Vec<String> = match args.get("url") {
+        Some(Value::String(s)) => vec![s.to_string()],
+        Some(Value::Array(a)) => {
+            let v: Vec<String> = a
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+            if v.is_empty() {
+                return tool_error("fetch: url array is empty");
+            }
+            if v.len() > 12 {
+                return tool_error("fetch: max 12 urls per batch call");
+            }
+            v
+        }
         _ => return tool_error("fetch: url must be http(s)"),
     };
+    let budget_tokens = args
+        .get("budget_tokens")
+        .and_then(Value::as_u64)
+        .map(|t| (t as usize).clamp(200, 500_000));
+
+    if urls.len() == 1 && budget_tokens.is_none() {
+        let url = match resolve_fetch_url(daemon, &urls[0]).await {
+            Ok(u) => u,
+            Err(e) => return e,
+        };
+        return fetch_single(daemon, args, &url).await;
+    }
+    let mut resolved: Vec<String> = Vec::with_capacity(urls.len());
+    for u in &urls {
+        match resolve_fetch_url(daemon, u).await {
+            Ok(r) => resolved.push(r),
+            Err(e) => return e,
+        }
+    }
+    if resolved.len() == 1 {
+        return fetch_single(daemon, args, &resolved[0]).await;
+    }
+    fetch_multi(daemon, args, resolved, budget_tokens).await
+}
+
+/// Resolve a raw url-or-handle argument to a fetchable http(s)
+/// URL. Ok(URL) or Err(error Value).
+async fn resolve_fetch_url(daemon: &Arc<Daemon>, raw: &str) -> Result<String, Value> {
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        return Ok(raw.to_string());
+    }
+    // v3 handles: "L12"/"s3" resolve through the persistent
+    // handle table before anything else runs.
+    if crate::handles::is_handle(raw) {
+        if let Some(resolved) = daemon.handles.lock().await.resolve(raw) {
+            if let Ok(parsed) = url::Url::parse(&resolved)
+                && matches!(parsed.scheme(), "http" | "https")
+            {
+                return Ok(resolved);
+            }
+            return Err(tool_error(format!(
+                "fetch: handle {raw} resolved to a non-http(s) URL — refused"
+            )));
+        }
+        return Err(tool_error_structured(
+            format!("fetch: handle {raw} is unknown or expired (24h TTL)"),
+            "permanent",
+            Some(json!({
+                "url": raw,
+                "next_action": "re-run the search/fetch that produced the handle, or pass the full URL directly",
+            })),
+        ));
+    }
+    Err(tool_error(format!(
+        "fetch: url must be http(s), got: {raw}"
+    )))
+}
+
+/// Batch fetch (v3): parallel single-fetches composed into one
+/// result under an optional shared token budget. Small pages stay
+/// whole; the budget slices proportional to size, never below a
+/// floor. All-failed = honest error; partial = composed result
+/// with per-URL status.
+async fn fetch_multi(
+    daemon: &Arc<Daemon>,
+    args: &Value,
+    urls: Vec<String>,
+    budget_tokens: Option<usize>,
+) -> Value {
+    // Under a budget, let each fetch run up to the whole budget
+    // (slicing happens in composition); without one, defaults rule.
+    let mut call_args = args.clone();
+    if let Some(b) = budget_tokens {
+        call_args["max_chars"] = json!(b * 4);
+    }
+    let futs: Vec<_> = urls
+        .iter()
+        .map(|u| {
+            let a = call_args.clone();
+            let d = Arc::clone(daemon);
+            let url = u.clone();
+            async move { fetch_single(&d, &a, &url).await }
+        })
+        .collect();
+    let results = futures_util::future::join_all(futs).await;
+
+    let is_err = |v: &Value| v.get("isError").and_then(Value::as_bool).unwrap_or(false);
+    let md_of = |v: &Value| {
+        v.pointer("/content/1/text")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let title_of = |v: &Value| {
+        v.pointer("/structuredContent/title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let tokens_of = |v: &Value| {
+        v.pointer("/structuredContent/tokens_est")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize
+    };
+    let tier_of = |v: &Value| {
+        v.pointer("/structuredContent/tier")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string()
+    };
+
+    // Budget slicing: proportional to returned size, floor 300
+    // chars, only when the sum overflows.
+    let mut markdowns: Vec<Option<String>> = results
+        .iter()
+        .map(|r| if is_err(r) { None } else { Some(md_of(r)) })
+        .collect();
+    let mut sliced_flags = vec![false; results.len()];
+    if let Some(budget_tok) = budget_tokens {
+        let budget_chars = budget_tok * 4;
+        let lens: Vec<usize> = markdowns
+            .iter()
+            .map(|m| m.as_ref().map(|s| s.len()).unwrap_or(0))
+            .collect();
+        let total: usize = lens.iter().sum();
+        if total > budget_chars && total > 0 {
+            let n_ok = lens.iter().filter(|&&l| l > 0).count().max(1);
+            let floor = (budget_chars / n_ok / 4).clamp(300, 4_000);
+            let mut alloc: Vec<usize> = lens
+                .iter()
+                .map(|&l| {
+                    if l == 0 {
+                        0
+                    } else {
+                        (budget_chars * l / total).max(floor)
+                    }
+                })
+                .collect();
+            // Trim the largest allocations down to fit the budget.
+            let mut over: i128 = alloc.iter().sum::<usize>() as i128 - budget_chars as i128;
+            while over > 0 {
+                let (idx, _) = alloc
+                    .iter()
+                    .enumerate()
+                    .filter(|(_i, a)| **a > floor)
+                    .max_by_key(|(i, a)| (**a as i128, std::cmp::Reverse(*i)))
+                    .map(|(i, a)| (i, *a))
+                    .unwrap_or((0, 0));
+                let take = (alloc[idx] - floor).min(over as usize);
+                if take == 0 {
+                    break;
+                }
+                alloc[idx] -= take;
+                over -= take as i128;
+            }
+            for (i, m) in markdowns.iter_mut().enumerate() {
+                if let Some(md) = m
+                    && md.len() > alloc[i]
+                {
+                    let mut cut = alloc[i];
+                    while cut > 0 && !md.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    let truncated = format!(
+                        "{}\n\n*[budget-sliced: showing {} of {} chars — refetch this url alone with max_chars for the rest]*",
+                        &md[..cut],
+                        cut,
+                        md.len()
+                    );
+                    *m = Some(truncated);
+                    sliced_flags[i] = true;
+                }
+            }
+        }
+    }
+
+    // Compose.
+    let mut text = String::new();
+    let ok_count = markdowns.iter().filter(|m| m.is_some()).count();
+    let err_count = results.len() - ok_count;
+    for (i, r) in results.iter().enumerate() {
+        if let Some(md) = &markdowns[i] {
+            let title = title_of(r);
+            let head = if title.is_empty() {
+                urls[i].as_str()
+            } else {
+                title.as_str()
+            };
+            text.push_str(&format!(
+                "## [{i}] {} — {}\ntier={} tokens≈{}\n\n{}\n\n---\n\n",
+                head,
+                urls[i],
+                tier_of(r),
+                (md.len() / 4).max(1),
+                md
+            ));
+        } else {
+            let msg = r
+                .pointer("/content/0/text")
+                .and_then(Value::as_str)
+                .unwrap_or("fetch failed");
+            text.push_str(&format!("## [{i}] {} — ERROR\n{}\n\n---\n\n", urls[i], msg));
+        }
+    }
+    let mut meta = json!({
+        "urls": results.len(),
+        "ok": ok_count,
+        "errors": err_count,
+    });
+    if let Some(b) = budget_tokens {
+        meta["budget_tokens"] = json!(b);
+    }
+    let structured = json!({
+        "urls": urls,
+        "results": results.iter().enumerate().map(|(i, r)| {
+            let mut o = json!({
+                "url": urls[i],
+                "ok": !is_err(r),
+                "tier": tier_of(r),
+                "tokens_est": tokens_of(r),
+            });
+            if sliced_flags[i] {
+                o["sliced"] = json!(true);
+            }
+            if is_err(r) {
+                o["error"] = json!(r.pointer("/content/0/text").and_then(Value::as_str).unwrap_or("fetch failed"));
+            }
+            o
+        }).collect::<Vec<_>>(),
+        "budget_tokens": budget_tokens,
+    });
+
+    if ok_count == 0 {
+        return tool_error_structured(
+            format!("fetch: all {} urls failed", results.len()),
+            "transient",
+            Some(json!({
+                "urls": urls,
+                "results": structured["results"].clone(),
+                "next_action": "see per-url errors in structuredContent.results — fetch promising ones individually",
+            })),
+        );
+    }
+    json!({
+        "content": [
+            {"type": "text", "text": format!("[meta] {}", compact_json(&meta))},
+            {"type": "text", "text": text},
+        ],
+        "structuredContent": structured
+    })
+}
+
+#[allow(clippy::field_reassign_with_default)]
+async fn fetch_single(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
     // Full parse up front: an unparseable URL would otherwise flow
     // through the whole pipeline with host="" — poisoning domain
     // profiles and producing confusing late errors.
-    let parsed_url = match url::Url::parse(&url) {
+    let parsed_url = match url::Url::parse(url) {
         Ok(u) => u,
         Err(e) => return tool_error(format!("fetch: invalid URL ({e})")),
     };
@@ -665,16 +937,16 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // no login overlay, no CAPTCHA. One cheap tier-1 request
     // beats a 60s ghost burn. The dedicated reddit extractor
     // in extract/reddit.rs formats the output.
-    let url = if let Ok(mut u) = url::Url::parse(&url) {
+    let url = if let Ok(mut u) = url::Url::parse(url) {
         match u.host_str() {
             Some("www.reddit.com") | Some("reddit.com") => {
                 let _ = u.set_host(Some("old.reddit.com"));
                 u.to_string()
             }
-            _ => url,
+            _ => url.to_string(),
         }
     } else {
-        url
+        url.to_string()
     };
 
     // SSRF guard: never fetch private/loopback addresses.
@@ -716,6 +988,14 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     opts.toc = args.get("toc").and_then(Value::as_bool).unwrap_or(false);
     opts.include_links = args.get("links").and_then(Value::as_bool).unwrap_or(false);
     opts.include_media = args.get("media").and_then(Value::as_bool).unwrap_or(false);
+    opts.must_contain = args
+        .get("must_contain")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let image_text = args
+        .get("image_text")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let tier = args.get("tier").and_then(Value::as_str).unwrap_or("auto");
     let shot = args.get("shot").and_then(Value::as_str);
 
@@ -742,7 +1022,8 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 "fetch: actions need the browser — use tier=auto (default) or tier=2",
             );
         }
-        return fetch_with_actions(daemon, &url, &url_host, &opts, &actions, shot).await;
+        return fetch_with_actions(daemon, &url, &url_host, &opts, &actions, shot, image_text)
+            .await;
     }
 
     let host = url_host;
@@ -1057,6 +1338,7 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 let mut res =
                     finish_result(&e2, "render-cache", final_status, &vstr, &final_url, &trace);
                 res["_meta"] = json!({ "ttlMs": 300_000, "cacheScope": "session" });
+                apply_link_handles(daemon, &mut res).await;
                 return res;
             }
         }
@@ -1139,14 +1421,19 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         );
     }
 
-    finish_result(
+    let mut res = finish_result(
         &ex,
         final_tier,
         final_status,
         &final_verdict,
         &final_url,
         &trace,
-    )
+    );
+    apply_link_handles(daemon, &mut res).await;
+    if image_text {
+        apply_image_ocr(daemon, &mut res, &ex.images).await;
+    }
+    res
 }
 
 /// Unified tier-2: ghost render + cookie harvest + tier-1 retry,
@@ -1468,6 +1755,7 @@ async fn fetch_with_actions(
     opts: &ExtractOptions,
     actions: &[crate::ghost::actions::Action],
     shot: Option<&str>,
+    image_text: bool,
 ) -> Value {
     let mut trace = Trace::default();
     trace.step("route", "actions", "browser-script", 0);
@@ -1667,6 +1955,10 @@ async fn fetch_with_actions(
         .collect();
     let mut res = finish_result(&ex, "2-actions", 200, "ContentOk", url, &trace);
     res["structuredContent"]["actions"] = Value::Array(steps_json);
+    apply_link_handles(daemon, &mut res).await;
+    if image_text {
+        apply_image_ocr(daemon, &mut res, &ex.images).await;
+    }
     res
 }
 
@@ -1676,6 +1968,137 @@ async fn fetch_with_actions(
 /// only get from structuredContent.
 fn compact_json(v: &Value) -> String {
     serde_json::to_string(v).unwrap_or_default()
+}
+
+/// v3 image OCR: fetch + OCR the page's content images (up to 4,
+/// 5MB each, SSRF-guarded) and append an `## image text` section
+/// to the result. On-demand only — OCR models are heavy and most
+/// pages never need it.
+async fn apply_image_ocr(daemon: &Arc<Daemon>, res: &mut Value, images: &[(String, String)]) {
+    #[cfg(not(feature = "ocr"))]
+    {
+        let _ = (daemon, images);
+        if let Some(sc) = res.pointer_mut("/structuredContent") {
+            sc["image_text"] = json!("unavailable — this build lacks the ocr feature");
+        }
+    }
+    #[cfg(feature = "ocr")]
+    {
+        const MAX_IMAGES: usize = 4;
+        const MAX_BYTES: usize = 5 * 1024 * 1024;
+        if images.is_empty() {
+            return;
+        }
+        let mut section = String::from("\n## image text (OCR)\n");
+        let mut ocred = 0usize;
+        for (alt, src) in images.iter().take(MAX_IMAGES) {
+            if !src.starts_with("http://") && !src.starts_with("https://") {
+                continue; // data:/relative URIs have no fetch path
+            }
+            // SSRF guard — image URLs are attacker-controllable.
+            match url::Url::parse(src) {
+                Ok(u) => match u.host_str() {
+                    Some(h) if !crate::fetch::guards::is_ssrf_host(h) => {}
+                    _ => continue,
+                },
+                Err(_) => continue,
+            }
+            let bytes = match tokio::time::timeout(
+                std::time::Duration::from_secs(12),
+                daemon.fetcher.fetch(src),
+            )
+            .await
+            {
+                Ok(Ok(o))
+                    if matches!(o.verdict, Verdict::ContentOk) && o.body.len() <= MAX_BYTES =>
+                {
+                    o.body
+                }
+                _ => {
+                    section.push_str(&format!("- {src}: [unavailable]\n"));
+                    continue;
+                }
+            };
+            let ocr_result = tokio::task::spawn_blocking(move || {
+                let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+                let rgba = img.into_rgba8();
+                let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                let bitmap = crate::pdf::pixels::PageBitmap {
+                    w,
+                    h,
+                    buf: rgba.into_raw(),
+                    page_w_pt: w as f32,
+                    page_h_pt: h as f32,
+                };
+                let (lines, _kind) = crate::pdf::ocr::ocr_page(&bitmap, "auto")?;
+                let text: String = lines
+                    .iter()
+                    .map(|l| l.text.trim())
+                    .filter(|t| !t.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                Ok::<String, String>(text)
+            })
+            .await;
+            match ocr_result {
+                Ok(Ok(text)) if !text.trim().is_empty() => {
+                    ocred += 1;
+                    let t: String = text.chars().take(400).collect();
+                    if alt.is_empty() {
+                        section.push_str(&format!("- {src}: {t}\n"));
+                    } else {
+                        section.push_str(&format!("- {alt} ({src}): {t}\n"));
+                    }
+                }
+                _ => {
+                    section.push_str(&format!("- {src}: [no text detected]\n"));
+                }
+            }
+        }
+        if let Some(cell) = res.pointer_mut("/content/1/text")
+            && let Some(md) = cell.as_str().map(String::from)
+        {
+            *cell = json!(md + &section);
+        }
+        if let Some(sc) = res.pointer_mut("/structuredContent") {
+            sc["image_text"] = json!({ "images": images.len().min(MAX_IMAGES), "ocred": ocred });
+        }
+    }
+}
+
+/// v3 reference handles: rewrite markdown links in a fetch result
+/// to `L{n}` handles and stamp the count into the [meta] block.
+/// Mutates `res` in place; no-op when links aren't in the output.
+async fn apply_link_handles(daemon: &Arc<Daemon>, res: &mut Value) {
+    let Some(text) = res
+        .pointer("/content/1/text")
+        .and_then(Value::as_str)
+        .map(String::from)
+    else {
+        return;
+    };
+    let mut ht = daemon.handles.lock().await;
+    let (new_md, n) = ht.replace_link_urls(&text);
+    if n == 0 {
+        return;
+    }
+    ht.flush();
+    if let Some(cell) = res.pointer_mut("/content/1/text") {
+        *cell = json!(new_md);
+    }
+    // Stamp the handle count into the [meta] line so the agent
+    // knows links are fetchable handles now. The meta text is
+    // "[meta] {compact json}" — splice before the closing brace.
+    if let Some(meta_text) = res.pointer_mut("/content/0/text")
+        && let Some(s) = meta_text.as_str().map(String::from)
+        && s.ends_with('}')
+    {
+        let patched = s.trim_end_matches('}').to_string() + &format!(",\"link_handles\":{n}}}");
+        *meta_text = json!(patched);
+    }
+    if let Some(sc) = res.pointer_mut("/structuredContent") {
+        sc["link_handles"] = json!(n);
+    }
 }
 
 fn finish_result(
@@ -1762,6 +2185,19 @@ fn finish_result(
     })
 }
 
+/// Bind the outcome's result URLs as position handles (S1..Sn)
+/// in the persistent table, then return them for rendering.
+async fn bind_search_handles(
+    daemon: &Arc<Daemon>,
+    out: &crate::search::SearchOutcome,
+) -> Vec<String> {
+    let urls: Vec<String> = out.results.iter().map(|r| r.url.clone()).collect();
+    let mut ht = daemon.handles.lock().await;
+    let hs = ht.set_search_results(&urls);
+    ht.flush();
+    hs
+}
+
 async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     let query = match args.get("query").and_then(Value::as_str) {
         Some(q) if !q.trim().is_empty() => q.to_string(),
@@ -1798,7 +2234,8 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     if byok_configured && !local_first {
         match daemon.byok.search(&query, max, intent).await {
             Ok(out) => {
-                let md = search::render_markdown(&out, &query);
+                let hs = bind_search_handles(daemon, &out).await;
+                let md = search::render_markdown(&out, &query, Some(&hs));
                 let meta = search::render_meta(&out);
                 return json!({
                     "content": [{ "type": "text", "text": md }],
@@ -1817,7 +2254,8 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // Local search (primary in local-first mode, fallback in BYOK-first).
     match daemon.searcher.search(&query, max, intent).await {
         Ok(out) => {
-            let md = search::render_markdown(&out, &query);
+            let hs = bind_search_handles(daemon, &out).await;
+            let md = search::render_markdown(&out, &query, Some(&hs));
             let meta = search::render_meta(&out);
             json!({
                 "content": [{ "type": "text", "text": md }],
@@ -1833,7 +2271,8 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 }
                 match daemon.byok.search(&query, max, intent).await {
                     Ok(out) => {
-                        let md = search::render_markdown(&out, &query);
+                        let hs = bind_search_handles(daemon, &out).await;
+                        let md = search::render_markdown(&out, &query, Some(&hs));
                         let meta = search::render_meta(&out);
                         json!({
                             "content": [{ "type": "text", "text": md }],

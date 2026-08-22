@@ -297,7 +297,11 @@ fn walk<'a>(
                 );
             }
         }
-        "figure" | "img" if opts.include_media => {
+        // Media blocks are ALWAYS segmented (cheap) — the render
+        // layer drops them unless include_media. On-demand image
+        // OCR (v3) needs the image list even when media lines are
+        // not part of the output.
+        "figure" | "img" => {
             media_block(el, base, headings, out);
         }
         "hr" => {}

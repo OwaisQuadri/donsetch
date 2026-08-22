@@ -165,6 +165,7 @@ fn extract_listing(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Extra
         lang: "en".to_string(),
         quality: 0.9,
         pdf_pages: None,
+        images: Vec::new(),
     })
 }
 
@@ -250,6 +251,7 @@ fn extract_thread(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Extrac
         lang: "en".to_string(),
         quality: 0.95,
         pdf_pages: None,
+        images: Vec::new(),
     })
 }
 

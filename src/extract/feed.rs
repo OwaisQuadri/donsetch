@@ -261,6 +261,7 @@ fn finish(
         lang: "en".to_string(),
         quality: 0.9,
         pdf_pages: None,
+        images: Vec::new(),
     })
 }
 

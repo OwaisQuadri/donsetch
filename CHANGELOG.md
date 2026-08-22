@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The context-warfare milestone (v3 M1): every tool now respects the agent's context window as the scarce resource it is.
+
+### Added
+
+- **Reference handles (`L1`, `S1`)**: fetched-page links render as `[text](L12)` instead of raw URLs, and search results list `S1`-`Sn` instead of 80-token URLs. `fetch` accepts a handle anywhere it accepts a URL (`fetch S3` = result 3 of your last search). Handles are stable per URL (L) or per search position (S), persisted at `~/.cache/donsetch/handles.json` with a 24h TTL and 2048-entry cap. Raw URLs remain in `structuredContent` for citation.
+- **Batch fetch with global token budget**: `url` now accepts an array (up to 12) — one parallel call instead of N round-trips. `budget_tokens` shares one output budget across all results, allocated by size (small pages stay whole, big ones slice with a resume note). Composed output carries per-URL status; only all-failed is an error.
+- **Probe mode (`must_contain`)**: verification questions ("does the changelog mention CVE-2026-XXXX?") resolve the page fully but collapse the output to MATCH/NO-MATCH plus up to three short context excerpts (~60 tokens instead of 4k). Case-insensitive substring or `/regex/`.
+- **TOC section IDs + sizes**: `toc=true` now renders `- [s3] Heading . 1.2k` — a stable per-section ID and content-size label. `section="s3"` targets by ID (heading-name matching still works). Read structure and cost before reading content.
+- **Dropped-content manifest**: when `focus` removes blocks, the output gains one accounting line (`dropped by focus: 256 blocks (~12.1k words) — History, Early years, ...`). Omission is audited, never silent.
+- **On-demand image OCR (`image_text=true`)**: fetches and OCRs the page's content images (up to 4, 5MB each, SSRF-guarded) and appends an `image text` section — infographics, comics and screenshot-locked pages become readable (the OCR engine ships with `--features ocr` builds; core builds say so honestly).
+- Fuzz targets (`fuzz/`): `extract`, `charset`, `paginate`, `sitemap`, `feed` — the five panic-surface parsers, wired as CI smoke jobs with crash-artifact upload. The crate grew a library target (`src/lib.rs`) to support this; the binary is unchanged behavior.
+- Supply-chain gate: `deny.toml` + cargo-deny CI job (advisories, licenses, bans, sources).
+- `bench/tokens.py`: token-efficiency bench asserting the invariants (focus >=40% savings, probe <=400 chars, no raw-URL leaks past handle rewriting).
+
+### Changed
+
+- **Main-content scoring**: link density now discounts punctuation/paragraph mass too (a sidebar of link lists could outrank the real article on punctuation inside link labels), image `alt` text counts as content text, and structural region IDs (`footer`, `bottom`, `sidebar`, `nav`, ...) are excluded from main-content candidacy at any size. xkcd scoped to its sidebar before this; it now scopes to the comic.
+- Media (`<img>`) elements are always segmented (cheap) and dropped at render time unless `media=true` — the image list must exist even when media lines are not rendered, so on-demand OCR works on any page.
+
+### Fixed
+
+- Comic/gallery pages (text-thin, image-rich) lost their content images when extraction fell back to raw text — fallbacks now carry the scoped image list through.
+- CI and release workflows pin rustc 1.98 (was floating `stable`), ending local-vs-CI clippy drift.
+
 ## [2.5.0] - 2026-08-22
 
 The polish & reliability release: one daemon-crashing charset bug fixed (#35), four panic-abort paths closed, one infinite hang capped, the error contract extended to every tool, and installation/upgrades hardened across platforms.

@@ -892,7 +892,7 @@ fn site_filter(query: &str, results: &mut Vec<Merged>) {
 }
 
 /// Markdown rendering for the MCP/CLI surface.
-pub fn render_markdown(out: &SearchOutcome, query: &str) -> String {
+pub fn render_markdown(out: &SearchOutcome, query: &str, handles: Option<&[String]>) -> String {
     // Search answers ONE question: "what should I fetch?"
     // Snippets carry just enough to decide — content is
     // the fetch tool's job.
@@ -904,7 +904,16 @@ pub fn render_markdown(out: &SearchOutcome, query: &str) -> String {
             let snip: String = r.snippet.chars().take(120).collect();
             md.push_str(&format!("   {snip}\n"));
         }
-        md.push_str(&format!("   {}\n", r.url));
+        // v3 handles: the position handle (S1, S2, …) replaces the
+        // raw URL — `fetch S3` is worth more than 80 tokens of URL.
+        match handles {
+            Some(hs) if let Some(h) = hs.get(i) => {
+                md.push_str(&format!("   {h}\n"));
+            }
+            _ => {
+                md.push_str(&format!("   {}\n", r.url));
+            }
+        }
     }
     if out.weak {
         md.push_str("\n*weak results: low cross-engine consensus — treat with care*\n");
@@ -925,6 +934,9 @@ or add an API-key provider (`donsetch keys add`)*\n",
         out.elapsed.as_millis(),
         source
     ));
+    if handles.is_some() && !out.results.is_empty() {
+        md.push_str("*fetch S1… by handle (raw urls in structuredContent)*\n");
+    }
     md
 }
 

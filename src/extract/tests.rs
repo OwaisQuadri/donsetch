@@ -904,10 +904,12 @@ fn toc_mode_heading_tree() {
             ..Default::default()
         },
     );
-    assert!(r.markdown.contains("- Main Title"));
-    assert!(r.markdown.contains("  - Section A"));
-    assert!(r.markdown.contains("    - Subsection A1"));
-    assert!(r.markdown.contains("  - Section B"));
+    // v3: toc lines carry stable section IDs + size labels.
+    assert!(r.markdown.contains("- [s1] Main Title ·"));
+    assert!(r.markdown.contains("  - [s2] Section A ·"));
+    assert!(r.markdown.contains("    - [s3] Subsection A1 ·"));
+    assert!(r.markdown.contains("  - [s4] Section B ·"));
+    assert!(r.markdown.contains("section=\"sN\""));
     // Should NOT contain body text.
     assert!(!r.markdown.contains("Intro paragraph"));
     assert!(!r.markdown.contains("Section A content"));
@@ -1847,4 +1849,149 @@ fn paginate_huge_offset_and_max_no_panic() {
     let (empty, next2) = crate::extract::paginate_public(&text, text.len() + 10, 1000);
     assert_eq!(empty, "");
     assert_eq!(next2, None);
+}
+
+// ── v3: dropped-content manifest ─────────────────────────────
+
+#[test]
+fn v3_dropped_manifest_present_when_focus_drops_blocks() {
+    let html = r#"<html><body><article>
+<h1>Guide</h1>
+<p>The rust ownership model moves values by default.</p>
+<p>Borrowing prevents aliasing and mutation at once.</p>
+<h2>Related posts</h2>
+<p>Check out our other articles about cooking and travel.</p>
+<p>More newsletter signup prompts here.</p>
+</article></body></html>"#;
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            focus: Some("rust ownership borrowing".into()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        r.markdown.contains("dropped by focus:"),
+        "manifest missing: {}",
+        r.markdown
+    );
+    assert!(r.markdown.contains("blocks"));
+}
+
+#[test]
+fn v3_dropped_manifest_absent_without_focus() {
+    let html = r#"<html><body><article>
+<h1>Guide</h1><p>Some content here.</p><p>More content.</p>
+</article></body></html>"#;
+    let r = extract_html_opts(html, &ExtractOptions::default());
+    assert!(!r.markdown.contains("dropped by focus:"));
+}
+
+// ── v3: toc section IDs + sizes, section by ID ───────────────
+
+#[test]
+fn v3_section_by_id_targets_nth_heading() {
+    let html = r#"<html><body><article>
+<h1>Main</h1><p>intro</p>
+<h2>Alpha</h2><p>alpha content</p>
+<h2>Beta</h2><p>beta content marker_zq1</p>
+</article></body></html>"#;
+    // s3 = "Beta" (1-based across ALL headings in order)
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            section: Some("s3".into()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        r.markdown.contains("beta content marker_zq1"),
+        "section-by-id missed: {}",
+        r.markdown
+    );
+    assert!(!r.markdown.contains("alpha content"));
+}
+
+#[test]
+fn v3_section_by_name_still_works() {
+    let html = r#"<html><body><article>
+<h1>Main</h1><p>intro</p>
+<h2>Alpha</h2><p>alpha content</p>
+</article></body></html>"#;
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            section: Some("alpha".into()),
+            ..Default::default()
+        },
+    );
+    assert!(r.markdown.contains("alpha content"));
+}
+
+// ── v3: probe mode ───────────────────────────────────────────
+
+#[test]
+fn v3_probe_substring_match_and_miss() {
+    let html = r#"<html><body><article>
+<h1>Advisory</h1>
+<p>The CVE-2026-1234 vulnerability was patched in version 2.3.1.</p>
+<p>Unrelated paragraph about weather and sunshine.</p>
+</article></body></html>"#;
+    let base = ExtractOptions {
+        must_contain: Some("cve-2026-1234".into()),
+        ..Default::default()
+    };
+    let r = extract_html_opts(html, &base);
+    assert!(r.markdown.starts_with("probe: MATCH"), "{}", r.markdown);
+    assert!(r.markdown.contains("[1]"), "{}", r.markdown);
+    assert!(
+        r.markdown.len() < 400,
+        "probe output too big: {}",
+        r.markdown.len()
+    );
+    // No-hit case
+    let miss = extract_html_opts(
+        html,
+        &ExtractOptions {
+            must_contain: Some("definitely-not-there".into()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        miss.markdown.starts_with("probe: NO MATCH"),
+        "{}",
+        miss.markdown
+    );
+}
+
+#[test]
+fn v3_probe_regex_mode() {
+    let html = r#"<html><body><article>
+<p>Fixed CVE-2026-1111 and CVE-2026-9999 in this release.</p>
+</article></body></html>"#;
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            must_contain: Some("/CVE-2026-\\d{4}/".into()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        r.markdown.starts_with("probe: MATCH — 2 hits"),
+        "{}",
+        r.markdown
+    );
+}
+
+#[test]
+fn v3_probe_invalid_regex_is_honest_not_panic() {
+    let html = r#"<html><body><p>text</p></body></html>"#;
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            must_contain: Some("/([unclosed/".into()),
+            ..Default::default()
+        },
+    );
+    assert!(r.markdown.contains("invalid regex"), "{}", r.markdown);
 }

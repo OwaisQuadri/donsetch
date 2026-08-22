@@ -133,6 +133,7 @@ fn extract_permalink(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Ext
         lang: "en".to_string(),
         quality: 0.9,
         pdf_pages: None,
+        images: Vec::new(),
     })
 }
 
@@ -366,6 +367,7 @@ fn extract_thread(
         lang: "en".to_string(),
         quality: 0.95,
         pdf_pages: None,
+        images: Vec::new(),
     })
 }
 

@@ -188,6 +188,11 @@ pub fn render(meta: &Meta, url: &str, kept: &[&Block], opts: &super::ExtractOpti
                 out.push('\n');
             }
             Block::Media { alt, src, .. } => {
+                // Token war: media lines are opt-in. (Segmentation
+                // still records them for on-demand OCR.)
+                if !opts.include_media {
+                    continue;
+                }
                 emit_path(
                     &mut out,
                     block.path(),

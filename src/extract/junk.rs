@@ -198,6 +198,41 @@ pub fn negative(el: ElementRef<'_>) -> bool {
     is_negative(el.value())
 }
 
+/// Hard structural negative: the element's ID is a layout-region
+/// name (footer, sidebar, nav...). Unlike classes — where
+/// "fixed-sidebar" may style the main wrapper — an id IS the
+/// region. Such containers are never the main article, at any
+/// size (xkcd's 1000-char id="bottom" link farm outranked the
+/// comic itself).
+pub fn structural_negative(el: &scraper::node::Element) -> bool {
+    let Some(id) = el.id() else {
+        return false;
+    };
+    matches!(
+        id.to_lowercase().as_str(),
+        "footer"
+            | "bottom"
+            | "sidebar"
+            | "aside"
+            | "nav"
+            | "navbar"
+            | "menu"
+            | "header"
+            | "masthead"
+            | "breadcrumb"
+            | "top"
+            | "topleft"
+            | "topLeft"
+            | "leftnav"
+            | "rightnav"
+            | "sitemap"
+            | "copyright"
+            | "legal"
+            | "disclaimer"
+            | "branding"
+    )
+}
+
 /// Visible text length of a subtree, early-exit at `cap`.
 /// Used to size-gate negative skips: real junk is small;
 /// a "negative" class on a huge container is a false hit.

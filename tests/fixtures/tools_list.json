@@ -1,1 +1,197 @@
-{"tools":[{"description":"Fetch one URL as clean markdown — use when you have a specific URL to read. For finding URLs, use web_search; for multi-page sites, use web_crawl.\n\nAuto-escalation: fast HTTP first; on bot-wall or JS-only page, opens a headless browser, solves the challenge, downgrades back. PDFs auto-detected (content-type or magic bytes) and parsed by DonSheet — text extraction + OCR for scanned pages, up to 100MB. Non-HTML (JSON/XML/text) passes through.\n\nPage interaction (actions): pass actions=[{...}] to click, type, press, scroll, or wait inside the real page before extraction — form submits, search boxes, load-more buttons, lazy-load scrolls. Deterministic waits (wait_selector/wait_text) beat blind sleeps. After actions, extraction runs normally (focus/section/toc apply).\n\nLong-page workflow: toc=true → heading outline, then section=\"heading\" → that section only. Or use focus to get relevant blocks.\n\nPagination: if structuredContent.next_offset is present, call again with offset=that value.\n\nResponse: content[0].text = markdown; structuredContent = {status, tier, verdict, content_ok, thin, content_kind, quality (0-1), lang, title, byline, published, site, blocks_shown, blocks_total, total_chars, next_offset, tokens_est, escalation (what was tried, per-step with ms), pdf ({pages, per_page:[{page,chars,ocr,confidence}]} for PDFs), actions (per-step results when actions used), url}. content_ok=false or thin=true = content may be a JS shell. content_kind: Article|Listing|Forum|Docs|Table|Page. isError=true on failure with structuredContent {url, status, verdict, next_action, escalation} — next_action tells you exactly what to do next.","inputSchema":{"properties":{"actions":{"description":"Browser steps to run BEFORE extraction — page control inside fetch: [{\"do\":\"click\",\"selector\":\"#load-more\"},{\"do\":\"type\",\"selector\":\"input[q]\",\"text\":\"query\"},{\"do\":\"press\",\"key\":\"Enter\"},{\"do\":\"wait_text\",\"text\":\"results\"}]. Steps: wait {ms}, wait_selector {selector,timeout_ms}, wait_text {text,timeout_ms}, click {selector OR text}, hover, type {selector?,text}, press {key: Enter|Tab|Escape|Backspace|ArrowDown|...}, scroll {to: top|bottom|down | px}. Max 16 steps. Actions run in the headless browser (tier auto/2, never 1); after them the page is extracted normally — focus/section/toc still apply. First failing step aborts honestly with per-step results in structuredContent.actions; fix that step and re-run.","items":{"type":"object"},"type":"array"},"focus":{"description":"Relevance query — returns ONLY blocks relevant to your question, cutting tokens 50-80% on long pages. Hybrid keyword + semantic matching catches blocks with different vocabulary than your query. If nothing matches, returns full page with a notice. ALWAYS set when you know what you're looking for — #1 token saver.","type":"string"},"links":{"description":"Include [text](url) link URLs. Default false — saves ~30% tokens. Enable only when you need the URLs.","type":"boolean"},"max_chars":{"description":"Max markdown chars (default 16000). Truncated pages include next_offset for resumption.","type":"integer"},"media":{"description":"Include image alt text and sources. Default false.","type":"boolean"},"offset":{"description":"Resume from a previous response's next_offset to continue a truncated page.","type":"integer"},"section":{"description":"Heading name (substring, case-insensitive) — return only that section. Use after toc to target a specific part.","type":"string"},"selector":{"description":"CSS selector — extract only from matching elements. Narrows scope precisely.","type":"string"},"shot":{"description":"File path — saves a PNG screenshot when blocked by interactive captcha. Only fires on captcha walls; not a general screenshot tool.","type":"string"},"tier":{"description":"auto (default, always use for real work): HTTP first, auto-escalates to headless browser on bot-walls/JS-shells, auto-detects and parses PDFs. \"1\" (testing): HTTP only, no browser — fails on JS sites. \"2\" (testing): browser directly — slower, skips HTTP entirely.","enum":["auto","1","2"],"type":"string"},"toc":{"description":"true = heading outline only, no body text. Read structure first, then target with section or focus.","type":"boolean"},"url":{"description":"http(s) URL to fetch.","type":"string"}},"required":["url"],"type":"object"},"name":"web_fetch"},{"description":"Web search — returns URLs + titles + short snippets. Use to discover WHAT to fetch, not to read content (use web_fetch for content). Multi-engine (independent indexes + Bing family) fused by cross-engine consensus + semantic reranking (automatic, no config). Keyless verticals: GitHub, Wikipedia, HN, Scholar, news, StackExchange, MDN.\n\nBYOK: if external search providers (Tavily, Exa, Serper, TinyFish) are configured via `donsetch keys`, the local engine is bypassed and the configured provider handles search. structuredContent.provider shows which provider was used (null = local engine). Falls back to local engine if all provider keys are exhausted.\n\nResponse: content[0].text = numbered markdown list (N. **Title** — domain / snippet / URL). structuredContent = {intent, weak, cached, elapsed_ms, provider, results: [{title, url, snippet, score, consensus, engines}], engines: [{engine, status, hits, ms}]}.\n\nKey signals: weak=true = low cross-engine consensus, treat with care. consensus = how many independent engines returned this URL (higher = more authoritative). engines[].status shows per-engine health (ok|blocked:NNN|timeout|no-results). provider = which search provider was used (null = local keyless engine).\n\nAfter search, use fetch on the best URL(s) to get actual content.","inputSchema":{"properties":{"intent":{"description":"auto (default) detects from query. code: adds GitHub, HN, StackExchange, MDN verticals. paper: adds Scholar, arXiv. news: adds Google News, HN. entity: adds Wikipedia. web: general only.","enum":["auto","web","code","paper","news","entity"],"type":"string"},"max_results":{"description":"Max results (default 7, max 12). The most relevant results almost always live in the top 7. Increase only when results are weak.","type":"integer"},"query":{"description":"Search query.","type":"string"}},"required":["query"],"type":"object"},"name":"web_search"},{"description":"Crawl an entire site from a seed URL — for multi-page extraction (docs, API refs, wikis). For a single page, use web_fetch; for finding pages across the web, use web_search.\n\nTwo-phase: sitemap discovery first (cheap URL inventory), then fetch focus-ranked pages as markdown. Adaptive pacing per host prevents rate-limit triggers.\n\nModes: full (default) = sitemap map + content. map = URL inventory only (very cheap, no content — use to see what a site has before committing). content = skip sitemap, BFS from seed (use when sitemap is missing or map returns empty).\n\nIf no sitemap is found, map mode returns guidance to use mode=content.\n\nPDF pages: auto-detected and extracted (same engine as web_fetch). Not skipped.\n\nBudget control: focus (topic) ranks pages by hybrid keyword + semantic relevance and crawls only matching ones — essential for large sites. Set it whenever you have a specific topic in mind. max_pages, max_total_chars, deadline_s cap the crawl. Resume tokens let you continue large crawls across calls.\n\nResponse: content[0].text = map (if any) + pages as markdown. structuredContent = {seed, pages: [{url, title, kind, chars, quality}], map, queued, filtered_out, skipped: [{url, reason}], stop, elapsed_s, resume}.\n\nstop = why crawl stopped: FrontierEmpty (done), MaxPages|CharBudget|DepthLimit|Deadline (budget — use resume to continue), ThrottledOut (site blocked you — wait and resume). resume = token to continue when stopped by budget/deadline. quality = 0.0-1.0 content trust per page.","inputSchema":{"properties":{"deadline_s":{"description":"Hard crawl deadline in seconds (default 120, range 5-600). Partial results return after.","type":"integer"},"exclude_paths":{"description":"Path globs to exclude (e.g. [\"*/tags/*\", \"*/archive/*\"]).","items":{"type":"string"},"type":"array"},"focus":{"description":"Relevance query — rank pages by relevance and crawl only matching ones. Uses hybrid keyword + semantic matching. Essential for large sites; without it the crawl wastes budget on noise. Set this whenever you have a specific topic in mind.","type":"string"},"include_paths":{"description":"Path globs to include (e.g. [\"/docs/*\"]). Empty = all.","items":{"type":"string"},"type":"array"},"max_depth":{"description":"Max link depth from seed (default 2). 0 = seed only.","type":"integer"},"max_pages":{"description":"Max pages to fetch+extract (default 10, cap 200).","type":"integer"},"max_total_chars":{"description":"Total extracted-char budget across all pages (default 60000, range 4000-500000).","type":"integer"},"mode":{"description":"full (default): sitemap map + content. map: URL inventory only (very cheap). content: skip sitemap, BFS from seed.","enum":["full","map","content"],"type":"string"},"per_page_max":{"description":"Max markdown chars per page (default 8000, range 400-40000).","type":"integer"},"respect_robots":{"description":"Obey robots.txt Disallow + crawl-delay (default true).","type":"boolean"},"resume":{"description":"Resume token from a previous response to continue a stopped crawl. Valid for 30 min.","type":"string"},"same_host":{"description":"Stay on seed's host (default true). false = follow cross-domain links.","type":"boolean"},"url":{"description":"Seed http(s) URL to crawl from.","type":"string"}},"required":["url"],"type":"object"},"name":"web_crawl"}]}
+{
+  "tools": [
+    {
+      "description": "Fetch one URL as clean markdown — use when you have a specific URL to read. For finding URLs, use web_search; for multi-page sites, use web_crawl.\n\nAuto-escalation: fast HTTP first; on bot-wall or JS-only page, opens a headless browser, solves the challenge, downgrades back. PDFs auto-detected (content-type or magic bytes) and parsed by DonSheet — text extraction + OCR for scanned pages, up to 100MB. Non-HTML (JSON/XML/text) passes through.\n\nPage interaction (actions): pass actions=[{...}] to click, type, press, scroll, or wait inside the real page before extraction — form submits, search boxes, load-more buttons, lazy-load scrolls. Deterministic waits (wait_selector/wait_text) beat blind sleeps. After actions, extraction runs normally (focus/section/toc apply).\n\nLong-page workflow: toc=true → heading outline, then section=\"heading\" → that section only. Or use focus to get relevant blocks.\n\nPagination: if structuredContent.next_offset is present, call again with offset=that value.\n\nResponse: content[0].text = markdown; structuredContent = {status, tier, verdict, content_ok, thin, content_kind, quality (0-1), lang, title, byline, published, site, blocks_shown, blocks_total, total_chars, next_offset, tokens_est, escalation (what was tried, per-step with ms), pdf ({pages, per_page:[{page,chars,ocr,confidence}]} for PDFs), actions (per-step results when actions used), url}. content_ok=false or thin=true = content may be a JS shell. content_kind: Article|Listing|Forum|Docs|Table|Page. isError=true on failure with structuredContent {url, status, verdict, next_action, escalation} — next_action tells you exactly what to do next.",
+      "inputSchema": {
+        "properties": {
+          "actions": {
+            "description": "Browser steps to run BEFORE extraction — page control inside fetch: [{\"do\":\"click\",\"selector\":\"#load-more\"},{\"do\":\"type\",\"selector\":\"input[q]\",\"text\":\"query\"},{\"do\":\"press\",\"key\":\"Enter\"},{\"do\":\"wait_text\",\"text\":\"results\"}]. Steps: wait {ms}, wait_selector {selector,timeout_ms}, wait_text {text,timeout_ms}, click {selector OR text}, hover, type {selector?,text}, press {key: Enter|Tab|Escape|Backspace|ArrowDown|...}, scroll {to: top|bottom|down | px}. Max 16 steps. Actions run in the headless browser (tier auto/2, never 1); after them the page is extracted normally — focus/section/toc still apply. First failing step aborts honestly with per-step results in structuredContent.actions; fix that step and re-run.",
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "budget_tokens": {
+            "description": "Batch mode (array url): total output token budget shared across all results (200-500k). DonSeTch allocates it across pages by size — small pages stay whole, big ones get sliced with a resume note. Without it each page uses max_chars independently.",
+            "type": "integer"
+          },
+          "focus": {
+            "description": "Relevance query — returns ONLY blocks relevant to your question, cutting tokens 50-80% on long pages. Hybrid keyword + semantic matching catches blocks with different vocabulary than your query. If nothing matches, returns full page with a notice. ALWAYS set when you know what you're looking for — #1 token saver.",
+            "type": "string"
+          },
+          "image_text": {
+            "description": "OCR the page's content images (up to 4) and append an 'image text' section. For infographics/comics/screenshots whose meaning IS the image. Costs extra fetch+compute — only when image content matters.",
+            "type": "boolean"
+          },
+          "links": {
+            "description": "Include [text](url) link URLs. Default false — saves ~30% tokens. Enable only when you need the URLs.",
+            "type": "boolean"
+          },
+          "max_chars": {
+            "description": "Max markdown chars (default 16000). Truncated pages include next_offset for resumption.",
+            "type": "integer"
+          },
+          "media": {
+            "description": "Include image alt text and sources. Default false.",
+            "type": "boolean"
+          },
+          "must_contain": {
+            "description": "Probe mode: verify the page mentions a string/pattern WITHOUT loading it into context. Output = MATCH/NO-MATCH verdict + up to 3 short context excerpts. Case-insensitive substring, or /regex/ (e.g. \"/CVE-2026-\\d+/\"). Full fetch still happens (tiers, walls, PDFs) — only the output collapses. For verification questions, not reading.",
+            "type": "string"
+          },
+          "offset": {
+            "description": "Resume from a previous response's next_offset to continue a truncated page.",
+            "type": "integer"
+          },
+          "section": {
+            "description": "Heading name (substring, case-insensitive) — return only that section. Use after toc to target a specific part.",
+            "type": "string"
+          },
+          "selector": {
+            "description": "CSS selector — extract only from matching elements. Narrows scope precisely.",
+            "type": "string"
+          },
+          "shot": {
+            "description": "File path — saves a PNG screenshot when blocked by interactive captcha. Only fires on captcha walls; not a general screenshot tool.",
+            "type": "string"
+          },
+          "tier": {
+            "description": "auto (default, always use for real work): HTTP first, auto-escalates to headless browser on bot-walls/JS-shells, auto-detects and parses PDFs. \"1\" (testing): HTTP only, no browser — fails on JS sites. \"2\" (testing): browser directly — slower, skips HTTP entirely.",
+            "enum": [
+              "auto",
+              "1",
+              "2"
+            ],
+            "type": "string"
+          },
+          "toc": {
+            "description": "true = heading outline only, no body text. Read structure first, then target with section or focus.",
+            "type": "boolean"
+          },
+          "url": {
+            "description": "URL to fetch: http(s) URL, a handle (L1/S2 from earlier results), or an array of up to 12 for one parallel batch call.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "string",
+              "array"
+            ]
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "name": "web_fetch"
+    },
+    {
+      "description": "Web search — returns URLs + titles + short snippets. Use to discover WHAT to fetch, not to read content (use web_fetch for content). Multi-engine (independent indexes + Bing family) fused by cross-engine consensus + semantic reranking (automatic, no config). Keyless verticals: GitHub, Wikipedia, HN, Scholar, news, StackExchange, MDN.\n\nBYOK: if external search providers (Tavily, Exa, Serper, TinyFish) are configured via `donsetch keys`, the local engine is bypassed and the configured provider handles search. structuredContent.provider shows which provider was used (null = local engine). Falls back to local engine if all provider keys are exhausted.\n\nResponse: content[0].text = numbered markdown list (N. **Title** — domain / snippet / URL). structuredContent = {intent, weak, cached, elapsed_ms, provider, results: [{title, url, snippet, score, consensus, engines}], engines: [{engine, status, hits, ms}]}.\n\nKey signals: weak=true = low cross-engine consensus, treat with care. consensus = how many independent engines returned this URL (higher = more authoritative). engines[].status shows per-engine health (ok|blocked:NNN|timeout|no-results). provider = which search provider was used (null = local keyless engine).\n\nAfter search, use fetch on the best URL(s) to get actual content.",
+      "inputSchema": {
+        "properties": {
+          "intent": {
+            "description": "auto (default) detects from query. code: adds GitHub, HN, StackExchange, MDN verticals. paper: adds Scholar, arXiv. news: adds Google News, HN. entity: adds Wikipedia. web: general only.",
+            "enum": [
+              "auto",
+              "web",
+              "code",
+              "paper",
+              "news",
+              "entity"
+            ],
+            "type": "string"
+          },
+          "max_results": {
+            "description": "Max results (default 7, max 12). The most relevant results almost always live in the top 7. Increase only when results are weak.",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Search query.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "web_search"
+    },
+    {
+      "description": "Crawl an entire site from a seed URL — for multi-page extraction (docs, API refs, wikis). For a single page, use web_fetch; for finding pages across the web, use web_search.\n\nTwo-phase: sitemap discovery first (cheap URL inventory), then fetch focus-ranked pages as markdown. Adaptive pacing per host prevents rate-limit triggers.\n\nModes: full (default) = sitemap map + content. map = URL inventory only (very cheap, no content — use to see what a site has before committing). content = skip sitemap, BFS from seed (use when sitemap is missing or map returns empty).\n\nIf no sitemap is found, map mode returns guidance to use mode=content.\n\nPDF pages: auto-detected and extracted (same engine as web_fetch). Not skipped.\n\nBudget control: focus (topic) ranks pages by hybrid keyword + semantic relevance and crawls only matching ones — essential for large sites. Set it whenever you have a specific topic in mind. max_pages, max_total_chars, deadline_s cap the crawl. Resume tokens let you continue large crawls across calls.\n\nResponse: content[0].text = map (if any) + pages as markdown. structuredContent = {seed, pages: [{url, title, kind, chars, quality}], map, queued, filtered_out, skipped: [{url, reason}], stop, elapsed_s, resume}.\n\nstop = why crawl stopped: FrontierEmpty (done), MaxPages|CharBudget|DepthLimit|Deadline (budget — use resume to continue), ThrottledOut (site blocked you — wait and resume). resume = token to continue when stopped by budget/deadline. quality = 0.0-1.0 content trust per page.",
+      "inputSchema": {
+        "properties": {
+          "deadline_s": {
+            "description": "Hard crawl deadline in seconds (default 120, range 5-600). Partial results return after.",
+            "type": "integer"
+          },
+          "exclude_paths": {
+            "description": "Path globs to exclude (e.g. [\"*/tags/*\", \"*/archive/*\"]).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "focus": {
+            "description": "Relevance query — rank pages by relevance and crawl only matching ones. Uses hybrid keyword + semantic matching. Essential for large sites; without it the crawl wastes budget on noise. Set this whenever you have a specific topic in mind.",
+            "type": "string"
+          },
+          "include_paths": {
+            "description": "Path globs to include (e.g. [\"/docs/*\"]). Empty = all.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "max_depth": {
+            "description": "Max link depth from seed (default 2). 0 = seed only.",
+            "type": "integer"
+          },
+          "max_pages": {
+            "description": "Max pages to fetch+extract (default 10, cap 200).",
+            "type": "integer"
+          },
+          "max_total_chars": {
+            "description": "Total extracted-char budget across all pages (default 60000, range 4000-500000).",
+            "type": "integer"
+          },
+          "mode": {
+            "description": "full (default): sitemap map + content. map: URL inventory only (very cheap). content: skip sitemap, BFS from seed.",
+            "enum": [
+              "full",
+              "map",
+              "content"
+            ],
+            "type": "string"
+          },
+          "per_page_max": {
+            "description": "Max markdown chars per page (default 8000, range 400-40000).",
+            "type": "integer"
+          },
+          "respect_robots": {
+            "description": "Obey robots.txt Disallow + crawl-delay (default true).",
+            "type": "boolean"
+          },
+          "resume": {
+            "description": "Resume token from a previous response to continue a stopped crawl. Valid for 30 min.",
+            "type": "string"
+          },
+          "same_host": {
+            "description": "Stay on seed's host (default true). false = follow cross-domain links.",
+            "type": "boolean"
+          },
+          "url": {
+            "description": "Seed http(s) URL to crawl from.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "name": "web_crawl"
+    }
+  ]
+}

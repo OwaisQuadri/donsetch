@@ -823,6 +823,7 @@ dependencies = [
  "ndarray",
  "oar-ocr",
  "ort",
+ "regex",
  "reqwest",
  "rustls-native-certs",
  "scraper",

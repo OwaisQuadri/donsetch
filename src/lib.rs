@@ -22,6 +22,7 @@ pub mod error;
 pub mod extract;
 pub mod fetch;
 pub mod ghost;
+pub mod handles;
 pub mod mcp;
 pub mod memory;
 pub mod paths;
