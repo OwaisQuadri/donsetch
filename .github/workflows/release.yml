@@ -55,7 +55,9 @@ jobs:
           - name: darwin-x64
             os: macos-15-intel
             target: x86_64-apple-darwin
-            features: --features ocr,rerank
+            # ort-sys ships no prebuilt ONNX Runtime for x86_64-apple-darwin —
+            # core build (same trade-off as linux-arm64).
+            features: ''
           - name: win32-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc

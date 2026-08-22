@@ -222,7 +222,8 @@ mod imp {
 
     pub fn run_ocr(bitmap: &PageBitmap, kind: &RecKind) -> Result<Vec<super::OcrLine>, String> {
         let mut rgb = Vec::with_capacity(bitmap.w * bitmap.h * 3);
-        for px in bitmap.buf.chunks_exact(4) {
+        for i in 0..bitmap.buf.len() / 4 {
+            let px = &bitmap.buf[i * 4..i * 4 + 4];
             rgb.push(px[2]);
             rgb.push(px[1]);
             rgb.push(px[0]);

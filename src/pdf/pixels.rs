@@ -27,7 +27,8 @@ impl PageBitmap {
     pub fn ink_mask(&self) -> InkMask {
         let mut buf = vec![0u8; self.w * self.h];
         debug_assert_eq!(self.buf.len(), self.w * self.h * 4);
-        for (i, px) in self.buf.chunks_exact(4).enumerate() {
+        for i in 0..self.buf.len() / 4 {
+            let px = &self.buf[i * 4..i * 4 + 4];
             // BGRA order from PDFium.
             let (b, g, r) = (px[0] as u32, px[1] as u32, px[2] as u32);
             let lum = (114 * b + 587 * g + 299 * r) / 1000; // 0..=255

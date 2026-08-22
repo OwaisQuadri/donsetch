@@ -31,7 +31,7 @@ The polish & reliability release: one daemon-crashing charset bug fixed (#35), f
 
 - **Windows browser discovery** now probes Microsoft Edge install directories (often the only CDP-capable browser on a stock Windows box — its directory is never on PATH), per-user Chromium, and the Playwright cache. Ghost escalation, browser actions, and `doctor` work on default Windows installs.
 
-- **macOS Intel (darwin-x64) supported end-to-end**: prebuilt binaries now build in CI (native `macos-15-intel` runner), `npm install` accepts the platform, and self-update maps it correctly.
+- **macOS Intel (darwin-x64) supported end-to-end**: prebuilt binaries now build in CI (native `macos-15-intel` runner), `npm install` accepts the platform, and self-update maps it correctly. Core build (no OCR/rerank — `ort-sys` ships no prebuilt ONNX Runtime for Intel macOS; same trade-off as Linux ARM64).
 
 - **npm install.js hardened**: musl (Alpine) systems are detected up front with an honest "glibc-linked binary will not run" error instead of a deferred cryptic spawn failure; `tar` presence is checked on Windows before downloading; stale/truncated leftover binaries (< 1 MiB) are re-fetched instead of shadowing a fresh install; extraction is verified before chmod.
 
