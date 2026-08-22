@@ -166,7 +166,8 @@ pub fn parse(engine: &str, html: &str) -> Vec<Hit> {
     // r.search.yahoo.com redirects, bing.com/ck/a stubs).
     hits.retain(|h| !is_serp_url(&h.url));
     if hits.is_empty() && std::env::var_os("DONSEEK_DEBUG").is_some() {
-        let dump = format!("/tmp/donseek_debug_{engine}.html");
+        let dump = std::env::temp_dir().join(format!("donseek_debug_{engine}.html"));
+        let dump = dump.to_string_lossy().into_owned();
         let _ = std::fs::write(&dump, html);
         eprintln!(
             "[donseek] {engine}: 0 hits, dumped {len} bytes to {dump}",

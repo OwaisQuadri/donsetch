@@ -10,9 +10,10 @@
 // uses the same release artifacts that manual users download.
 //
 // Supported platforms:
-//   linux-x64      Linux x86_64
-//   linux-arm64    Linux ARM64 (aarch64)
+//   linux-x64      Linux x86_64 (glibc)
+//   linux-arm64    Linux ARM64 (glibc)
 //   darwin-arm64   macOS Apple Silicon
+//   darwin-x64     macOS Intel
 //   win32-x64      Windows x86_64
 
 const https = require('https');
@@ -30,6 +31,7 @@ const PLATFORMS = {
   'linux-x64':    { asset: 'donsetch-linux-x64.tar.gz',    binary: 'donsetch'     },
   'linux-arm64':  { asset: 'donsetch-linux-arm64.tar.gz',  binary: 'donsetch'     },
   'darwin-arm64': { asset: 'donsetch-darwin-arm64.tar.gz', binary: 'donsetch'     },
+  'darwin-x64':   { asset: 'donsetch-darwin-x64.tar.gz',   binary: 'donsetch'     },
   'win32-x64':    { asset: 'donsetch-win32-x64.tar.gz',    binary: 'donsetch.exe' },
 };
 
@@ -37,25 +39,56 @@ const platKey = `${process.platform}-${process.arch}`;
 const plat = PLATFORMS[platKey];
 
 if (!plat) {
-  console.error(`donsetch: unsupported platform ${platKey}`);
+  const known = {
+    'darwin-x64': 'prebuilt binaries exist — update donsetch to a version that ships one',
+    'win32-arm64': 'no prebuilt binary yet — build from source (see below)',
+  }[platKey];
+  console.error(`donsetch: unsupported platform ${platKey}${known ? ` (${known})` : ''}`);
   console.error('');
   console.error('Supported platforms:');
-  console.error('  linux-x64      Linux x86_64');
-  console.error('  linux-arm64    Linux ARM64 (aarch64)');
+  console.error('  linux-x64      Linux x86_64 (glibc)');
+  console.error('  linux-arm64    Linux ARM64 (glibc)');
   console.error('  darwin-arm64   macOS Apple Silicon');
+  console.error('  darwin-x64     macOS Intel');
   console.error('  win32-x64      Windows x86_64');
   console.error('');
   console.error('Build from source: https://github.com/' + REPO);
   process.exit(1);
 }
 
+// ── musl detection (Alpine etc.) ────────────────────────────────
+// The Linux binaries are glibc-linked. On musl systems they install
+// fine but can never exec (missing ld-linux loader) — fail HERE with
+// the actual cause instead of a cryptic spawn error on first run.
+if (process.platform === 'linux') {
+  const isMusl = fs.existsSync('/lib/ld-musl-x86_64.so.1')
+    || fs.existsSync('/lib/ld-musl-aarch64.so.1');
+  if (isMusl) {
+    console.error('donsetch: musl libc detected (Alpine?).');
+    console.error('The prebuilt Linux binaries are glibc-linked and will not run.');
+    console.error('');
+    console.error('Options:');
+    console.error('  - build from source: git clone https://github.com/' + REPO + ' && cargo build --release');
+    console.error('  - use a glibc-based image/dist (debian, ubuntu, fedora)');
+    process.exit(1);
+  }
+}
+
 const binDir = path.join(__dirname, 'binaries');
 const binaryPath = path.join(binDir, plat.binary);
 
-// Skip if already installed (npm cache reuse, reinstall, etc.)
+// Skip if already installed (npm cache reuse, reinstall, etc.).
+// A plausibility check first: a stale 0-byte or truncated leftover
+// (killed install, crashed download) must not shadow a fresh one.
 if (fs.existsSync(binaryPath)) {
-  console.log(`donsetch: binary already present (${plat.binary})`);
-  process.exit(0);
+  let size = 0;
+  try { size = fs.statSync(binaryPath).size; } catch (_) {}
+  if (size > 1024 * 1024) {
+    console.log(`donsetch: binary already present (${plat.binary})`);
+    process.exit(0);
+  }
+  console.log(`donsetch: leftover ${plat.binary} is ${size} bytes — re-downloading`);
+  try { fs.unlinkSync(binaryPath); } catch (_) {}
 }
 
 fs.mkdirSync(binDir, { recursive: true });
@@ -110,6 +143,19 @@ async function main() {
   const tarball = path.join(binDir, plat.asset);
   const checksumFile = path.join(binDir, 'checksum.sha256');
 
+  // 0. Windows: tar ships with Windows 10 1803+; older boxes lack it.
+  //    Detect BEFORE downloading so the error names the real problem.
+  if (process.platform === 'win32') {
+    let hasTar = false;
+    try { execFileSync('tar', ['--version'], { stdio: 'ignore' }); hasTar = true; } catch (_) {}
+    if (!hasTar) {
+      console.error('donsetch: `tar` not found on this Windows system.');
+      console.error('tar ships with Windows 10 1803+. Update Windows, or extract manually');
+      console.error('after downloading ' + assetUrl);
+      process.exit(1);
+    }
+  }
+
   // 1. Download the binary tarball
   console.log(`donsetch: downloading ${plat.asset} from ${TAG}...`);
   await download(assetUrl, tarball);
@@ -142,17 +188,18 @@ async function main() {
   try { fs.unlinkSync(tarball); } catch (_) {}
   try { fs.unlinkSync(checksumFile); } catch (_) {}
 
-  // 6. Make executable (Unix only)
-  if (process.platform !== 'win32') {
-    fs.chmodSync(binaryPath, 0o755);
-  }
-
-  // 7. Verify the binary exists after extraction
+  // 6. Verify the binary exists after extraction (BEFORE chmod —
+  //    chmod on a missing file throws an opaque error).
   if (!fs.existsSync(binaryPath)) {
     console.error(`donsetch: expected ${plat.binary} not found after extraction`);
     console.error(`  looked at: ${binaryPath}`);
     console.error('  contents of binaries/:', fs.readdirSync(binDir).join(', '));
     process.exit(1);
+  }
+
+  // 7. Make executable (Unix only)
+  if (process.platform !== 'win32') {
+    fs.chmodSync(binaryPath, 0o755);
   }
 
   console.log(`donsetch: installed ${plat.binary} to ${binaryPath}`);

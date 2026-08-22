@@ -202,9 +202,19 @@ fn extract_tag(block: &str, tag: &str) -> Option<String> {
 pub fn maybe_gunzip(body: &[u8]) -> Vec<u8> {
     if body.len() > 2 && body[0] == 0x1f && body[1] == 0x8b {
         use std::io::Read;
+        // Same 64 MiB cap as the fetch decompressor — a malicious
+        // .xml.gz sitemap must not OOM the daemon via unbounded
+        // decompression.
+        const MAX_SITEMAP_DECOMPRESSED: usize = 64 << 20;
         let mut out = Vec::new();
-        let mut dec = flate2::read::GzDecoder::new(body);
-        if dec.read_to_end(&mut out).is_ok() {
+        let dec = flate2::read::GzDecoder::new(body);
+        let mut limited = dec.take((MAX_SITEMAP_DECOMPRESSED + 1) as u64);
+        if limited.read_to_end(&mut out).is_ok() {
+            if out.len() > MAX_SITEMAP_DECOMPRESSED {
+                // Bomb: return the raw bytes; XML parse of gzip
+                // garbage fails honestly downstream.
+                return body.to_vec();
+            }
             return out;
         }
     }

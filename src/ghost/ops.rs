@@ -147,7 +147,12 @@ pub async fn solve(
                 clear_streak,
             );
             if start.elapsed() < Duration::from_millis(1600) {
-                eprintln!("[ghost] html: {}", &html[..html.len().min(1200)]);
+                // char-safe: byte 1200 can split a multi-byte char
+                let mut cut = html.len().min(1200);
+                while !html.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                eprintln!("[ghost] html: {}", &html[..cut]);
             }
         }
 

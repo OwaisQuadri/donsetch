@@ -112,18 +112,37 @@ async fn run_bulk_fetch(
     let results = futures_util::future::join_all(futures).await;
     if json_mode {
         let mut out = Vec::new();
-        let mut all_ok = true;
+        let mut worst = EXIT_OK;
+        let rank = |code: u8, worst: &mut u8| {
+            // transient(2) + walled(3) must not collapse to
+            // permanent(1): an agent gating on the exit code loses
+            // the retry distinction. Severity order: OK < walled <
+            // transient < permanent.
+            let sev = match code {
+                EXIT_OK => 0,
+                EXIT_WALLED => 1,
+                EXIT_TRANSIENT => 2,
+                _ => 3,
+            };
+            let cur = match *worst {
+                EXIT_OK => 0,
+                EXIT_WALLED => 1,
+                EXIT_TRANSIENT => 2,
+                _ => 3,
+            };
+            if sev > cur {
+                *worst = code;
+            }
+        };
         for (i, result) in results.iter().enumerate() {
             match result {
                 Ok(v) => {
                     let exit = exit_code_of(v);
-                    if exit != EXIT_OK {
-                        all_ok = false;
-                    }
+                    rank(exit, &mut worst);
                     out.push(render_json_envelope(v, &urls[i]));
                 }
                 Err((code, msg)) => {
-                    all_ok = false;
+                    rank(*code as u8, &mut worst);
                     out.push(json!({
                         "ok": false,
                         "url": urls[i],
@@ -134,7 +153,7 @@ async fn run_bulk_fetch(
         }
         let envelope = json!({"results": out});
         println!("{envelope}");
-        if all_ok { EXIT_OK } else { EXIT_PERMANENT }
+        worst
     } else {
         let mut worst_exit = EXIT_OK;
         for (i, result) in results.iter().enumerate() {

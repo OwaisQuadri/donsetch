@@ -29,7 +29,7 @@ pub fn run() {
         Ok(p) => p,
         Err(e) => {
             println!("\n  {} Cannot determine binary path: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -60,7 +60,7 @@ pub fn run() {
         println!();
         println!("  {} No backup found.", cli::icon_fail());
         println!("    Run `donsetch -u` to update first; a backup is saved automatically.");
-        return;
+        std::process::exit(1);
     }
 
     // ── Read backup version ──────────────────────────────────
@@ -79,7 +79,7 @@ pub fn run() {
             cli::icon_warn()
         );
         println!("    Nothing to roll back to.");
-        return;
+        std::process::exit(1);
     } else {
         cli::print_kv("backup", &bak_ver);
     }
@@ -90,7 +90,7 @@ pub fn run() {
         Ok(m) => m,
         Err(e) => {
             println!("\n  {} Cannot read backup: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -101,7 +101,7 @@ pub fn run() {
             bak_meta.len(),
         );
         println!("    Run `donsetch -u` to download a fresh copy.");
-        return;
+        std::process::exit(1);
     }
 
     // ── Swap ──────────────────────────────────────────────────
@@ -119,7 +119,7 @@ pub fn run() {
         // Copy backup to temp.
         if let Err(e) = std::fs::copy(&bak_path, &tmp).map_err(|e| e.to_string()) {
             println!("  {} Copy backup failed: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
 
         // Set executable.
@@ -128,14 +128,14 @@ pub fn run() {
         {
             let _ = std::fs::remove_file(&tmp);
             println!("  {} chmod failed: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
 
         // Save current as new backup (for roll-forward).
         if let Err(e) = std::fs::copy(&exe, &bak_path).map_err(|e| e.to_string()) {
             let _ = std::fs::remove_file(&tmp);
             println!("  {} Save current as backup failed: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
 
         // Write new backup version (the version we just rolled away from).
@@ -152,7 +152,7 @@ pub fn run() {
             {
                 println!("    Try: sudo donsetch --rollback");
             }
-            return;
+            std::process::exit(1);
         }
     }
 
@@ -168,7 +168,7 @@ pub fn run() {
         // Rename current running exe to temp.
         if let Err(e) = std::fs::rename(&exe, &tmp).map_err(|e| e.to_string()) {
             println!("  {} Rename current failed: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
 
         // Copy backup to exe path.

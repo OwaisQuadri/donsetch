@@ -8,7 +8,8 @@
 #   donsetch-linux-x64.tar.gz       (Linux x86_64)
 #   donsetch-linux-arm64.tar.gz     (Linux ARM64 / aarch64)
 #   donsetch-darwin-arm64.tar.gz    (macOS arm64)
-#   donsetch-win32-x64.zip          (Windows x86_64 + pdfium.dll)
+#   donsetch-darwin-x64.tar.gz      (macOS Intel)
+#   donsetch-win32-x64.tar.gz       (Windows x86_64 + pdfium.dll)
 #
 # Build steps mirror ci.yml exactly (same toolchain, same deps).
 # The only additions are: binary verification, packaging, checksums.
@@ -51,6 +52,10 @@ jobs:
             os: macos-latest
             target: aarch64-apple-darwin
             features: --features ocr,rerank
+          - name: darwin-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            features: --features ocr,rerank
           - name: win32-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -80,7 +85,7 @@ jobs:
         run: sudo apt-get update -o Acquire::Retries=5 && sudo apt-get install -y --no-install-recommends lld
 
       - name: Install NASM (macOS)
-        if: matrix.os == 'macos-latest'
+        if: startsWith(matrix.os, 'macos')
         run: brew install nasm
 
       - name: Install NASM (Windows)

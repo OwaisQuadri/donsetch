@@ -367,7 +367,10 @@ mod dev {
             }
             "shot" => {
                 let url = args.get(1).expect("usage: ghost shot <url> [path]");
-                let path = args.get(2).cloned().unwrap_or("/tmp/ghost.png".into());
+                let path = args
+                    .get(2)
+                    .cloned()
+                    .unwrap_or_else(|| std::env::temp_dir().join("ghost.png").to_string_lossy().into_owned());
                 let mut g = ghost::Ghost::launch(&profile, None).await.expect("launch");
                 g.navigate(url).await.expect("nav");
                 tokio::time::sleep(std::time::Duration::from_secs(4)).await;

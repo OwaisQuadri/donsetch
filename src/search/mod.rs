@@ -904,6 +904,15 @@ pub fn render_markdown(out: &SearchOutcome, query: &str) -> String {
     if out.weak {
         md.push_str("\n*weak results: low cross-engine consensus — treat with care*\n");
     }
+    // Zero hits is a success-shaped answer with nothing in it —
+    // tell the agent which levers exist instead of leaving it
+    // staring at an empty list.
+    if out.results.is_empty() {
+        md.push_str(
+            "\n*0 results — try a simpler query, a different intent (news/code/paper), \
+or add an API-key provider (`donsetch keys add`)*\n",
+        );
+    }
     let source = out.provider.as_deref().unwrap_or("local engine");
     md.push_str(&format!(
         "\n*{} results in {}ms via {}*\n",

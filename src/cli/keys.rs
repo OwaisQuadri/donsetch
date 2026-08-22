@@ -306,6 +306,7 @@ fn cmd_export(args: &[String]) {
                         "  {} exported {n_providers} providers ({n_keys} keys) to {path}",
                         green("\u{2713}")
                     );
+                    #[cfg(unix)]
                     println!(
                         "  {} file permissions set to 0600 (owner-only)",
                         dim("      ")

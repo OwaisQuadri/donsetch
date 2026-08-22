@@ -186,7 +186,9 @@ impl DynTable {
             let (n, v) = STATIC_TABLE[idx - 1];
             return Some((n.as_bytes().to_vec(), v.as_bytes().to_vec()));
         }
-        let dyn_idx = idx - STATIC_TABLE.len() - 1; // 0 = newest
+        let Some(dyn_idx) = idx.checked_sub(STATIC_TABLE.len() + 1) else {
+            return None; // hostile index 0 / protocol violation
+        }; // 0 = newest
         if dyn_idx < self.entries.len() {
             return Some(self.entries[self.entries.len() - 1 - dyn_idx].clone());
         }

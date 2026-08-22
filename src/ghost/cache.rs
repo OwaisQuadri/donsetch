@@ -373,8 +373,13 @@ impl GhostState {
                         std::fs::write(&tmp, &s).is_ok()
                     }
                 };
-                if write_ok {
-                    let _ = std::fs::rename(&tmp, &p);
+                if write_ok
+                    && let Err(e) = std::fs::rename(&tmp, &p)
+                {
+                    // e.g. antivirus lock on Windows: harvested
+                    // clearance cookies are lost this session — say
+                    // so instead of silently re-burning ghost solves.
+                    eprintln!("[ghost] cookie vault persist failed: {e}");
                 }
             }
         }

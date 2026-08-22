@@ -452,8 +452,20 @@ fn js_unescape(s: &str) -> String {
                 i = j + 1;
             }
             _ => {
-                out.push(b[j] as char);
-                i = j + 1;
+                // Unknown escape. If the byte after the backslash is
+                // a multi-byte UTF-8 lead, advancing to j+1 would land
+                // mid-character and the next `&s[i..end]` slice would
+                // panic on a hostile page (`\é` inside a flight
+                // frame) — copy the full char instead.
+                let ch_len = utf8_len(b[j]);
+                let end = (j + ch_len).min(b.len());
+                if ch_len == 1 {
+                    out.push(b[j] as char);
+                    i = j + 1;
+                } else {
+                    out.push_str(&s[j..end]);
+                    i = end;
+                }
             }
         }
     }
@@ -906,7 +918,7 @@ fn paginate(full: &str, opts: &ExtractOptions) -> (String, Option<usize>) {
     if offset >= chars.len() {
         return (String::new(), None);
     }
-    let end = (offset + max).min(chars.len());
+    let end = offset.saturating_add(max).min(chars.len());
     let slice: String = chars[offset..end].iter().collect();
     let next = if end < chars.len() { Some(end) } else { None };
     (slice, next)
@@ -938,6 +950,29 @@ mod tests {
         assert_eq!(js_unescape("\\\\ path"), "\\ path");
         assert_eq!(js_unescape("\\u00e9tude"), "étude");
         assert_eq!(js_unescape("plain"), "plain");
+    }
+
+    #[test]
+    fn js_unescape_backslash_before_multibyte_char() {
+        // Hostile/sloppy page: a literal backslash before a multi-byte
+        // UTF-8 char. The catch-all escape arm used to advance to a
+        // non-char-boundary index and panic on the next slice.
+        assert_eq!(js_unescape("\\é"), "é");
+        assert_eq!(js_unescape("\\末日乐园"), "末日乐园");
+        assert_eq!(js_unescape("a\\éb"), "aéb");
+        assert_eq!(js_unescape("\\🚀x"), "🚀x");
+    }
+
+    #[test]
+    fn paginate_huge_max_chars_no_panic() {
+        let full = "段落一\n\n段落二\n\n段落三".repeat(100);
+        let o = ExtractOptions {
+            max_chars: Some(usize::MAX - 5),
+            offset: 1,
+            ..opts()
+        };
+        let (slice, _) = paginate(&full, &o);
+        assert!(!slice.is_empty(), "saturating add must not wrap end < start");
     }
 
     #[test]

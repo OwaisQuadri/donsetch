@@ -209,7 +209,7 @@ impl ByokSearcher {
                     if std::env::var_os("DONSEEK_DEBUG").is_some() {
                         eprintln!(
                             "[byok] {provider} key={}... {}",
-                            &key[..key.len().min(8)],
+                            key.chars().take(8).collect::<String>(),
                             key_error
                         );
                     }

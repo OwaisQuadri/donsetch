@@ -838,12 +838,20 @@ fn paginate(text: &str, offset: usize, max_chars: usize) -> (String, Option<usiz
     // resuming. Agents who resume at offset=N should start at a
     // clean paragraph/heading boundary, not mid-sentence.
     if offset > 0 {
-        let search_end = (start + 500).min(text.len());
+        // Floor the window end to a char boundary — a mid-char
+        // offset into CJK text makes start+500 mid-character and
+        // the slice below would panic.
+        let mut search_end = start.saturating_add(500).min(text.len());
+        while !text.is_char_boundary(search_end) {
+            search_end -= 1;
+        }
         if let Some(pos) = text[start..search_end].find("\n\n") {
             start = start + pos + 2; // skip past the "\n\n"
         }
     }
-    let mut end = (start + max_chars).min(text.len());
+    // saturating: max_chars comes from tool args; a hostile/huge
+    // value must not wrap end below start (slice panic).
+    let mut end = start.saturating_add(max_chars).min(text.len());
     while !text.is_char_boundary(end) {
         end -= 1;
     }

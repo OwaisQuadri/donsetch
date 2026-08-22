@@ -507,7 +507,7 @@ fn paginate(full: &str, opts: &ExtractOptions) -> (String, Option<usize>) {
     if offset >= chars.len() {
         return (String::new(), None);
     }
-    let end = (offset + max).min(chars.len());
+    let end = offset.saturating_add(max).min(chars.len());
     let slice: String = chars[offset..end].iter().collect();
     let next = if end < chars.len() { Some(end) } else { None };
     (slice, next)

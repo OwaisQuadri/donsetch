@@ -57,7 +57,10 @@ child.on('exit', (code, signal) => {
   if (signal) {
     // Re-raise the signal so the parent's exit reflects it
     try { process.kill(process.pid, signal); } catch (_) {}
-    process.exit(128 + 15); // 128 + SIGTERM
+    // Fallback: exit code for the signal we actually received
+    // (SIGINT=2, SIGTERM=15, SIGHUP=1), not always SIGTERM's 143.
+    const sigNum = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGTERM: 15 }[signal] || 15;
+    process.exit(128 + sigNum);
   } else {
     process.exit(code || 0);
   }

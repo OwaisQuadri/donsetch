@@ -187,14 +187,41 @@ fn known_chrome_paths() -> Vec<PathBuf> {
 #[cfg(windows)]
 fn known_chrome_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(pf) = std::env::var_os("ProgramFiles") {
-        paths.push(PathBuf::from(&pf).join("Google\\Chrome\\Application\\chrome.exe"));
-    }
-    if let Some(pf) = std::env::var_os("ProgramFiles(x86)") {
-        paths.push(PathBuf::from(&pf).join("Google\\Chrome\\Application\\chrome.exe"));
+    // Chrome (system + per-user installs).
+    for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(pf) = std::env::var_os(var) {
+            paths.push(PathBuf::from(&pf).join("Google\\Chrome\\Application\\chrome.exe"));
+        }
     }
     if let Some(la) = std::env::var_os("LOCALAPPDATA") {
-        paths.push(PathBuf::from(&la).join("Google\\Chrome\\Application\\chrome.exe"));
+        let la = PathBuf::from(&la);
+        paths.push(la.join("Google\\Chrome\\Application\\chrome.exe"));
+        paths.push(la.join("Chromium\\Application\\chrome.exe"));
+        // Playwright cache (same layout as the Linux discovery):
+        // %LOCALAPPDATA%\\ms-playwright\\chromium-*\\chrome-win\\chrome.exe
+        let pw = la.join("ms-playwright");
+        if let Ok(entries) = std::fs::read_dir(&pw) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name.to_string_lossy().starts_with("chromium-") {
+                    let candidate = entry.path().join("chrome-win\\chrome.exe");
+                    if candidate.is_file() {
+                        paths.push(candidate);
+                    }
+                }
+            }
+        }
+    }
+    // Edge: Chromium-based and pre-installed on Windows — often the
+    // ONLY CDP-capable browser on a stock box. Its directory is never
+    // on PATH, so it must be probed explicitly.
+    if let Some(pfx86) = std::env::var_os("ProgramFiles(x86)") {
+        paths.push(
+            PathBuf::from(&pfx86).join("Microsoft\\Edge\\Application\\msedge.exe"),
+        );
+    }
+    if let Some(pf) = std::env::var_os("ProgramFiles") {
+        paths.push(PathBuf::from(&pf).join("Microsoft\\Edge\\Application\\msedge.exe"));
     }
     paths
 }

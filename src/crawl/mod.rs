@@ -53,11 +53,15 @@ pub struct GhostRender {
 }
 
 /// Injected ghost escalation hook. Takes a URL, returns
-/// rendered HTML + cookies on success, None on failure
-/// (captcha, timeout, launch error). The orchestrator calls
-/// it when a page is a JS shell (thin extraction) or a bot
-/// wall (Challenge verdict). Capped at 3 per crawl.
-pub type GhostHook = Arc<dyn Fn(String) -> BoxFuture<'static, Option<GhostRender>> + Send + Sync>;
+/// rendered HTML + cookies on success, Err(reason) on failure
+/// (captcha, timeout, launch error) — the reason flows into the
+/// crawl's skipped[] so the agent sees WHY the browser tier
+/// declined, not just that it did. The orchestrator calls it
+/// when a page is a JS shell (thin extraction) or a bot wall
+/// (Challenge verdict). Capped at 3 per crawl.
+pub type GhostHook = Arc<
+    dyn Fn(String) -> BoxFuture<'static, Result<GhostRender, String>> + Send + Sync,
+>;
 
 /// Pluggable fetch: real = DonShadow, tests = in-memory map.
 pub type PageFetcher =
@@ -712,8 +716,14 @@ impl Crawler {
                             && ghost_budget.load(Ordering::SeqCst) > 0
                         {
                             ghost_budget.fetch_sub(1, Ordering::SeqCst);
-                            if let Some(gp) = ghost_hook(item.url.clone()).await {
-                                ghost_html = Some(gp.html);
+                            match ghost_hook(item.url.clone()).await {
+                                Ok(gp) => ghost_html = Some(gp.html),
+                                Err(why) => {
+                                    skipped.lock().unwrap().push((
+                                        item.url.clone(),
+                                        format!("ghost escalation failed: {why}"),
+                                    ));
+                                }
                             }
                         }
                     }
@@ -863,17 +873,25 @@ impl Crawler {
                             && ghost_budget.load(Ordering::SeqCst) > 0
                         {
                             ghost_budget.fetch_sub(1, Ordering::SeqCst);
-                            if let Some(gp) = ghost_hook(item.url.clone()).await
-                                && let Ok(r2) = extract::extract(
-                                    gp.html.as_bytes(),
-                                    crate::extract::charset::GHOST_TEXT_CT,
-                                    &page_url,
-                                    &eo,
-                                )
-                                && !r2.thin
-                            {
-                                r = r2;
-                                ghost_html = Some(gp.html);
+                            match ghost_hook(item.url.clone()).await {
+                                Ok(gp) => {
+                                    if let Ok(r2) = extract::extract(
+                                        gp.html.as_bytes(),
+                                        crate::extract::charset::GHOST_TEXT_CT,
+                                        &page_url,
+                                        &eo,
+                                    ) && !r2.thin
+                                    {
+                                        r = r2;
+                                        ghost_html = Some(gp.html);
+                                    }
+                                }
+                                Err(why) => {
+                                    skipped.lock().unwrap().push((
+                                        item.url.clone(),
+                                        format!("ghost escalation failed: {why}"),
+                                    ));
+                                }
                             }
                         }
                     }

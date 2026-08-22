@@ -126,6 +126,9 @@ pub async fn run() {
 
     if f > 0 {
         println!("  Status: {}", cli::red("issues found"));
+        // Scripts gate on the exit code — doctor failing must not
+        // read as success.
+        std::process::exit(1);
     } else if w > 0 {
         println!("  Status: {}", cli::yellow("healthy with warnings"));
     } else {
@@ -338,7 +341,11 @@ async fn check_browser_launch() -> CheckResult {
         Ok(r) => r,
         Err(_) => CheckResult::Fail(
             "launch timed out after 40s".into(),
-            "A stale Chromium or Xvfb may be wedged: pkill -f chromium; rm -f /tmp/.X99-lock /tmp/.X11-unix/X99".into(),
+            if cfg!(target_os = "linux") {
+                "A stale Chromium or Xvfb may be wedged: pkill -f chromium; rm -f /tmp/.X99-lock /tmp/.X11-unix/X99".into()
+            } else {
+                "A stale Chromium may be wedged: close all browser windows / kill all chrome processes, then retry".into()
+            },
         ),
     }
 }

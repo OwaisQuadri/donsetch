@@ -1830,3 +1830,21 @@ fn hn_extractor_fires_on_live_thread_shape() {
         }
     }
 }
+
+// ════════════════════════════════════════════════════════════
+// 30. PAGINATE — HOSTILE ARGS MUST NOT PANIC
+// ════════════════════════════════════════════════════════════
+
+#[test]
+fn paginate_huge_offset_and_max_no_panic() {
+    // offset + max_chars == usize::MAX used to wrap end below start
+    // and panic on the slice. Saturating arithmetic must return the
+    // tail (offset near EOF → empty) without panicking.
+    let text = "段落一\n\n段落二\n\n段落三".repeat(50);
+    let (slice, next) = crate::extract::paginate_public(&text, 1, usize::MAX - 1);
+    assert!(!slice.is_empty());
+    assert_eq!(next, None);
+    let (empty, next2) = crate::extract::paginate_public(&text, text.len() + 10, 1000);
+    assert_eq!(empty, "");
+    assert_eq!(next2, None);
+}

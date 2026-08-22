@@ -106,14 +106,18 @@ pub fn parse(v: &Value) -> Result<Vec<Action>, String> {
                 .map(String::from)
         };
         let text = || obj.get("text").and_then(Value::as_str).map(String::from);
+        // Clamp agent-supplied durations: a typo'd hour-long wait
+        // would stall the tool call with no cancellation path.
+        // 30s per wait, 60s per selector/text poll ceiling.
         let timeout = || {
             obj.get("timeout_ms")
                 .and_then(Value::as_u64)
                 .unwrap_or(DEFAULT_WAIT_MS)
+                .min(60_000)
         };
         let a = match kind {
             "wait" => Action::Wait {
-                ms: obj.get("ms").and_then(Value::as_u64).unwrap_or(500),
+                ms: obj.get("ms").and_then(Value::as_u64).unwrap_or(500).min(30_000),
             },
             "wait_selector" => Action::WaitSelector {
                 selector: sel().ok_or(format!("actions[{i}] wait_selector needs \"selector\""))?,

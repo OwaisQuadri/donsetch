@@ -39,7 +39,7 @@ pub async fn run() {
         Ok(p) => p,
         Err(e) => {
             println!("\n  {} Cannot determine binary path: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -52,7 +52,7 @@ pub async fn run() {
         Ok(f) => f,
         Err(e) => {
             println!("\n  {} Fetcher init failed: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -65,7 +65,7 @@ pub async fn run() {
             spinner.stop();
             println!("  {} Could not check for updates: {e}", cli::icon_fail());
             println!("    Check your network connection and try again.");
-            return;
+            std::process::exit(1);
         }
     };
     spinner.stop();
@@ -104,7 +104,7 @@ pub async fn run() {
                 std::env::consts::OS,
                 std::env::consts::ARCH,
             );
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -137,12 +137,12 @@ pub async fn run() {
                 );
                 println!("    Build from source: cargo install --path .");
             }
-            return;
+            std::process::exit(1);
         }
         Err(e) => {
             spinner.stop();
             println!("  {} Download failed: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
     };
     spinner.stop();
@@ -164,11 +164,11 @@ pub async fn run() {
                 cli::icon_fail(),
                 out.status,
             );
-            return;
+            std::process::exit(1);
         }
         Err(e) => {
             println!("  {} Could not download SHA256: {e}", cli::icon_fail());
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -181,7 +181,7 @@ pub async fn run() {
             println!("    expected: {expected}");
             println!("    actual:   {actual}");
         }
-        return;
+        std::process::exit(1);
     }
     println!("  {} SHA256 verified", cli::icon_pass());
 
@@ -196,7 +196,7 @@ pub async fn run() {
         Err(e) => {
             println!("  {} Extraction failed: {e}", cli::icon_fail());
             let _ = std::fs::remove_dir_all(&temp_dir);
-            return;
+            std::process::exit(1);
         }
     };
     for f in &files {
@@ -220,7 +220,7 @@ pub async fn run() {
                 println!("    Try running as administrator");
             }
             let _ = std::fs::remove_dir_all(&temp_dir);
-            return;
+            std::process::exit(1);
         }
     }
 
@@ -370,7 +370,15 @@ fn replace_binary(exe: &Path, temp_dir: &Path) -> Result<(), String> {
 
         // Save backup (copy, not rename — keeps the original in place).
         let bak = exe_dir.join("donsetch.bak");
-        let _ = std::fs::copy(&exe, &bak);
+        if let Err(e) = std::fs::copy(&exe, &bak) {
+            // The atomic replace below is still checked; but if the
+            // backup copy failed, rollback will be impossible after
+            // the swap — the user must know BEFORE it happens.
+            println!(
+                "  {} Warning: backup copy failed ({e}) — rollback will not be possible for this update",
+                cli::icon_warn()
+            );
+        }
         // Write version metadata for rollback.
         let _ = std::fs::write(exe_dir.join("donsetch.bak.ver"), env!("CARGO_PKG_VERSION"));
 

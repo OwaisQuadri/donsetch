@@ -69,21 +69,21 @@ impl Daemon {
                     {
                         let s = state.lock().await;
                         if let Some(rc) = s.render_for(&url) {
-                            return Some(crate::crawl::GhostRender {
+                            return Ok(crate::crawl::GhostRender {
                                 html: rc.html.clone(),
                             });
                         }
                     }
                     let mut g = match ghost_mgr.acquire(&profile).await {
                         Ok(g) => g,
-                        Err(_) => return None,
+                        Err(e) => return Err(format!("browser launch: {e}")),
                     };
                     let page =
                         match ops::ghost_fetch(&mut g, &url, std::time::Duration::from_secs(20))
                             .await
                         {
                             Ok(p) => p,
-                            Err(_) => {
+                            Err(first) => {
                                 // Retry once on transient timeout.
                                 match ops::ghost_fetch(
                                     &mut g,
@@ -93,12 +93,14 @@ impl Daemon {
                                 .await
                                 {
                                     Ok(p) => p,
-                                    Err(_) => return None,
+                                    Err(second) => {
+                                        return Err(format!("render: {first}; retry: {second}"))
+                                    }
                                 }
                             }
                         };
                     if page.captcha {
-                        return None;
+                        return Err("interactive captcha (unsolvable by design)".to_string());
                     }
                     if !page.cookies.is_empty() {
                         fetcher.import_cookies(&page.cookies).await;
@@ -107,7 +109,7 @@ impl Daemon {
                         let mut s = state.lock().await;
                         s.record_render(&url, &page.html);
                     }
-                    Some(crate::crawl::GhostRender { html: page.html })
+                    Ok(crate::crawl::GhostRender { html: page.html })
                 }
                 .boxed()
             })
@@ -143,9 +145,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let writer = tokio::spawn(async move {
         let mut out = tokio::io::stdout();
         while let Some(line) = rx.recv().await {
-            let _ = out.write_all(line.as_bytes()).await;
-            let _ = out.write_all(b"\n").await;
-            let _ = out.flush().await;
+            // A broken stdout (client died, pipe closed) must not be
+            // swallowed: every later response would be silently
+            // dropped while the daemon pretends to serve. Log the
+            // real cause and stop — the client is gone.
+            if let Err(e) = out.write_all(line.as_bytes()).await {
+                eprintln!("[mcp] stdout write failed, shutting down: {e}");
+                std::process::exit(1);
+            }
+            if let Err(e) = out.write_all(b"\n").await {
+                eprintln!("[mcp] stdout write failed, shutting down: {e}");
+                std::process::exit(1);
+            }
+            if let Err(e) = out.flush().await {
+                eprintln!("[mcp] stdout flush failed, shutting down: {e}");
+                std::process::exit(1);
+            }
         }
     });
 
@@ -344,9 +359,42 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         }
     }
 
+    let crawl_t0 = std::time::Instant::now();
     let result = match daemon.crawler.crawl(&url, opts, resume.as_deref()).await {
         Ok(r) => r,
-        Err(e) => return tool_error_kind(format!("crawl: {e}"), "transient"),
+        Err(e) => {
+            // Crawl failures are input errors (bad seed / expired
+            // resume token) — permanent, not worth a blind retry.
+            // Classify honestly so the agent doesn't burn calls.
+            let msg = e.to_ascii_lowercase();
+            let (kind, hint) = if msg.contains("resume token") {
+                (
+                    "permanent",
+                    "the resume token is expired or unknown — start a fresh crawl (omit resume)",
+                )
+            } else if msg.contains("bad seed") || msg.contains("must have a host") {
+                (
+                    "permanent",
+                    "check the seed URL format (full scheme + host, e.g. https://example.com/docs/)",
+                )
+            } else {
+                (
+                    "transient",
+                    "safe to retry immediately; if repeated, lower max_pages or widen deadline_s",
+                )
+            };
+            let mut trace = Trace::default();
+            trace.step("crawl", "crawl", "error", crawl_t0.elapsed().as_millis());
+            return tool_error_structured(
+                format!("crawl: {e}"),
+                kind,
+                Some(json!({
+                    "url": url,
+                    "escalation": trace.value(),
+                    "next_action": hint,
+                })),
+            );
+        }
     };
 
     // Content text: the map (if any) + pages. Keep the lead-in
@@ -599,6 +647,14 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         Some(u) if u.starts_with("http://") || u.starts_with("https://") => u.to_string(),
         _ => return tool_error("fetch: url must be http(s)"),
     };
+    // Full parse up front: an unparseable URL would otherwise flow
+    // through the whole pipeline with host="" — poisoning domain
+    // profiles and producing confusing late errors.
+    let parsed_url = match url::Url::parse(&url) {
+        Ok(u) => u,
+        Err(e) => return tool_error(format!("fetch: invalid URL ({e})")),
+    };
+    let url_host = parsed_url.host_str().unwrap_or("").to_string();
 
     // Universal reddit optimization: rewrite all reddit.com
     // URLs to old.reddit.com — Reddit's legacy SSR domain
@@ -626,17 +682,26 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     if let Some(host) = parsed.host_str()
         && crate::fetch::guards::is_ssrf_host(host)
     {
-        return tool_error(format!(
-            "blocked: {host} is a private/loopback address — SSRF guard"
-        ));
+        return tool_error_structured(
+            format!("blocked: {host} is a private/loopback address — SSRF guard"),
+            "permanent",
+            Some(json!({
+                "url": url,
+                "next_action": "private/loopback targets are blocked by design — use a public URL",
+            })),
+        );
     }
     let mut opts = ExtractOptions::default();
     opts.focus = args.get("focus").and_then(Value::as_str).map(String::from);
     opts.max_chars = args
         .get("max_chars")
         .and_then(Value::as_u64)
-        .map(|n| n as usize);
-    opts.offset = args.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        .map(|n| (n as usize).clamp(200, 1_048_576));
+    opts.offset = args
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(1_000_000_000) as usize;
     opts.section = args
         .get("section")
         .and_then(Value::as_str)
@@ -674,17 +739,10 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 "fetch: actions need the browser — use tier=auto (default) or tier=2",
             );
         }
-        let host = url::Url::parse(&url)
-            .ok()
-            .and_then(|u| u.host_str().map(String::from))
-            .unwrap_or_default();
-        return fetch_with_actions(daemon, &url, &host, &opts, &actions, shot).await;
+        return fetch_with_actions(daemon, &url, &url_host, &opts, &actions, shot).await;
     }
 
-    let host = url::Url::parse(&url)
-        .ok()
-        .and_then(|u| u.host_str().map(String::from))
-        .unwrap_or_default();
+    let host = url_host;
 
     // === PDF early detection ===
     // Ghost can't render PDFs (Chrome's PDF viewer is a JS shell).
@@ -857,17 +915,33 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         // Don't pass binary bytes to extract (mojibake).
         if crate::fetch::guards::is_binary(&o.body, &ct) {
             let kind = ct.split(';').next().unwrap_or("unknown").trim();
-            return tool_error(format!(
-                "binary content: {url} returned {kind} ({} bytes) — not text, cannot extract",
-                o.body.len()
-            ));
+            return tool_error_structured(
+                format!(
+                    "binary content: {url} returned {kind} ({} bytes) — not text, cannot extract",
+                    o.body.len()
+                ),
+                "permanent",
+                Some(json!({
+                    "url": url,
+                    "next_action": "this URL is a raw file, not a page — if it is a PDF, fetch it directly (DonSeTch parses PDFs); otherwise look for an HTML landing page via web_search",
+                })),
+            );
         }
         match extract::extract(&o.body, &ct, &o.url, &opts) {
             Ok(e) => {
                 final_url = o.url.clone();
                 final_ex = Some(e);
             }
-            Err(e) => return tool_error(format!("content extraction failed: {e}")),
+            Err(e) => {
+                return tool_error_structured(
+                    format!("content extraction failed: {e}"),
+                    "transient",
+                    Some(json!({
+                        "url": url,
+                        "next_action": "retry with a narrow selector= or focus=; if the page is JS-heavy, tier=2 renders it in a browser",
+                    })),
+                );
+            }
         }
     }
 
@@ -1750,14 +1824,40 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                         })
                     }
                     Err(e2) => {
-                        tool_error_kind(format!("search: local ({e}); byok ({e2})"), "transient")
+                        search_error(&query, &format!("local ({e}); byok ({e2})"), true)
                     }
                 }
             } else {
-                tool_error_kind(format!("search: {e}"), "transient")
+                search_error(&query, &e.to_string(), false)
             }
         }
     }
+}
+
+/// Search failure → structured error: every engine (and BYOK if
+/// tried) failed. The agent needs to know retrying is safe and
+/// what the levers are (BYOK keys, intent, simpler query).
+fn search_error(query: &str, cause: &str, byok_tried: bool) -> Value {
+    let mut trace = Trace::default();
+    trace.step("search", "engines", "error", 0);
+    if byok_tried {
+        trace.step("byok", "providers", "error", 0);
+    }
+    let mut hint = String::from(
+        "all engines failed — transient in most cases: retry once, then simplify the query",
+    );
+    if !byok_tried {
+        hint.push_str("; if repeated, add an API key provider (donsetch keys add) for a fallback path");
+    }
+    tool_error_structured(
+        format!("search: {cause}"),
+        "transient",
+        Some(json!({
+            "query": query,
+            "escalation": trace.value(),
+            "next_action": hint,
+        })),
+    )
 }
 
 fn tool_error(message: impl Into<String>) -> Value {

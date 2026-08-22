@@ -553,7 +553,11 @@ fn mask_key(key: &str) -> String {
     if key.len() <= 14 {
         return key.to_string();
     }
-    format!("{}...{}", &key[..8], &key[key.len() - 4..])
+    // Char-boundary-safe: a pasted key containing multi-byte chars
+    // would panic on a raw byte slice.
+    let head: String = key.chars().take(8).collect();
+    let tail: String = key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{head}...{tail}")
 }
 
 #[cfg(test)]
