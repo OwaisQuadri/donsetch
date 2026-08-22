@@ -163,6 +163,9 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
+          # cargo-fuzz builds for musl by default (build-std needs
+          # both the target and rust-src).
+          targets: x86_64-unknown-linux-musl
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@v2
         with:
