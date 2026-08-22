@@ -936,8 +936,6 @@ fn paginate(full: &str, opts: &ExtractOptions) -> (String, Option<usize>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// Fuzzer find (CI, 2026-08-22): a global-assignment match at
     /// the END of input advanced `from` past the string and/or
     /// mid-replacement-char — `html[from..]` panicked. The advance
