@@ -3437,13 +3437,16 @@ fn tool_error_structured(
     {
         text.push_str(&format!("\n\nNext action: {action}"));
     }
+    let code = error_code(&text, structured.as_ref());
     let mut v = json!({
         "content": [{ "type": "text", "text": text }],
         "isError": true,
         "errorKind": kind,
-        "code": error_code(&text, structured.as_ref())
+        "code": code
     });
-    if let Some(s) = structured {
+    if let Some(mut s) = structured {
+        // The stable code lives where agents read it.
+        s["code"] = json!(code);
         v["structuredContent"] = s;
     }
     v
