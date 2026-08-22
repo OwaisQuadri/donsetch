@@ -791,7 +791,7 @@ impl Crawler {
                         .map(|s| s.as_bytes())
                         .unwrap_or(&page.body);
                     let body_ctype = if ghost_html.is_some() {
-                        "text/html"
+                        crate::extract::charset::GHOST_TEXT_CT
                     } else {
                         ctype
                     };
@@ -866,7 +866,7 @@ impl Crawler {
                             if let Some(gp) = ghost_hook(item.url.clone()).await
                                 && let Ok(r2) = extract::extract(
                                     gp.html.as_bytes(),
-                                    "text/html",
+                                    crate::extract::charset::GHOST_TEXT_CT,
                                     &page_url,
                                     &eo,
                                 )

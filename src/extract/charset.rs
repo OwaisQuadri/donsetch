@@ -11,6 +11,19 @@
 //! GBK/GB2312/Big5 without declaring a charset, and a bare UTF-8
 //! lossy fallback turns every CJK byte pair into U+FFFD tofu.
 
+/// Content-Type to pass for browser-provided (ghost) DOM text.
+///
+/// The ghost tier reads text out of a live Chromium DOM via CDP,
+/// which returns UTF-8 strings — the browser already ran charset
+/// decoding. But the rendered DOM still carries the page's original
+/// `<meta charset=...>` declaration (e.g. gb18030 on 69shuba), so a
+/// bare `text/html` makes `decode` sniff that stale meta and decode
+/// the already-UTF-8 bytes a second time as gb18030 → mojibake (#35).
+/// Declaring `charset=utf-8` here wins at step 1 (header beats meta)
+/// and copies the text through verbatim. Raw HTTP bytes keep full
+/// detection — only browser text is pinned.
+pub const GHOST_TEXT_CT: &str = "text/html; charset=utf-8";
+
 /// Decode body bytes to a String using the detection order above.
 pub fn decode(body: &[u8], content_type: &str) -> String {
     if let Some(enc) = from_content_type(content_type) {
@@ -614,5 +627,68 @@ mod tests {
         };
         let decoded = decode(&html, "text/html");
         assert!(decoded.contains("日本語"), "decoded: {decoded}");
+    }
+
+    // ── Ghost (browser-provided) text: pinned UTF-8 (#35) ──
+    // The browser already decoded the page; CDP returns UTF-8. The
+    // rendered DOM keeps the original <meta charset=gb18030> tag, so a
+    // bare "text/html" makes sniff_meta re-decode UTF-8 bytes as
+    // GB18030 → mojibake (末日乐园 → 鏈棩涔愬洯 on 69shuba).
+
+    fn ghost_dom(text: &str, meta_charset: &str) -> Vec<u8> {
+        format!(
+            "<html><head><meta charset=\"{meta_charset}\"></head><body><h1>{text}</h1></body></html>"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn ghost_ct_pins_utf8_despite_gb18030_meta() {
+        // What Chromium's DOM.getOuterHTML returns for a gb18030 page:
+        // correct UTF-8 text, stale gb18030 meta declaration.
+        let dom = ghost_dom("末日乐园 第1706章 (本章完)", "gb18030");
+        let decoded = decode(&dom, GHOST_TEXT_CT);
+        assert_eq!(decoded, String::from_utf8(dom.clone()).unwrap());
+        assert!(decoded.contains("末日乐园"), "decoded: {decoded}");
+        assert!(decoded.contains("(本章完)"), "decoded: {decoded}");
+    }
+
+    #[test]
+    fn ghost_ct_pins_utf8_gbk_meta() {
+        let dom = ghost_dom("机器学习是人工智能的一个分支领域。", "gbk");
+        let decoded = decode(&dom, GHOST_TEXT_CT);
+        assert!(decoded.contains("机器学习"), "decoded: {decoded}");
+        assert!(!decoded.contains('\u{FFFD}'), "no tofu: {decoded}");
+    }
+
+    #[test]
+    fn ghost_ct_pins_utf8_big5_meta() {
+        let dom = ghost_dom("機器學習是人工智能的一個分支領域。", "big5");
+        let decoded = decode(&dom, GHOST_TEXT_CT);
+        assert!(decoded.contains("機器學習"), "decoded: {decoded}");
+    }
+
+    #[test]
+    fn ghost_ct_is_valid_utf8_roundtrip() {
+        // GHOST_TEXT_CT must never mangle any valid-UTF-8 DOM,
+        // including emoji and mixed scripts.
+        let text = "mixed 混合 テスト 한글 café 🚀 ✓";
+        let dom = ghost_dom(text, "utf-8");
+        assert_eq!(decode(&dom, GHOST_TEXT_CT), String::from_utf8(dom).unwrap());
+    }
+
+    #[test]
+    fn bare_text_html_would_double_decode() {
+        // Documents the trap: bare "text/html" on browser DOM hits
+        // sniff_meta and mangles the already-decoded text. If this
+        // ever fails because decode() changed, re-check the ghost
+        // call sites still pin GHOST_TEXT_CT.
+        let dom = ghost_dom("末日乐园", "gb18030");
+        let decoded = decode(&dom, "text/html");
+        assert!(
+            !decoded.contains("末日乐园"),
+            "bare text/html must not pass browser DOM through cleanly — \
+             that is exactly the bug GHOST_TEXT_CT exists to prevent; got: {decoded}"
+        );
     }
 }

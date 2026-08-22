@@ -4,7 +4,6 @@
 //! type, every edge case. This is what makes DonSift
 //! standalone-quality.
 
-use super::blocks::Block;
 use super::language::{self, Script};
 use super::metadata;
 use super::*;
@@ -30,14 +29,6 @@ fn extract_html_opts(html: &str, opts: &ExtractOptions) -> Extracted {
         opts,
     )
     .unwrap()
-}
-
-fn para(text: &str) -> Block {
-    Block::Para {
-        md: text.to_string(),
-        link_density: 0.0,
-        path: vec![],
-    }
 }
 
 // ════════════════════════════════════════════════════════════

@@ -959,14 +959,8 @@ pub fn filter_semantic<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::language::{Script, detect};
+    use super::super::language::Script;
     use super::*;
-    use scraper::Html;
-
-    fn lang_from(html: &str) -> LanguageInfo {
-        let doc = Html::parse_document(html);
-        detect(&doc)
-    }
 
     fn en() -> LanguageInfo {
         LanguageInfo {
@@ -1185,7 +1179,7 @@ mod tests {
         ];
         let (kept, fell_back) = filter(&blocks, "machine learning", &en());
         assert!(!fell_back);
-        assert!(kept.len() >= 1);
+        assert!(!kept.is_empty());
         // The block with "machine learning" should be kept.
         assert!(kept.iter().any(|b| b.text().contains("Machine learning")));
     }
@@ -1215,7 +1209,7 @@ mod tests {
         ];
         let (kept, fell_back) = filter(&blocks, "机器学习", &zh());
         assert!(!fell_back);
-        assert!(kept.len() >= 1);
+        assert!(!kept.is_empty());
     }
 
     #[test]
@@ -1226,7 +1220,7 @@ mod tests {
         ];
         let (kept, fell_back) = filter(&blocks, "機械学習", &ja());
         assert!(!fell_back);
-        assert!(kept.len() >= 1);
+        assert!(!kept.is_empty());
     }
 
     #[test]
@@ -1292,7 +1286,7 @@ mod tests {
         ];
         let (kept, fell_back) = filter_semantic(&blocks, "machine learning", &en());
         assert!(!fell_back);
-        assert!(kept.len() >= 1);
+        assert!(!kept.is_empty());
         assert!(kept.iter().any(|b| b.text().contains("Machine learning")));
     }
 

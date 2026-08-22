@@ -25,8 +25,10 @@ struct MockSite {
     /// Per-URL content-type override (default: text/html).
     content_types: HashMap<String, String>,
     /// Captures referer passed to each fetch.
-    referers: Arc<Mutex<Vec<(String, Option<String>)>>>,
+    referers: RefererLog,
 }
+
+type RefererLog = Arc<Mutex<Vec<(String, Option<String>)>>>;
 
 impl MockSite {
     fn new() -> Self {
@@ -70,13 +72,7 @@ impl MockSite {
     }
 
     fn hit_count(&self) -> usize {
-        self.throttles
-            .lock()
-            .unwrap()
-            .values()
-            .map(|c| c.load(Ordering::SeqCst))
-            .sum::<usize>()
-            .min(0)
+        0
     }
 
     fn fetcher(self) -> (PageFetcher, Arc<Mutex<Vec<String>>>) {
@@ -102,8 +98,8 @@ impl MockSite {
                         .unwrap()
                         .push((url.clone(), referer.clone()));
                     // Throttle simulation: 429 until counter burns out.
-                    if let Some(c) = throttles.lock().unwrap().get(&url) {
-                        if c.load(Ordering::SeqCst) > 0 {
+                    if let Some(c) = throttles.lock().unwrap().get(&url)
+                        && c.load(Ordering::SeqCst) > 0 {
                             c.fetch_sub(1, Ordering::SeqCst);
                             return FetchedPage {
                                 url,
@@ -116,10 +112,9 @@ impl MockSite {
                                 error_hint: None,
                             };
                         }
-                    }
                     // Transient 500 simulation: 500 until counter burns out.
-                    if let Some(c) = transients.lock().unwrap().get(&url) {
-                        if c.load(Ordering::SeqCst) > 0 {
+                    if let Some(c) = transients.lock().unwrap().get(&url)
+                        && c.load(Ordering::SeqCst) > 0 {
                             c.fetch_sub(1, Ordering::SeqCst);
                             return FetchedPage {
                                 url,
@@ -132,7 +127,6 @@ impl MockSite {
                                 error_hint: Some("transient 500".into()),
                             };
                         }
-                    }
                     let ct = content_types
                         .get(&url)
                         .cloned()
@@ -174,9 +168,10 @@ fn gov() -> Arc<Governor> {
 }
 
 fn opts() -> CrawlOptions {
-    let mut o = CrawlOptions::default();
-    o.deadline = Duration::from_secs(10);
-    o
+    CrawlOptions {
+        deadline: Duration::from_secs(10),
+        ..Default::default()
+    }
 }
 
 fn html(title: &str, body: &str) -> String {
@@ -184,41 +179,6 @@ fn html(title: &str, body: &str) -> String {
         "<html lang=\"en\"><head><title>{title}</title></head><body><article><h1>{title}</h1><p>{body} {}</p></article></body></html>",
         "Long enough paragraph content to pass extraction thresholds and look like a real document for the extractor.".repeat(3)
     )
-}
-
-fn minimal_pdf(text: &str) -> Vec<u8> {
-    let header = b"%PDF-1.4\n";
-    let o1 = b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
-    let o2 = b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n";
-    let o3 = b"3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n";
-    let stream = format!("BT /F1 12 Tf 100 700 Td ({text}) Tj ET").into_bytes();
-    let o4_header = format!("4 0 obj<</Length {}>>stream\n", stream.len()).into_bytes();
-    let mut o4 = Vec::new();
-    o4.extend_from_slice(&o4_header);
-    o4.extend_from_slice(&stream);
-    o4.extend_from_slice(b"\nendstream\nendobj\n");
-    let o5 = b"5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n";
-    let parts: Vec<&[u8]> = vec![header, o1, o2, o3, &o4, o5];
-    let xref_offset: usize = parts.iter().map(|p| p.len()).sum();
-    let off1 = header.len();
-    let off2 = off1 + o1.len();
-    let off3 = off2 + o2.len();
-    let off4 = off3 + o3.len();
-    let off5 = off4 + o4.len();
-    let mut pdf = Vec::new();
-    for part in &parts {
-        pdf.extend_from_slice(part);
-    }
-    pdf.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
-    pdf.extend_from_slice(format!("{off1:010} 00000 n \n").as_bytes());
-    pdf.extend_from_slice(format!("{off2:010} 00000 n \n").as_bytes());
-    pdf.extend_from_slice(format!("{off3:010} 00000 n \n").as_bytes());
-    pdf.extend_from_slice(format!("{off4:010} 00000 n \n").as_bytes());
-    pdf.extend_from_slice(format!("{off5:010} 00000 n \n").as_bytes());
-    pdf.extend_from_slice(b"trailer<</Size 6/Root 1 0 R>>\n");
-    pdf.extend_from_slice(format!("startxref\n{xref_offset}\n").as_bytes());
-    pdf.extend_from_slice(b"%%EOF");
-    pdf
 }
 
 // ── Map mode ──────────────────────────────────────────────

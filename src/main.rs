@@ -353,7 +353,7 @@ mod dev {
                 println!("rendered {} bytes", html.len());
                 let ex = extract::extract(
                     html.as_bytes(),
-                    "text/html",
+                    extract::charset::GHOST_TEXT_CT,
                     url,
                     &extract::ExtractOptions::default(),
                 )

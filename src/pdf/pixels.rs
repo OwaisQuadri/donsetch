@@ -567,12 +567,12 @@ mod tests {
         m.buf[20 * 100 + 13] = 1;
         m.buf[20 * 100 + 17] = 1;
         let opened = m.opened_h(30);
-        assert_eq!(opened.total_ink() > 0, true);
+        assert!(opened.total_ink() > 0);
         assert_eq!(opened.at(10, 20), 0); // text row gone
         assert_eq!(opened.at(7, 10), 1); // rule row kept (rule spans 5..60)
         let rules = opened.h_rules(0.3);
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].length() >= 50.0, true);
+        assert!(rules[0].length() >= 50.0);
     }
 
     #[test]
@@ -591,7 +591,7 @@ mod tests {
         let regions = m.regions(3, 2, 4);
         assert_eq!(regions.len(), 2, "expected two visual blocks: {regions:?}");
         let top = regions.iter().find(|r| r.y0 < 10).unwrap();
-        assert_eq!(top.x0 <= 5 && top.x1 >= 22, true);
+        assert!(top.x0 <= 5 && top.x1 >= 22);
     }
 
     #[test]

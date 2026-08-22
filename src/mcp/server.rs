@@ -963,7 +963,12 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         if ex_thin
             && tier == "auto"
             && let Some(rc) = daemon.state.lock().await.render_for(&final_url).cloned()
-            && let Ok(e2) = extract::extract(rc.html.as_bytes(), "text/html", &final_url, &opts)
+            && let Ok(e2) = extract::extract(
+                rc.html.as_bytes(),
+                extract::charset::GHOST_TEXT_CT,
+                &final_url,
+                &opts,
+            )
             && !e2.thin
         {
             // Defense in depth: even if a challenge page slipped into
@@ -1219,7 +1224,7 @@ async fn ghost_escalate(
             }
         }
     }
-    if let Ok(e2) = extract::extract(page.html.as_bytes(), "text/html", url, opts) {
+    if let Ok(e2) = extract::extract(page.html.as_bytes(), extract::charset::GHOST_TEXT_CT, url, opts) {
         let thin = e2.thin;
         let better = match &best {
             None => true,
@@ -1245,7 +1250,7 @@ async fn ghost_escalate(
     if best.as_ref().map(|(thin, ..)| *thin).unwrap_or(true) {
         let mut lopts = opts.clone();
         lopts.include_links = true;
-        if let Ok(e3) = extract::extract(page.html.as_bytes(), "text/html", url, &lopts) {
+        if let Ok(e3) = extract::extract(page.html.as_bytes(), extract::charset::GHOST_TEXT_CT, url, &lopts) {
             let thin = e3.thin;
             let better = match &best {
                 None => true,
@@ -1529,7 +1534,7 @@ async fn fetch_with_actions(
     // candidate ladder as ghost_escalate: prose → links-keeping
     // → raw text. A shell after actions is still a shell.
     let mut best: Option<extract::Extracted> = None;
-    if let Ok(e) = extract::extract(html.as_bytes(), "text/html", url, opts)
+    if let Ok(e) = extract::extract(html.as_bytes(), extract::charset::GHOST_TEXT_CT, url, opts)
         && !e.thin
     {
         best = Some(e);
@@ -1537,7 +1542,7 @@ async fn fetch_with_actions(
     if best.is_none() {
         let mut lopts = opts.clone();
         lopts.include_links = true;
-        if let Ok(e2) = extract::extract(html.as_bytes(), "text/html", url, &lopts)
+        if let Ok(e2) = extract::extract(html.as_bytes(), extract::charset::GHOST_TEXT_CT, url, &lopts)
             && !e2.thin
         {
             best = Some(e2);

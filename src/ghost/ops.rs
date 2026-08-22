@@ -582,24 +582,6 @@ fn find_ci(b: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     (from..=b.len() - needle.len()).find(|&p| starts_ci(&b[p..], needle))
 }
 
-#[cfg(test)]
-mod ghost_fetch_tests {
-    use super::*;
-
-    #[test]
-    fn visible_text_strips_scripts_and_tags() {
-        let html = r#"<html><head><script>var x = 123456789;</script><style>.a{color:red}</style></head><body><p>Hello world this is real content that should be counted.</p></body></html>"#;
-        let v = visible_text_len(html);
-        assert!(v > 20 && v < 100, "got {v}");
-    }
-
-    #[test]
-    fn visible_text_shell_is_tiny() {
-        let html = r#"<html><head><script src="app.js"></script></head><body><div id="root"></div></body></html>"#;
-        assert!(visible_text_len(html) < 10);
-    }
-}
-
 /// RENDER mode: execute a JS shell, return the live DOM.
 /// Success = outerHTML length stable across two polls —
 /// robust for SPAs, no Network domain needed.
@@ -669,4 +651,22 @@ pub fn has_clearance(cookies: &[CookieRecord]) -> bool {
     cookies
         .iter()
         .any(|c| CLEARANCE_NAMES.contains(&c.name.as_str()))
+}
+
+#[cfg(test)]
+mod ghost_fetch_tests {
+    use super::*;
+
+    #[test]
+    fn visible_text_strips_scripts_and_tags() {
+        let html = r#"<html><head><script>var x = 123456789;</script><style>.a{color:red}</style></head><body><p>Hello world this is real content that should be counted.</p></body></html>"#;
+        let v = visible_text_len(html);
+        assert!(v > 20 && v < 100, "got {v}");
+    }
+
+    #[test]
+    fn visible_text_shell_is_tiny() {
+        let html = r#"<html><head><script src="app.js"></script></head><body><div id="root"></div></body></html>"#;
+        assert!(visible_text_len(html) < 10);
+    }
 }

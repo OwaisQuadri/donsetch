@@ -802,105 +802,6 @@ fn save_cache_disk(cache: &HashMap<String, (Instant, Vec<Merged>, usize)>) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn governor_shrinks_width_under_stress() {
-        assert_eq!(width_for_stress(0.05, 4), 4);
-        assert_eq!(width_for_stress(0.30, 4), 3);
-        assert_eq!(width_for_stress(0.50, 4), 2);
-        assert_eq!(width_for_stress(0.90, 4), 1);
-        assert_eq!(width_for_stress(0.90, 0), 0);
-    }
-
-    #[test]
-    fn norm_query_collapses_variants() {
-        assert_eq!(
-            norm_query("Rust Async: the Runtime, comparison!"),
-            norm_query("rust async runtime comparison")
-        );
-        assert_ne!(norm_query("kafka vs nats"), norm_query("kafka"));
-    }
-
-    #[test]
-    fn cache_ttl_is_intent_and_recency_aware() {
-        assert!(cache_ttl(Intent::News, "anything") < cache_ttl(Intent::Web, "anything"));
-        assert!(cache_ttl(Intent::Code, "anything") < cache_ttl(Intent::Web, "anything"));
-        // recency signal forces news-grade TTL even for web intent
-        assert_eq!(
-            cache_ttl(Intent::Web, "nepal inflation 2026 rate"),
-            cache_ttl(Intent::News, "x")
-        );
-        assert_eq!(
-            cache_ttl(Intent::Web, "rust ownership explained"),
-            Duration::from_secs(1800)
-        );
-    }
-
-    fn merged(url: &str) -> Merged {
-        Merged {
-            title: "test".into(),
-            url: url.into(),
-            snippet: "test".into(),
-            sources: vec![("bing".into(), 0)],
-            score: 1.0,
-            published: None,
-        }
-    }
-
-    #[test]
-    fn site_filter_removes_non_matching() {
-        let mut results = vec![
-            merged("https://stackoverflow.com/questions/123"),
-            merged("https://github.com/owner/repo"),
-            merged("https://stackoverflow.com/a/456"),
-            merged("https://blog.example.com/post"),
-            merged("https://docs.stackoverflow.com/faq"),
-        ];
-        site_filter("rust site:stackoverflow.com", &mut results);
-        assert_eq!(
-            results.len(),
-            3,
-            "should keep SO + subdomain, drop github + example.com"
-        );
-        assert!(results.iter().all(|r| r.url.contains("stackoverflow.com")));
-    }
-
-    #[test]
-    fn site_filter_noop_without_operator() {
-        let mut results = vec![
-            merged("https://stackoverflow.com/q/1"),
-            merged("https://github.com/owner/repo"),
-        ];
-        site_filter("rust async runtime", &mut results);
-        assert_eq!(results.len(), 2, "no site: operator = no filtering");
-    }
-
-    #[test]
-    fn site_filter_matches_subdomains() {
-        let mut results = vec![
-            merged("https://docs.python.org/3/library"),
-            merged("https://python.org/about"),
-            merged("https://github.com/python/cpython"),
-        ];
-        site_filter("asyncio site:python.org", &mut results);
-        assert_eq!(results.len(), 2, "should match domain + subdomains");
-    }
-
-    #[test]
-    fn site_filter_strips_www_prefix() {
-        let mut results = vec![
-            merged("https://www.wikipedia.org/wiki/Rust"),
-            merged("https://en.wikipedia.org/wiki/Rust"),
-            merged("https://github.com/rust-lang/rust"),
-        ];
-        site_filter("rust site:www.wikipedia.org", &mut results);
-        assert_eq!(results.len(), 1, "www.wikipedia.org matches www. only");
-    }
-}
-
 fn load_cache_disk() -> HashMap<String, (Instant, Vec<Merged>, usize)> {
     let mut map = HashMap::new();
     let Some(path) = cache_path() else { return map };
@@ -1069,5 +970,104 @@ struct InflightGuard<'a> {
 impl Drop for InflightGuard<'_> {
     fn drop(&mut self) {
         self.map.lock().unwrap().remove(&self.key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn governor_shrinks_width_under_stress() {
+        assert_eq!(width_for_stress(0.05, 4), 4);
+        assert_eq!(width_for_stress(0.30, 4), 3);
+        assert_eq!(width_for_stress(0.50, 4), 2);
+        assert_eq!(width_for_stress(0.90, 4), 1);
+        assert_eq!(width_for_stress(0.90, 0), 0);
+    }
+
+    #[test]
+    fn norm_query_collapses_variants() {
+        assert_eq!(
+            norm_query("Rust Async: the Runtime, comparison!"),
+            norm_query("rust async runtime comparison")
+        );
+        assert_ne!(norm_query("kafka vs nats"), norm_query("kafka"));
+    }
+
+    #[test]
+    fn cache_ttl_is_intent_and_recency_aware() {
+        assert!(cache_ttl(Intent::News, "anything") < cache_ttl(Intent::Web, "anything"));
+        assert!(cache_ttl(Intent::Code, "anything") < cache_ttl(Intent::Web, "anything"));
+        // recency signal forces news-grade TTL even for web intent
+        assert_eq!(
+            cache_ttl(Intent::Web, "nepal inflation 2026 rate"),
+            cache_ttl(Intent::News, "x")
+        );
+        assert_eq!(
+            cache_ttl(Intent::Web, "rust ownership explained"),
+            Duration::from_secs(1800)
+        );
+    }
+
+    fn merged(url: &str) -> Merged {
+        Merged {
+            title: "test".into(),
+            url: url.into(),
+            snippet: "test".into(),
+            sources: vec![("bing".into(), 0)],
+            score: 1.0,
+            published: None,
+        }
+    }
+
+    #[test]
+    fn site_filter_removes_non_matching() {
+        let mut results = vec![
+            merged("https://stackoverflow.com/questions/123"),
+            merged("https://github.com/owner/repo"),
+            merged("https://stackoverflow.com/a/456"),
+            merged("https://blog.example.com/post"),
+            merged("https://docs.stackoverflow.com/faq"),
+        ];
+        site_filter("rust site:stackoverflow.com", &mut results);
+        assert_eq!(
+            results.len(),
+            3,
+            "should keep SO + subdomain, drop github + example.com"
+        );
+        assert!(results.iter().all(|r| r.url.contains("stackoverflow.com")));
+    }
+
+    #[test]
+    fn site_filter_noop_without_operator() {
+        let mut results = vec![
+            merged("https://stackoverflow.com/q/1"),
+            merged("https://github.com/owner/repo"),
+        ];
+        site_filter("rust async runtime", &mut results);
+        assert_eq!(results.len(), 2, "no site: operator = no filtering");
+    }
+
+    #[test]
+    fn site_filter_matches_subdomains() {
+        let mut results = vec![
+            merged("https://docs.python.org/3/library"),
+            merged("https://python.org/about"),
+            merged("https://github.com/python/cpython"),
+        ];
+        site_filter("asyncio site:python.org", &mut results);
+        assert_eq!(results.len(), 2, "should match domain + subdomains");
+    }
+
+    #[test]
+    fn site_filter_strips_www_prefix() {
+        let mut results = vec![
+            merged("https://www.wikipedia.org/wiki/Rust"),
+            merged("https://en.wikipedia.org/wiki/Rust"),
+            merged("https://github.com/rust-lang/rust"),
+        ];
+        site_filter("rust site:www.wikipedia.org", &mut results);
+        assert_eq!(results.len(), 1, "www.wikipedia.org matches www. only");
     }
 }
