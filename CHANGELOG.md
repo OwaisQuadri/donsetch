@@ -68,6 +68,10 @@ A keyless adapter registry for the sites agents actually hit. Fetch-level rewrit
 - **h2 fingerprint parity gate**: DonShadow's h2 preface (SETTINGS values+order, connection WINDOW_UPDATE, pseudo-header order, no PRIORITY frames) is now asserted byte-identical to the Chromium capture in a CI test — any future divergence is a red build, not a silent detectability regression.
 - **Locale-coherent Accept-Language**: the header now follows the target's locale (host TLD map + percent-encoded script in the path) — an en-US header on a .ru page gets the English stub on some sites and is a mild incoherence signal; localized sites now serve their real content. Default remains Chrome's en-US.
 
+### Fixed
+
+- **Daemon-abort panic in jsdata blob discovery (fuzzer find, CI fuzz gate)**: a known-global assignment (`__NUXT__ = `) matching at the very end of a page whose preceding byte was invalid UTF-8 (decoded to a 3-byte replacement char) advanced the scan cursor past the string / mid-character — `html[from..]` panicked. The cursor now floors to the next char boundary, clamped to the string length. Found by the new CI fuzz gate on its first green-config run; regression-tested with the crash input.
+
 ### Decision
 
 - **HTTP/3: not in 3.0.0** (timeboxed spike concluded — see design notes): h3 fingerprinting is not yet a vendor signal, h2 fallback is first-class everywhere, and a second transport stack (quiche + duplicate BoringSSL) pre-3.0 trades proven reliability for an unmeasured signal. The bar to ship post-3.0 is documented.

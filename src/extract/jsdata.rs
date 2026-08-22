@@ -301,7 +301,14 @@ fn find_blobs(html: &str) -> Vec<Blob> {
                 }
                 from = start + raw_len;
             } else {
-                from = start + 1;
+                // Advance to the next CHAR boundary (a replacement
+                // char is 3 bytes; a naive +1 slices mid-char), and
+                // never past the end (start can be html.len()).
+                let mut n = start + 1;
+                while n < html.len() && !html.is_char_boundary(n) {
+                    n += 1;
+                }
+                from = n.min(html.len());
             }
         }
     }
@@ -929,6 +936,29 @@ fn paginate(full: &str, opts: &ExtractOptions) -> (String, Option<usize>) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Fuzzer find (CI, 2026-08-22): a global-assignment match at
+    /// the END of input advanced `from` past the string and/or
+    /// mid-replacement-char — `html[from..]` panicked. The advance
+    /// now floors to the next char boundary, clamped to len.
+    #[test]
+    fn global_match_at_end_of_input_no_panic() {
+        // crash-652047c9: 0x97 lead byte (→ U+FFFD) + "[ndow.__NUXT__ = "
+        let html = String::from_utf8_lossy(&[
+            0x97, b'[', b'n', b'd', b'o', b'w', b'.', b'_', b'_', b'N', b'U', b'X', b'T', b'_',
+            b'_', b' ', b'=', b' ',
+        ])
+        .into_owned();
+        let _ = find_blobs(&html);
+    }
+
+    #[test]
+    fn global_match_inside_multibyte_no_panic() {
+        let html = "x\u{FFFD}__NUXT__ = \u{FFFD}tail";
+        let _ = find_blobs(html);
+    }
+
     use super::*;
     use crate::extract::ExtractOptions;
 
