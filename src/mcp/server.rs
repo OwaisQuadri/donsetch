@@ -36,6 +36,7 @@ pub struct Daemon {
     byok: ByokSearcher,
     crawler: Crawler,
     handles: Arc<Mutex<crate::handles::HandleTable>>,
+    history: Arc<std::sync::Mutex<crate::pages::history::PageHistory>>,
 }
 
 impl Daemon {
@@ -127,6 +128,9 @@ impl Daemon {
             byok: ByokSearcher::new(),
             crawler,
             handles: Arc::new(Mutex::new(crate::handles::HandleTable::load())),
+            history: Arc::new(std::sync::Mutex::new(
+                crate::pages::history::PageHistory::load(),
+            )),
         })
     }
 
@@ -518,6 +522,31 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value, ctx: Option<ToolCtx>) ->
     }
     let resume = args.get("resume").and_then(Value::as_str).map(String::from);
 
+    // v3 delta crawl: skip pages whose fingerprints are on file,
+    // and record the fingerprints of everything actually fetched —
+    // crawls feed the same memory fetches do.
+    if args
+        .get("since_last")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let hist = Arc::clone(&daemon.history);
+        opts.skip_unchanged = Some(Arc::new(move |url: &str| {
+            hist.lock().unwrap().has_recent(url)
+        }));
+    }
+    {
+        let hist = Arc::clone(&daemon.history);
+        opts.on_page = Some(Arc::new(
+            move |url: &str, fp: Option<&str>, md: &str, title: Option<&str>| {
+                if let Some(fp) = fp {
+                    let mut h = hist.lock().unwrap();
+                    h.record(url, fp, md.len(), title, md);
+                }
+            },
+        ));
+    }
+
     // v3: cancellation + progress. The crawl stops its workers
     // gracefully on cancel (the stop-flag mechanism) and persists
     // its resume token — partial progress is never lost.
@@ -576,7 +605,11 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value, ctx: Option<ToolCtx>) ->
 
     let crawl_t0 = std::time::Instant::now();
     let result = match daemon.crawler.crawl(&url, opts, resume.as_deref()).await {
-        Ok(r) => r,
+        Ok(r) => {
+            // Batch-flush the fingerprints the crawl just recorded.
+            daemon.history.lock().unwrap().flush();
+            r
+        }
         Err(e) => {
             // Crawl failures are input errors (bad seed / expired
             // resume token) — permanent, not worth a blind retry.
@@ -1180,8 +1213,54 @@ async fn fetch_multi(
     })
 }
 
-#[allow(clippy::field_reassign_with_default)]
+/// Single-URL fetch with resurrection (v3): dead URLs get one
+/// honest attempt at the Wayback Machine before the error stands.
 async fn fetch_single(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
+    let archive = match args.get("archive").and_then(Value::as_str) {
+        Some("off") => "off",
+        Some("only") => "only",
+        _ => "auto",
+    };
+    if archive == "only" {
+        let no_live = tool_error(format!("archive=only — skipping live fetch for {url}"));
+        return match try_resurrect(daemon, url, &no_live).await {
+            Some(v) => v,
+            None => tool_error_structured(
+                format!("archive: no Wayback snapshot found for {url}"),
+                "permanent",
+                Some(json!({
+                    "url": url,
+                    "next_action": "the URL was never archived — try web_search for a live alternative",
+                })),
+            ),
+        };
+    }
+    let result = fetch_single_inner(daemon, args, url).await;
+    if archive == "off" || result.get("isError") != Some(&json!(true)) {
+        return result;
+    }
+    // Resurreactable failures only: dead pages and hard walls.
+    // Transient network errors mean "maybe dead", not "dead" — a
+    // snapshot would launder an unknown into fake certainty.
+    let resurrectable = result
+        .pointer("/structuredContent/verdict")
+        .and_then(Value::as_str)
+        .is_some_and(|v| matches!(v, "SoftNotFound" | "Paywall" | "Challenge" | "AuthWall"))
+        || result
+            .pointer("/structuredContent/status")
+            .and_then(Value::as_u64)
+            .is_some_and(|s| s == 404 || s == 410);
+    if !resurrectable {
+        return result;
+    }
+    match try_resurrect(daemon, url, &result).await {
+        Some(v) => v,
+        None => result,
+    }
+}
+
+#[allow(clippy::field_reassign_with_default)]
+async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
     let t0 = std::time::Instant::now();
     // Full parse up front: an unparseable URL would otherwise flow
     // through the whole pipeline with host="" — poisoning domain
@@ -1255,6 +1334,10 @@ async fn fetch_single(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
         .map(String::from);
     let image_text = args
         .get("image_text")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let since_last = args
+        .get("since_last")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let tier = args.get("tier").and_then(Value::as_str).unwrap_or("auto");
@@ -1699,6 +1782,55 @@ async fn fetch_single(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
         t0.elapsed().as_millis(),
     );
     apply_link_handles(daemon, &mut res).await;
+    // v3 anti-cloak: a known-walled domain passing tier-1 cold
+    // cleanly is suspicious. One equivalence check; a warning is
+    // stamped, never a silent pass.
+    let mut cloak_warning: Option<String> = None;
+    let profile_walled = daemon.state.lock().await.is_known_walled(&host);
+    if profile_walled
+        && !skip_tier1
+        && !is_warm
+        && let Some((_sim, note)) = anticloak_check(daemon, &url, &ex.markdown).await
+    {
+        cloak_warning = Some(note);
+    }
+    if let Some(note) = &cloak_warning {
+        if let Some(cell) = res.pointer_mut("/content/1/text")
+            && let Some(md) = cell.as_str().map(String::from)
+        {
+            *cell = json!(format!("*[cloak_suspected: {note}]*\n\n{md}"));
+        }
+        if let Some(sc) = res.pointer_mut("/structuredContent") {
+            sc["cloak_suspected"] = json!(true);
+            sc["cloak_note"] = json!(note);
+        }
+    }
+
+    // v3 freshness: the server's own Last-Modified, when it
+    // deigns to tell the truth about it.
+    if let Some(o) = &out
+        && matches!(o.verdict, Verdict::ContentOk)
+        && let Some(lm) = o
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("last-modified"))
+            .map(|(_, v)| v.clone())
+        && let Some(sc) = res.pointer_mut("/structuredContent")
+    {
+        sc["server_modified"] = json!(lm);
+    }
+    apply_page_history(
+        daemon,
+        &mut res,
+        &final_url,
+        PageFacts {
+            fingerprint: ex.fingerprint.as_deref(),
+            markdown: &ex.markdown,
+            title: ex.title.as_deref(),
+            complete: ex.next_offset.is_none(),
+        },
+        since_last,
+    );
     if image_text {
         apply_image_ocr(daemon, &mut res, &ex.images).await;
     }
@@ -2341,6 +2473,352 @@ async fn apply_image_ocr(daemon: &Arc<Daemon>, res: &mut Value, images: &[(Strin
             sc["image_text"] = json!({ "images": images.len().min(MAX_IMAGES), "ocred": ocred });
         }
     }
+}
+
+/// v3 anti-cloak: a domain KNOWN to be walled (needs_tier2 in the
+/// profile) suddenly serving clean tier-1 content is suspicious —
+/// bot walls sometimes serve benign-looking bait to suspected
+/// bots. Render the same URL in the real browser and compare word
+/// sets. Material divergence → `cloak_suspected` with a trust
+/// recommendation. Cost: one browser render, only on suspicion.
+async fn anticloak_check(
+    daemon: &Arc<Daemon>,
+    url: &str,
+    tier1_markdown: &str,
+) -> Option<(f64, String)> {
+    let mut g = daemon.ghost_mgr.acquire(&daemon.profile).await.ok()?;
+    let page = ops::ghost_fetch(&mut g, url, std::time::Duration::from_secs(20))
+        .await
+        .ok()?;
+    if page.captcha {
+        return Some((
+            0.0,
+            "browser sees a challenge where HTTP saw content".to_string(),
+        ));
+    }
+    let ex = extract::extract(
+        page.html.as_bytes(),
+        extract::charset::GHOST_TEXT_CT,
+        url,
+        &ExtractOptions::default(),
+    )
+    .ok()?;
+    fn words(s: &str) -> std::collections::HashSet<&str> {
+        s.split_whitespace().collect()
+    }
+    let a = words(tier1_markdown);
+    let b = words(&ex.markdown);
+    if b.is_empty() {
+        return None; // browser got nothing — inconclusive, not bait
+    }
+    let inter = a.intersection(&b).count();
+    let union = a.union(&b).count();
+    let sim = if union == 0 {
+        1.0
+    } else {
+        inter as f64 / union as f64
+    };
+    if sim < 0.55 {
+        Some((
+            sim,
+            format!(
+                "HTTP and browser content diverge (similarity {sim:.2}) — the HTTP copy may be bot-bait; browser tier text is the one to trust"
+            ),
+        ))
+    } else {
+        None
+    }
+}
+
+/// v3 resurrection fetch: when a URL is truly dead (404, paywall,
+/// unsolvable wall) consult the keyless Wayback Machine and serve
+/// the nearest snapshot — labeled ruthlessly so archived content
+/// can never masquerade as live. `archive: auto` (default) only on
+/// dead-end failures; `only` skips the live attempt; `off` never.
+async fn try_resurrect(daemon: &Arc<Daemon>, url: &str, live_error: &Value) -> Option<Value> {
+    // 1. Availability lookup (keyless, public API).
+    let avail_url = format!(
+        "https://archive.org/wayback/available?url={}",
+        encode_query_value(url)
+    );
+    let avail = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        daemon.fetcher.fetch(&avail_url),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let v: Value = serde_json::from_slice(&avail.body).ok()?;
+    let closest = v.pointer("/archived_snapshots/closest")?.clone();
+    let snap_url = closest.get("url")?.as_str()?.to_string();
+    let ts = closest
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    // The API returns status as a STRING ("200"); accept both.
+    let snap_status = closest
+        .get("status")
+        .map(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    if snap_status != 200 {
+        return None;
+    }
+
+    // 2. Fetch the snapshot — wayback is plain HTTP-friendly.
+    let snap = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        daemon.fetcher.fetch(&snap_url),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !matches!(snap.verdict, Verdict::ContentOk) {
+        return None;
+    }
+    let ct = snap
+        .headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    if crate::fetch::guards::is_binary(&snap.body, &ct) {
+        return None;
+    }
+    let opts = ExtractOptions::default();
+    let mut ex = extract::extract(&snap.body, &ct, &snap_url, &opts).ok()?;
+    // Wayback serves the ORIGINAL server-rendered HTML — thinness
+    // here usually means a genuinely small page, not a JS shell.
+    // Only truly empty extractions are useless.
+    if ex.total_chars < 50 {
+        return None;
+    }
+
+    // 3. Label everything: banner in content, fields in structure.
+    let date = wayback_date(ts);
+    let age_days = wayback_age_days(ts);
+    let live_reason = live_error
+        .pointer("/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or("live fetch failed")
+        .lines()
+        .next()
+        .unwrap_or("live fetch failed")
+        .to_string();
+    let staleness = if age_days > 730 {
+        format!(
+            " — WARNING: {} years old, treat as historical",
+            age_days / 365
+        )
+    } else {
+        String::new()
+    };
+    let banner = format!(
+        "*[ARCHIVED COPY — Wayback snapshot {date} ({age_days}d old){staleness}. Live fetch failed: {live_reason}]*\n\n"
+    );
+    ex.markdown = format!("{banner}{}", ex.markdown);
+
+    let tokens = ex.markdown.len() / 4;
+    let mut trace = Trace::default();
+    trace.step("archive", "wayback", &format!("snapshot {ts}"), 0);
+    let structured = json!({
+        "status": snap.status,
+        "tier": "1(wayback)",
+        "verdict": "Archived",
+        "content_ok": !ex.thin,
+        "thin": ex.thin,
+        "title": ex.title,
+        "total_chars": ex.total_chars,
+        "tokens_est": tokens,
+        "url": url,
+        "snapshot_url": snap_url,
+        "archived": { "snapshot": ts, "date": date, "age_days": age_days },
+        "live_error": live_reason,
+        "escalation": trace.value(),
+    });
+    let meta = json!({
+        "url": url,
+        "tier": "1(wayback)",
+        "verdict": "Archived",
+        "archived": date,
+        "age_days": age_days,
+        "tokens_est": tokens,
+        "title": ex.title,
+    });
+    Some(json!({
+        "content": [
+            {"type": "text", "text": format!("[meta] {}", compact_json(&meta))},
+            {"type": "text", "text": ex.markdown},
+        ],
+        "structuredContent": structured,
+    }))
+}
+
+/// Percent-encode a value for a query string: everything outside
+/// the unreserved set (plus ':', '/' which wayback tolerates raw).
+fn encode_query_value(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b':' | b'/' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Wayback timestamp (YYYYMMDDhhmmss) → "YYYY-MM-DD".
+fn wayback_date(ts: &str) -> String {
+    if ts.len() >= 8 && ts[..8].chars().all(|c| c.is_ascii_digit()) {
+        format!("{}-{}-{}", &ts[0..4], &ts[4..6], &ts[6..8])
+    } else {
+        ts.to_string()
+    }
+}
+
+fn wayback_age_days(ts: &str) -> u64 {
+    let y: u64 = ts.get(0..4).and_then(|s| s.parse().ok()).unwrap_or(2015);
+    let m: u64 = ts.get(4..6).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let d: u64 = ts.get(6..8).and_then(|s| s.parse().ok()).unwrap_or(1);
+    // Approximation good enough for staleness warnings (30-day
+    // months; the warning threshold is 2 years).
+    let snap_days = y.saturating_sub(1970) * 365 + (m.saturating_sub(1)) * 30 + d;
+    let now_days = now_unix() / 86_400;
+    now_days.saturating_sub(snap_days)
+}
+
+/// v3 page history: record the fingerprint, compare with the
+/// previous fetch, and stamp the change verdict into the result.
+/// With `since_last`, collapse the output to the delta (or the
+/// unchanged verdict) instead of the full content.
+/// What the extractor learned about one fetched page — the
+/// page-history record input.
+struct PageFacts<'a> {
+    fingerprint: Option<&'a str>,
+    markdown: &'a str,
+    title: Option<&'a str>,
+    /// Full page was rendered (not cut by pagination).
+    complete: bool,
+}
+
+fn apply_page_history(
+    daemon: &Arc<Daemon>,
+    res: &mut Value,
+    url: &str,
+    facts: PageFacts<'_>,
+    since_last: bool,
+) {
+    let (ex_fingerprint, ex_markdown, ex_title, complete) = (
+        facts.fingerprint,
+        facts.markdown,
+        facts.title,
+        facts.complete,
+    );
+    let Some(fp) = ex_fingerprint else {
+        return;
+    };
+    let mut hist = daemon.history.lock().unwrap();
+    let prev = hist.record(
+        url,
+        fp,
+        ex_markdown.len(),
+        ex_title,
+        if complete { ex_markdown } else { "" },
+    );
+    hist.flush();
+    drop(hist);
+
+    let (changed, delta, ago) = match &prev {
+        Some(p) if p.fingerprint == fp => (
+            "unchanged".to_string(),
+            None,
+            now_unix().saturating_sub(p.at),
+        ),
+        Some(p) => {
+            let old = p.text.as_deref().unwrap_or("");
+            let kind = crate::pages::history::classify_change(old, ex_markdown);
+            let delta = crate::pages::history::section_delta_report(old, ex_markdown);
+            (
+                kind.label().to_string(),
+                Some(delta),
+                now_unix().saturating_sub(p.at),
+            )
+        }
+        None => ("new".to_string(), None, 0),
+    };
+
+    // since_last: collapse the payload to the verdict.
+    if since_last {
+        let title_line = ex_title.map(|t| format!("# {t}\n")).unwrap_or_default();
+        let body = match (changed.as_str(), &delta) {
+            ("unchanged", _) => format!(
+                "{title_line}{url}\n\n*unchanged since last fetch ({ago}s ago) — fingerprint {fp}*\n"
+            ),
+            (_, Some(d)) => format!(
+                "{title_line}{url}\n\n*changed since last fetch ({changed}, {ago}s ago):*\n\n- {d}\n\n*(full content: refetch without since_last)*\n"
+            ),
+            _ => format!(
+                "{title_line}{url}\n\n*{changed} since last fetch ({ago}s ago) — refetch without since_last for full content*\n"
+            ),
+        };
+        if let Some(cell) = res.pointer_mut("/content/1/text") {
+            *cell = json!(body);
+        }
+        if let Some(sc) = res.pointer_mut("/structuredContent") {
+            sc["tokens_est"] = json!(body.len() / 4);
+        }
+    } else if changed != "new" {
+        // Note in the content on change (first contact with the
+        // delta is valuable; unchanged stays silent).
+        if let Some(d) = &delta
+            && let Some(cell) = res.pointer_mut("/content/1/text")
+            && let Some(md) = cell.as_str().map(String::from)
+        {
+            *cell = json!(format!(
+                "*[changed since last fetch ({}): {}]*\n\n{md}",
+                changed, d
+            ));
+        }
+    }
+
+    // Stamp meta + structuredContent.
+    let mut meta_patch = json!({ "fp": fp, "changed": changed });
+    if ago > 0 {
+        meta_patch["age_s"] = json!(ago);
+    }
+    if let Some(d) = &delta {
+        meta_patch["changed_sections"] = json!(d);
+    }
+    if let Some(cell) = res.pointer_mut("/content/0/text")
+        && let Some(t) = cell.as_str().map(String::from)
+        && t.ends_with('}')
+    {
+        let mut obj: serde_json::Map<String, Value> =
+            serde_json::from_str(&t.replace("[meta] ", "")).unwrap_or_default();
+        for (k, v) in meta_patch.as_object().unwrap() {
+            obj.insert(k.clone(), v.clone());
+        }
+        *cell = json!(format!("[meta] {}", Value::Object(obj)));
+    }
+    if let Some(sc) = res.pointer_mut("/structuredContent") {
+        sc["fingerprint"] = json!(fp);
+        sc["changed"] = json!(changed);
+        if let Some(d) = &delta {
+            sc["changed_sections"] = json!(d);
+        }
+    }
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// v3 reference handles: rewrite markdown links in a fetch result

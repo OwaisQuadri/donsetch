@@ -386,6 +386,13 @@ impl GhostState {
     // ── Decision ──
 
     /// Route decision for the next fetch to this host.
+    /// Is this host known to need tier 2 (seen a challenge)?
+    /// Powers the v3 anti-cloak trigger: a walled domain that
+    /// suddenly passes tier-1 cold is suspicious.
+    pub fn is_known_walled(&self, host: &str) -> bool {
+        self.profiles.get(host).is_some_and(|p| p.needs_tier2)
+    }
+
     pub fn route_for(&self, host: &str) -> RouteDecision {
         let Some(profile) = self.profiles.get(host) else {
             return RouteDecision::Cold;

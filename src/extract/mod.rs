@@ -115,6 +115,10 @@ pub struct Extracted {
     /// whether or not media lines are rendered, so image-text OCR
     /// (v3) can run on demand.
     pub images: Vec<(String, String)>,
+    /// Knowledge fingerprint (v3): sha256 of the FULL pre-
+    /// pagination markdown. Stable across max_chars settings —
+    /// re-fetches compare apples to apples.
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -335,6 +339,7 @@ pub fn extract(
             quality: 0.0,
             pdf_pages: None,
             images: Vec::new(),
+            fingerprint: None,
         });
     }
 
@@ -569,6 +574,7 @@ pub fn text_fallback(
         quality: 0.3, // lower quality than block-based extraction
         pdf_pages: None,
         images: Vec::new(),
+        fingerprint: None,
     })
 }
 
@@ -677,6 +683,7 @@ fn empty_pdf(url: &str, reason: &str) -> Extracted {
         quality: 0.0,
         pdf_pages: None,
         images: Vec::new(),
+        fingerprint: None,
     }
 }
 
@@ -743,6 +750,7 @@ fn downstream(
             quality: 0.0,
             pdf_pages: None,
             images: Vec::new(),
+            fingerprint: None,
         });
     }
 
@@ -930,6 +938,7 @@ fn downstream(
             quality,
             pdf_pages,
             images,
+            fingerprint: None,
         });
     }
 
@@ -950,6 +959,7 @@ fn downstream(
         quality,
         pdf_pages,
         images,
+        fingerprint: Some(crate::pages::history::PageHistory::fingerprint(&full)),
     })
 }
 

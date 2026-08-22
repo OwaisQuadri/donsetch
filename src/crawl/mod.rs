@@ -134,6 +134,13 @@ pub struct CrawlResult {
     pub resume: Option<String>,
 }
 
+/// v3: (done, queued) — fired per completed page, throttled by the caller.
+pub type ProgressFn = std::sync::Arc<dyn Fn(usize, usize) + Send + Sync>;
+/// v3: true = skip the URL entirely (recorded fingerprint still fresh).
+pub type SkipFn = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
+/// v3: (url, fingerprint, markdown, title) — the delta-crawl memory feed.
+pub type OnPageFn = std::sync::Arc<dyn Fn(&str, Option<&str>, &str, Option<&str>) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct CrawlOptions {
     pub focus: Option<String>,
@@ -162,7 +169,13 @@ pub struct CrawlOptions {
     pub cancel: Option<tokio::sync::watch::Receiver<bool>>,
     /// v3: progress callback (done, queued) — fired per completed
     /// page, throttled by the caller.
-    pub progress: Option<std::sync::Arc<dyn Fn(usize, usize) + Send + Sync>>,
+    pub progress: Option<ProgressFn>,
+    /// v3: delta crawl — URLs for which this returns true are
+    /// skipped entirely (recorded fingerprint still fresh).
+    pub skip_unchanged: Option<SkipFn>,
+    /// v3: record a fetched page's fingerprint (url, fingerprint,
+    /// markdown, title) — the delta-crawl memory feed.
+    pub on_page: Option<OnPageFn>,
     /// Map hard cap.
     pub map_cap: usize,
     /// Minimum content quality (0.0-1.0). Pages below this
@@ -187,6 +200,8 @@ impl Default for CrawlOptions {
             respect_robots: true,
             cancel: None,
             progress: None,
+            skip_unchanged: None,
+            on_page: None,
             map_cap: 120,
             min_quality: 0.05,
         }
@@ -521,6 +536,9 @@ impl Crawler {
             let seed_norm_w = seed_norm.clone();
             let robots = robots.clone();
             let max_pages = opts.max_pages;
+            // Sitemap found ⇒ link discovery does not depend on the
+            // seed fetch ⇒ even the seed is skippable in delta mode.
+            let sitemap_found = !sitemap_entries.is_empty();
             let max_total = opts.max_total_chars;
             let max_depth = opts.max_depth;
 
@@ -616,6 +634,18 @@ impl Crawler {
                     // The seed is always fetched (entry point for
                     // link discovery) but its content is scope-gated
                     // post-extraction. Non-seed URLs are filtered here.
+                    // v3 delta crawl: skip pages with a fresh recorded
+                    // fingerprint. Counted as skipped, not fetched.
+                    if let Some(should_skip) = &opts_worker.skip_unchanged
+                        && (item.url != seed_norm_w || sitemap_found)
+                        && should_skip(&item.url)
+                    {
+                        skipped
+                            .lock()
+                            .unwrap()
+                            .push((item.url.clone(), "unchanged (since_last)".into()));
+                        continue 'work;
+                    }
                     let is_seed = item.url == seed_norm_w;
                     if !is_seed
                         && !scope_allowed(
@@ -990,6 +1020,9 @@ impl Crawler {
                         }
                         if !duplicate {
                             chars_total.fetch_add(chars, Ordering::SeqCst);
+                        }
+                        if let Some(rec) = &opts_worker.on_page {
+                            rec(&page.url, r.fingerprint.as_deref(), &md, r.title.as_deref());
                         }
                         pages.lock().unwrap().push(CrawlPage {
                             url: page.url.clone(),

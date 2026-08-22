@@ -38,6 +38,16 @@ The context-warfare milestone (v3 M1): every tool now respects the agent's conte
 - **Cost footer**: every fetch result's `[meta]` line and structuredContent carries `ms` — the agent sees what latency cost.
 - Crawl stop reason `Cancelled` with its own next_action ("resume with the token above").
 
+### Added (M3 — trust & memory)
+
+- **Page fingerprints + change verdicts**: every completed fetch is fingerprinted (sha256 of the normalized full markdown, first 12 hex) and recorded in a persistent page history (`~/.cache/donsetch/page-history.json`, capped: 64KB text per URL, 4MB total, 512 URLs). The next fetch of the same URL stamps its verdict in `[meta]` — `changed (minor|changed|rewritten)` with an ago-seconds label — so a re-read after a hot edit is an informed decision, not a guess.
+- **`since_last=true`**: collapses the fetch output to the verdict. Unchanged pages become one line ("unchanged since last fetch (300s ago) — fingerprint …"); changed pages return a section-level delta report (headings added/removed/changed, capped at 8) plus "refetch without since_last for full content". Re-watching a page costs ~30 tokens instead of 4k.
+- **Archive resurrection (`archive=auto|only|off`)**: on a dead link (404/410/gone), `auto` transparently checks the Wayback Machine and, if a snapshot exists, returns it stamped `ARCHIVED COPY of <url> — snapshot <date> (<age> old)` with an honest age warning when the snapshot is stale. `only` goes to the archive directly; `off` preserves the raw error. Dead links stop being dead ends.
+- **Anti-cloak equivalence check**: on domains known to serve decoy content to plain-HTTP clients (the wall registry), DonShadow's response is cross-checked against a headless render — text-similarity below the threshold appends a `decoy suspected` warning instead of confidently returning cloaked junk.
+- **Freshness truth**: `structuredContent.server_modified` surfaces the server's own `Last-Modified` on successful fetches — cache-lie detection for the agent ("the page says 2024, the server says 2019").
+- **Loud engine degradation**: search results from degraded engines carry a `*degraded: 3/5 engines ok (duckduckgo: timeout)*` line — silent quality collapse is visible in-band.
+- **Delta crawl (`since_last=true`)**: crawl skips pages whose recorded fingerprint is still fresh (24h window), reporting each as `unchanged (since_last)` in the skipped list — re-crawling a site after an edit returns just what moved.
+
 
 ## [2.5.0] - 2026-08-22
 

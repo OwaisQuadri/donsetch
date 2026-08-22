@@ -262,6 +262,7 @@ fn finish(
         quality: 0.9,
         pdf_pages: None,
         images: Vec::new(),
+        fingerprint: None,
     })
 }
 

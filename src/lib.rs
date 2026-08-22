@@ -25,6 +25,7 @@ pub mod ghost;
 pub mod handles;
 pub mod mcp;
 pub mod memory;
+pub mod pages;
 pub mod paths;
 pub mod pdf;
 pub mod profile;

@@ -934,6 +934,22 @@ or add an API-key provider (`donsetch keys add`)*\n",
         out.elapsed.as_millis(),
         source
     ));
+    // v3: degraded engines are named, never silently fewer. A merge
+    // built while engines were down must never pass as full-strength.
+    let failed: Vec<String> = out
+        .report
+        .iter()
+        .filter(|r| r.status != "ok")
+        .map(|r| format!("{}: {}", r.engine, r.status))
+        .collect();
+    if !failed.is_empty() {
+        md.push_str(&format!(
+            "*degraded: {}/{} engines ok ({}) — results may skew*\n",
+            out.report.len() - failed.len(),
+            out.report.len(),
+            failed.join(", ")
+        ));
+    }
     if handles.is_some() && !out.results.is_empty() {
         md.push_str("*fetch S1… by handle (raw urls in structuredContent)*\n");
     }

@@ -158,6 +158,22 @@ const FETCH_PARAMS: &[ParamSpec] = &[
         help: "Hard time budget for this call in ms (500-600000). On expiry: honest deadline error + next_action — never a silent hang. Batch mode: per-URL budget.",
     },
     ParamSpec {
+        name: "archive",
+        flag: "archive",
+        kind: ParamKind::Enum(&["auto", "only", "off"]),
+        cli: CliKind::Flag,
+        required: false,
+        help: "Dead-page recovery via the keyless Wayback Machine. auto (default): on hard failure (404/paywall/unsolvable wall) serve the nearest archived snapshot, clearly labeled with its date. only: skip the live fetch, go straight to the archive. off: never.",
+    },
+    ParamSpec {
+        name: "since_last",
+        flag: "since-last",
+        kind: ParamKind::SetTrue,
+        cli: CliKind::Flag,
+        required: false,
+        help: "Change check instead of full read: if the page is unchanged since your last fetch, output collapses to a one-line verdict; if changed, you get the section-level delta (added/removed/changed). Refetch without it for full content. Monitoring/re-verification at ~zero tokens.",
+    },
+    ParamSpec {
         name: "image_text",
         flag: "image-text",
         kind: ParamKind::SetTrue,
@@ -358,6 +374,14 @@ const CRAWL_PARAMS: &[ParamSpec] = &[
         cli: CliKind::Flag,
         required: false,
         help: "Hard crawl deadline in seconds (default 120, range 5-600). Partial results return after.",
+    },
+    ParamSpec {
+        name: "since_last",
+        flag: "since-last",
+        kind: ParamKind::SetTrue,
+        cli: CliKind::Flag,
+        required: false,
+        help: "Delta crawl: skip pages you already fetched in the last 24h (fingerprint on file) — only new/changed pages are fetched and counted. Monitoring and re-crawls at a fraction of the cost.",
     },
     ParamSpec {
         name: "resume",

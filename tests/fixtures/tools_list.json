@@ -11,6 +11,15 @@
             },
             "type": "array"
           },
+          "archive": {
+            "description": "Dead-page recovery via the keyless Wayback Machine. auto (default): on hard failure (404/paywall/unsolvable wall) serve the nearest archived snapshot, clearly labeled with its date. only: skip the live fetch, go straight to the archive. off: never.",
+            "enum": [
+              "auto",
+              "only",
+              "off"
+            ],
+            "type": "string"
+          },
           "budget_tokens": {
             "description": "Batch mode (array url): total output token budget shared across all results (200-500k). DonSeTch allocates it across pages by size — small pages stay whole, big ones get sliced with a resume note. Without it each page uses max_chars independently.",
             "type": "integer"
@@ -58,6 +67,10 @@
           "shot": {
             "description": "File path — saves a PNG screenshot when blocked by interactive captcha. Only fires on captcha walls; not a general screenshot tool.",
             "type": "string"
+          },
+          "since_last": {
+            "description": "Change check instead of full read: if the page is unchanged since your last fetch, output collapses to a one-line verdict; if changed, you get the section-level delta (added/removed/changed). Refetch without it for full content. Monitoring/re-verification at ~zero tokens.",
+            "type": "boolean"
           },
           "tier": {
             "description": "auto (default, always use for real work): HTTP first, auto-escalates to headless browser on bot-walls/JS-shells, auto-detects and parses PDFs. \"1\" (testing): HTTP only, no browser — fails on JS sites. \"2\" (testing): browser directly — slower, skips HTTP entirely.",
@@ -187,6 +200,10 @@
           },
           "same_host": {
             "description": "Stay on seed's host (default true). false = follow cross-domain links.",
+            "type": "boolean"
+          },
+          "since_last": {
+            "description": "Delta crawl: skip pages you already fetched in the last 24h (fingerprint on file) — only new/changed pages are fetched and counted. Monitoring and re-crawls at a fraction of the cost.",
             "type": "boolean"
           },
           "url": {
