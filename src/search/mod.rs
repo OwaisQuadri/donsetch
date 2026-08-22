@@ -240,8 +240,8 @@ impl Searcher {
                         cached: true,
                         elapsed: started.elapsed(),
                         provider: None,
-                                        reranked: crate::search::rerank::active(),
-                });
+                        reranked: crate::search::rerank::active(),
+                    });
                 }
             }
             // Leader died or timed out — compute ourselves.
@@ -281,8 +281,8 @@ impl Searcher {
                 cached: true,
                 elapsed: started.elapsed(),
                 provider: None,
-                                reranked: crate::search::rerank::active(),
-                });
+                reranked: crate::search::rerank::active(),
+            });
         }
 
         let engines = intent::engines_for(intent);
@@ -565,7 +565,7 @@ impl Searcher {
             cached: false,
             elapsed: started.elapsed(),
             provider: None,
-                    reranked: crate::search::rerank::active(),
+            reranked: crate::search::rerank::active(),
         })
     }
 

@@ -94,7 +94,7 @@ impl Daemon {
                                 {
                                     Ok(p) => p,
                                     Err(second) => {
-                                        return Err(format!("render: {first}; retry: {second}"))
+                                        return Err(format!("render: {first}; retry: {second}"));
                                     }
                                 }
                             }
@@ -1301,7 +1301,12 @@ async fn ghost_escalate(
             }
         }
     }
-    if let Ok(e2) = extract::extract(page.html.as_bytes(), extract::charset::GHOST_TEXT_CT, url, opts) {
+    if let Ok(e2) = extract::extract(
+        page.html.as_bytes(),
+        extract::charset::GHOST_TEXT_CT,
+        url,
+        opts,
+    ) {
         let thin = e2.thin;
         let better = match &best {
             None => true,
@@ -1327,7 +1332,12 @@ async fn ghost_escalate(
     if best.as_ref().map(|(thin, ..)| *thin).unwrap_or(true) {
         let mut lopts = opts.clone();
         lopts.include_links = true;
-        if let Ok(e3) = extract::extract(page.html.as_bytes(), extract::charset::GHOST_TEXT_CT, url, &lopts) {
+        if let Ok(e3) = extract::extract(
+            page.html.as_bytes(),
+            extract::charset::GHOST_TEXT_CT,
+            url,
+            &lopts,
+        ) {
             let thin = e3.thin;
             let better = match &best {
                 None => true,
@@ -1619,8 +1629,12 @@ async fn fetch_with_actions(
     if best.is_none() {
         let mut lopts = opts.clone();
         lopts.include_links = true;
-        if let Ok(e2) = extract::extract(html.as_bytes(), extract::charset::GHOST_TEXT_CT, url, &lopts)
-            && !e2.thin
+        if let Ok(e2) = extract::extract(
+            html.as_bytes(),
+            extract::charset::GHOST_TEXT_CT,
+            url,
+            &lopts,
+        ) && !e2.thin
         {
             best = Some(e2);
         }
@@ -1826,9 +1840,7 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                             "structuredContent": meta,
                         })
                     }
-                    Err(e2) => {
-                        search_error(&query, &format!("local ({e}); byok ({e2})"), true)
-                    }
+                    Err(e2) => search_error(&query, &format!("local ({e}); byok ({e2})"), true),
                 }
             } else {
                 search_error(&query, &e.to_string(), false)
@@ -1850,7 +1862,9 @@ fn search_error(query: &str, cause: &str, byok_tried: bool) -> Value {
         "all engines failed — transient in most cases: retry once, then simplify the query",
     );
     if !byok_tried {
-        hint.push_str("; if repeated, add an API key provider (donsetch keys add) for a fallback path");
+        hint.push_str(
+            "; if repeated, add an API key provider (donsetch keys add) for a fallback path",
+        );
     }
     tool_error_structured(
         format!("search: {cause}"),

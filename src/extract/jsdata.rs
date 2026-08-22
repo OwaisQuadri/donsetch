@@ -972,7 +972,10 @@ mod tests {
             ..opts()
         };
         let (slice, _) = paginate(&full, &o);
-        assert!(!slice.is_empty(), "saturating add must not wrap end < start");
+        assert!(
+            !slice.is_empty(),
+            "saturating add must not wrap end < start"
+        );
     }
 
     #[test]

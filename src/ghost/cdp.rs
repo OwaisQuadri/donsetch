@@ -39,11 +39,13 @@ impl Cdp {
         // The only unguarded network primitive in the ghost stack —
         // a browser that accepts TCP but stalls the WS handshake
         // would hang the tool call forever.
-        let (ws, _) =
-            tokio::time::timeout(std::time::Duration::from_secs(10), tokio_tungstenite::connect_async(ws_url))
-                .await
-                .map_err(|_| FetchError::ghost("cdp connect: ws handshake timeout"))?
-                .map_err(|e| FetchError::ghost(format!("cdp connect: {e}")))?;
+        let (ws, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio_tungstenite::connect_async(ws_url),
+        )
+        .await
+        .map_err(|_| FetchError::ghost("cdp connect: ws handshake timeout"))?
+        .map_err(|e| FetchError::ghost(format!("cdp connect: {e}")))?;
         let (write, mut read) = ws.split();
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> =
             Arc::new(Mutex::new(HashMap::new()));

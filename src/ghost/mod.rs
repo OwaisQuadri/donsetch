@@ -216,9 +216,7 @@ fn known_chrome_paths() -> Vec<PathBuf> {
     // ONLY CDP-capable browser on a stock box. Its directory is never
     // on PATH, so it must be probed explicitly.
     if let Some(pfx86) = std::env::var_os("ProgramFiles(x86)") {
-        paths.push(
-            PathBuf::from(&pfx86).join("Microsoft\\Edge\\Application\\msedge.exe"),
-        );
+        paths.push(PathBuf::from(&pfx86).join("Microsoft\\Edge\\Application\\msedge.exe"));
     }
     if let Some(pf) = std::env::var_os("ProgramFiles") {
         paths.push(PathBuf::from(&pf).join("Microsoft\\Edge\\Application\\msedge.exe"));

@@ -99,34 +99,36 @@ impl MockSite {
                         .push((url.clone(), referer.clone()));
                     // Throttle simulation: 429 until counter burns out.
                     if let Some(c) = throttles.lock().unwrap().get(&url)
-                        && c.load(Ordering::SeqCst) > 0 {
-                            c.fetch_sub(1, Ordering::SeqCst);
-                            return FetchedPage {
-                                url,
-                                status: 429,
-                                headers: vec![],
-                                body: b"slow down".to_vec(),
-                                verdict: Verdict::Blocked,
-                                latency: Duration::from_millis(10),
-                                cached: false,
-                                error_hint: None,
-                            };
-                        }
+                        && c.load(Ordering::SeqCst) > 0
+                    {
+                        c.fetch_sub(1, Ordering::SeqCst);
+                        return FetchedPage {
+                            url,
+                            status: 429,
+                            headers: vec![],
+                            body: b"slow down".to_vec(),
+                            verdict: Verdict::Blocked,
+                            latency: Duration::from_millis(10),
+                            cached: false,
+                            error_hint: None,
+                        };
+                    }
                     // Transient 500 simulation: 500 until counter burns out.
                     if let Some(c) = transients.lock().unwrap().get(&url)
-                        && c.load(Ordering::SeqCst) > 0 {
-                            c.fetch_sub(1, Ordering::SeqCst);
-                            return FetchedPage {
-                                url,
-                                status: 500,
-                                headers: vec![],
-                                body: b"internal error".to_vec(),
-                                verdict: Verdict::Blocked,
-                                latency: Duration::from_millis(10),
-                                cached: false,
-                                error_hint: Some("transient 500".into()),
-                            };
-                        }
+                        && c.load(Ordering::SeqCst) > 0
+                    {
+                        c.fetch_sub(1, Ordering::SeqCst);
+                        return FetchedPage {
+                            url,
+                            status: 500,
+                            headers: vec![],
+                            body: b"internal error".to_vec(),
+                            verdict: Verdict::Blocked,
+                            latency: Duration::from_millis(10),
+                            cached: false,
+                            error_hint: Some("transient 500".into()),
+                        };
+                    }
                     let ct = content_types
                         .get(&url)
                         .cloned()

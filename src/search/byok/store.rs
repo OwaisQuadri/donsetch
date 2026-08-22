@@ -556,7 +556,14 @@ fn mask_key(key: &str) -> String {
     // Char-boundary-safe: a pasted key containing multi-byte chars
     // would panic on a raw byte slice.
     let head: String = key.chars().take(8).collect();
-    let tail: String = key.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let tail: String = key
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{head}...{tail}")
 }
 

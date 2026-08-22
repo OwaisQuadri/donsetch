@@ -117,7 +117,11 @@ pub fn parse(v: &Value) -> Result<Vec<Action>, String> {
         };
         let a = match kind {
             "wait" => Action::Wait {
-                ms: obj.get("ms").and_then(Value::as_u64).unwrap_or(500).min(30_000),
+                ms: obj
+                    .get("ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(500)
+                    .min(30_000),
             },
             "wait_selector" => Action::WaitSelector {
                 selector: sel().ok_or(format!("actions[{i}] wait_selector needs \"selector\""))?,

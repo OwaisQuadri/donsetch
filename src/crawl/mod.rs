@@ -59,9 +59,8 @@ pub struct GhostRender {
 /// declined, not just that it did. The orchestrator calls it
 /// when a page is a JS shell (thin extraction) or a bot wall
 /// (Challenge verdict). Capped at 3 per crawl.
-pub type GhostHook = Arc<
-    dyn Fn(String) -> BoxFuture<'static, Result<GhostRender, String>> + Send + Sync,
->;
+pub type GhostHook =
+    Arc<dyn Fn(String) -> BoxFuture<'static, Result<GhostRender, String>> + Send + Sync>;
 
 /// Pluggable fetch: real = DonShadow, tests = in-memory map.
 pub type PageFetcher =
