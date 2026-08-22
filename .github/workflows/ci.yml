@@ -163,9 +163,10 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
-          # cargo-fuzz builds for musl by default (build-std needs
-          # both the target and rust-src).
-          targets: x86_64-unknown-linux-musl
+          # -Zbuild-std needs rust-src. We fuzz the GNU target —
+          # boring-sys (BoringSSL C++) has no musl cross toolchain
+          # here and doesn't need one.
+          targets: x86_64-unknown-linux-gnu
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@v2
         with:
@@ -174,15 +175,15 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '>=1.22.0'
-      - name: Install build deps (boring-sys + musl)
+      - name: Install build deps (boring-sys)
         run: |
           sudo apt-get update -o Acquire::Retries=5
-          sudo apt-get install -y --no-install-recommends cmake nasm libclang-dev musl-tools
+          sudo apt-get install -y --no-install-recommends cmake nasm libclang-dev
       - name: Fuzz (90s smoke)
         working-directory: fuzz
         run: |
           mkdir -p corpus/${{ matrix.target }} artifacts/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} -s none -- -max_total_time=90 -artifact_prefix=artifacts/${{ matrix.target }}/
+          cargo fuzz run ${{ matrix.target }} --target x86_64-unknown-linux-gnu -s none -- -max_total_time=90 -artifact_prefix=artifacts/${{ matrix.target }}/
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4
