@@ -133,7 +133,7 @@ impl BrowserProfile {
 
     /// Ordered header template for a document GET, Chrome order.
     /// (name, value-or-placeholder). Placeholders filled by caller.
-    pub fn h1_headers(&self, host: &str) -> Vec<(String, String)> {
+    pub fn h1_headers(&self, host: &str, path: &str) -> Vec<(String, String)> {
         vec![
             ("host".into(), host.into()),
             ("connection".into(), "keep-alive".into()),
@@ -148,10 +148,53 @@ impl BrowserProfile {
             ("sec-fetch-user".into(), "?1".into()),
             ("sec-fetch-dest".into(), "document".into()),
             ("accept-encoding".into(), "gzip, deflate, br, zstd".into()),
-            ("accept-language".into(), "en-US,en;q=0.9".into()),
+            ("accept-language".into(), accept_language_for(host, path).to_string()),
             ("priority".into(), "u=0, i".into()),
         ]
     }
+}
+
+/// v3 F5: Accept-Language coherent with the target's locale.
+/// Many sites gate localized content on this header — an en-US
+/// header on a .ru page is served the English stub (and is a mild
+/// incoherence signal). Derived from the host TLD and non-Latin
+/// script in the path; everything else stays Chrome-default en-US.
+pub fn accept_language_for(host: &str, path: &str) -> &'static str {
+    let tld = host.rsplit('.').next().unwrap_or("");
+    let lang = match tld {
+        "ru" | "su" => Some("ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "de" => Some("de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "fr" => Some("fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "jp" | "ne" => Some("ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "cn" => Some("zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "tw" | "hk" | "mo" => Some("zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "kr" => Some("ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "it" => Some("it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "es" => Some("es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "pt" => Some("pt-PT,pt;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "pl" => Some("pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "tr" => Some("tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "nl" => Some("nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "cz" | "cs" => Some("cs-CZ,cs;q=0.9,en-US;q=0.8,en;q=0.7"),
+        "se" => Some("sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7"),
+        _ => None,
+    };
+    if let Some(l) = lang {
+        return l;
+    }
+    // Cyrillic (percent-encoded UTF-8 %D0-%D4 lead bytes) or CJK
+    // in the path ⇒ locale hint even on a .com.
+    if path.contains("%D0") || path.contains("%D1") {
+        return "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7";
+    }
+    if path.contains("%E4") || path.contains("%E5") || path.contains("%E6") || path.contains("%E7")
+    {
+        return "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7";
+    }
+    if path.contains("%E3") {
+        return "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7";
+    }
+    "en-US,en;q=0.9"
 }
 
 /// Probe the installed browser's major version. Cached after first call.
@@ -198,4 +241,30 @@ pub fn probe_installed_major() -> Option<u32> {
         }
         None
     })
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::accept_language_for;
+
+    #[test]
+    fn tld_drives_locale() {
+        assert!(accept_language_for("69shuba.com", "/").starts_with("en-US"));
+        assert!(accept_language_for("www.69shuba.ru", "/book/1").starts_with("ru-RU"));
+        assert!(accept_language_for("example.co.jp", "/").starts_with("ja-JP"));
+        assert!(accept_language_for("example.com.cn", "/").starts_with("zh-CN"));
+    }
+
+    #[test]
+    fn path_script_hint() {
+        // Percent-encoded Cyrillic in the path ⇒ ru even on .com.
+        assert!(accept_language_for("example.com", "/tags/%D0%A4%D0%B0").starts_with("ru-RU"));
+        // CJK lead byte ⇒ zh.
+        assert!(accept_language_for("example.com", "/wiki/%E4%B8%AD").starts_with("zh-CN"));
+        // Plain path stays default.
+        assert_eq!(
+            accept_language_for("example.com", "/docs"),
+            "en-US,en;q=0.9"
+        );
+    }
 }

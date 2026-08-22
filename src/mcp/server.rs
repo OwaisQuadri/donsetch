@@ -1259,6 +1259,47 @@ async fn fetch_single(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
     }
 }
 
+/// v3 F3: find the rel=next pagination link (rel may carry other
+/// tokens, e.g. rel="next chapter"); resolved against `base`.
+fn find_rel_next(html: &str, base: &str) -> Option<String> {
+    let doc = scraper::Html::parse_document(html);
+    let sel = scraper::Selector::parse("link[rel], a[rel]").ok()?;
+    let base = url::Url::parse(base).ok()?;
+    for el in doc.select(&sel) {
+        let rel = el.value().attr("rel").unwrap_or_default();
+        if !rel
+            .split_whitespace()
+            .any(|t| t.eq_ignore_ascii_case("next"))
+        {
+            continue;
+        }
+        if let Some(href) = el.value().attr("href")
+            && let Ok(joined) = base.join(href)
+        {
+            return Some(joined.to_string());
+        }
+    }
+    None
+}
+
+/// Strip a part's frontmatter (title line, URL line, description
+/// line) — stitched parts share the article's chrome, and the
+/// `*(part N)*` marker already carries the context.
+fn strip_part_frontmatter(md: &str) -> String {
+    let lines: Vec<&str> = md.lines().collect();
+    let mut start = 0;
+    if lines.first().is_some_and(|l| l.starts_with("# ")) {
+        start = 1;
+    }
+    if lines.get(start).is_some_and(|l| l.starts_with("http")) {
+        start += 1;
+    }
+    if lines.get(start).is_some_and(|l| l.starts_with("> ")) {
+        start += 1;
+    }
+    lines[start..].join("\n").trim().to_string()
+}
+
 #[allow(clippy::field_reassign_with_default)]
 async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
     let t0 = std::time::Instant::now();
@@ -1347,6 +1388,7 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
         .get("since_last")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let stitch = args.get("stitch").and_then(Value::as_bool).unwrap_or(false);
     let tier = args.get("tier").and_then(Value::as_str).unwrap_or("auto");
     let shot = args.get("shot").and_then(Value::as_str);
 
@@ -1434,7 +1476,32 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
     // === Fetch (tier 1, unless skipped) ===
     let mut out: Option<crate::fetch::client::FetchOutcome> = None;
 
-    if !skip_tier1 {
+    // === v3 F1: search→fetch warm handoff ===
+    // Enrichment already fetched the top search results — if
+    // this URL is one of them, serve that body, skip the
+    // network. One-shot (a second fetch goes to the wire for
+    // freshness); the rest of the pipeline (extraction,
+    // thin→ghost, history) runs unchanged on the cached body.
+    let mut prewarmed = false;
+    if !is_pdf_url && let Some(entry) = daemon.searcher.prewarms().lock().unwrap().take(&orig_url) {
+        tier_used = "prewarmed";
+        prewarmed = true;
+        trace.step("prewarm", "search-handoff", "hit", 0);
+        out = Some(crate::fetch::client::FetchOutcome {
+            url: orig_url.clone(),
+            status: 200,
+            alpn: "h2".to_string(),
+            headers: vec![("content-type".to_string(), entry.content_type)],
+            body: entry.body,
+            redirects: 0,
+            cache: crate::fetch::client::CacheState::None,
+            used_pool: true,
+            verdict: Verdict::ContentOk,
+            elapsed: std::time::Duration::from_millis(0),
+        });
+    }
+
+    if !skip_tier1 && !prewarmed {
         let t0 = std::time::Instant::now();
         let fetched = match daemon.fetcher.fetch(&url).await {
             Ok(o) => o,
@@ -1751,6 +1818,9 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
                     t0.elapsed().as_millis(),
                 );
                 res["_meta"] = json!({ "ttlMs": 300_000, "cacheScope": "session" });
+                if prewarmed && let Some(sc) = res.pointer_mut("/structuredContent") {
+                    sc["prewarmed_by_search"] = json!(true);
+                }
                 apply_link_handles(daemon, &mut res).await;
                 return res;
             }
@@ -1797,6 +1867,89 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
                         "escalation": trace.value(),
                     })),
                 );
+            }
+        }
+    }
+
+    // === v3 F3: article pagination stitching ===
+    // rel=next chains walked to a bounded budget: one call returns
+    // the whole article with part markers instead of eight calls.
+    let mut stitched_parts: usize = 1;
+    if stitch {
+        const STITCH_MAX_PARTS: usize = 6;
+        const STITCH_BUDGET: usize = 48_000;
+        let base = out.as_ref().map(|o| {
+            let ct = o
+                .headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            (crate::extract::charset::decode(&o.body, &ct), o.url.clone())
+        });
+        if let Some((html, base_url)) = base
+            && let Some(mut next) = find_rel_next(&html, &base_url)
+            && let Some(ex) = final_ex.as_mut()
+        {
+            let base_host = url::Url::parse(&base_url)
+                .ok()
+                .and_then(|u| u.host_str().map(String::from));
+            let mut total = ex.markdown.len();
+            let mut parts: Vec<String> = Vec::new();
+            while parts.len() + 1 < STITCH_MAX_PARTS && total < STITCH_BUDGET {
+                // Hijack guard: never follow rel=next off-host.
+                let Ok(nu) = url::Url::parse(&next) else {
+                    break;
+                };
+                if nu.host_str().map(String::from) != base_host {
+                    break;
+                }
+                let fetched = match daemon.fetcher.fetch(&next).await {
+                    Ok(o2) if matches!(o2.verdict, Verdict::ContentOk) => o2,
+                    _ => break,
+                };
+                trace.step("stitch", "fetch-part", &next, fetched.elapsed.as_millis());
+                let ct2 = fetched
+                    .headers
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default();
+                let html2 = crate::extract::charset::decode(&fetched.body, &ct2);
+                let mut popts = opts.clone();
+                popts.max_chars = Some(8_000);
+                match extract::extract(&fetched.body, &ct2, &fetched.url, &popts) {
+                    Ok(pe) => {
+                        let md = strip_part_frontmatter(&pe.markdown);
+                        total += md.len();
+                        parts.push(md);
+                        next = match find_rel_next(&html2, &fetched.url) {
+                            Some(n) => n,
+                            None => break,
+                        };
+                    }
+                    Err(_) => break,
+                }
+            }
+            if !parts.is_empty() {
+                stitched_parts = parts.len() + 1;
+                for (i, p) in parts.iter().enumerate() {
+                    ex.markdown
+                        .push_str(&format!("\n\n---\n\n*(part {})*\n\n", i + 2));
+                    ex.markdown.push_str(p);
+                }
+                // One article, one budget: the stitched cap is the
+                // larger of the user's max and 48k.
+                let cap = opts
+                    .max_chars
+                    .unwrap_or(16_000)
+                    .max(200)
+                    .max(STITCH_BUDGET.min(48_000));
+                let (slice, next_off) = extract::paginate_public(&ex.markdown, opts.offset, cap);
+                ex.markdown = slice;
+                ex.next_offset = next_off;
+                ex.total_chars = total;
+                ex.tokens_est = ex.markdown.len() / 4;
             }
         }
     }
@@ -1851,6 +2004,14 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
         &trace,
         t0.elapsed().as_millis(),
     );
+    if prewarmed && let Some(sc) = res.pointer_mut("/structuredContent") {
+        sc["prewarmed_by_search"] = json!(true);
+    }
+    if stitched_parts > 1
+        && let Some(sc) = res.pointer_mut("/structuredContent")
+    {
+        sc["stitched"] = json!(stitched_parts);
+    }
     apply_link_handles(daemon, &mut res).await;
     // v3 anti-cloak: a known-walled domain passing tier-1 cold
     // cleanly is suspicious. One equivalence check; a warning is
@@ -3023,6 +3184,25 @@ fn finish_result(
 
 /// Bind the outcome's result URLs as position handles (S1..Sn)
 /// in the persistent table, then return them for rendering.
+/// v3 F2: per-result route hints from the self-improving store —
+/// domains that consistently need the browser carry the cost in
+/// the open so the agent can budget or pick a faster source.
+async fn route_hints(
+    daemon: &Arc<Daemon>,
+    out: &crate::search::SearchOutcome,
+) -> Vec<Option<String>> {
+    let state = daemon.state.lock().await;
+    out.results
+        .iter()
+        .map(|r| {
+            let host = crate::search::rank::host_of(&r.url);
+            state
+                .is_known_walled(&host)
+                .then(|| "· ⚠ needs browser (~+6s)".to_string())
+        })
+        .collect()
+}
+
 async fn bind_search_handles(
     daemon: &Arc<Daemon>,
     out: &crate::search::SearchOutcome,
@@ -3097,7 +3277,8 @@ async fn search_inner(
         match daemon.byok.search(query, max, intent).await {
             Ok(out) => {
                 let hs = bind_search_handles(daemon, &out).await;
-                let md = search::render_markdown(&out, query, Some(&hs));
+                let hints = route_hints(daemon, &out).await;
+                let md = search::render_markdown(&out, query, Some(&hs), &hints);
                 let meta = search::render_meta(&out);
                 return json!({
                     "content": [{ "type": "text", "text": md }],
@@ -3117,7 +3298,8 @@ async fn search_inner(
     match daemon.searcher.search(query, max, intent).await {
         Ok(out) => {
             let hs = bind_search_handles(daemon, &out).await;
-            let md = search::render_markdown(&out, query, Some(&hs));
+            let hints = route_hints(daemon, &out).await;
+            let md = search::render_markdown(&out, query, Some(&hs), &hints);
             let meta = search::render_meta(&out);
             json!({
                 "content": [{ "type": "text", "text": md }],
@@ -3134,7 +3316,8 @@ async fn search_inner(
                 match daemon.byok.search(query, max, intent).await {
                     Ok(out) => {
                         let hs = bind_search_handles(daemon, &out).await;
-                        let md = search::render_markdown(&out, query, Some(&hs));
+                        let hints = route_hints(daemon, &out).await;
+                        let md = search::render_markdown(&out, query, Some(&hs), &hints);
                         let meta = search::render_meta(&out);
                         json!({
                             "content": [{ "type": "text", "text": md }],
@@ -3296,5 +3479,45 @@ fn fetch_error_kind(e: &FetchError) -> &'static str {
     match e {
         FetchError::Timeout | FetchError::Io(_) => "transient",
         _ => "permanent",
+    }
+}
+
+#[cfg(test)]
+mod stitch_tests {
+    use super::*;
+
+    #[test]
+    fn rel_next_found_and_resolved() {
+        let html = r#"<html><head>
+            <link rel="prev" href="/p1">
+            <link rel="next chapter" href="/p3?page=2">
+        </head><body></body></html>"#;
+        // "/p3" is root-absolute: joins against the origin.
+        assert_eq!(
+            find_rel_next(html, "https://example.com/story/p2"),
+            Some("https://example.com/p3?page=2".to_string())
+        );
+    }
+
+    #[test]
+    fn anchor_rel_next_works() {
+        let html = r#"<a rel="next" href="page-3.html">Next</a>"#;
+        assert_eq!(
+            find_rel_next(html, "https://example.com/book/page-2.html"),
+            Some("https://example.com/book/page-3.html".to_string())
+        );
+    }
+
+    #[test]
+    fn no_next_is_none() {
+        assert!(find_rel_next("<html></html>", "https://example.com/").is_none());
+    }
+
+    #[test]
+    fn part_frontmatter_stripped() {
+        let part =
+            "# My Story\nhttps://example.com/p2\n> Same description\n\nPart two content here.";
+        assert_eq!(strip_part_frontmatter(part), "Part two content here.");
+        assert_eq!(strip_part_frontmatter("Just content"), "Just content");
     }
 }

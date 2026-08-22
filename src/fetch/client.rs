@@ -332,7 +332,7 @@ impl Fetcher {
         };
 
         // Header set from profile (Chrome order, coherence) + cookie + conditionals.
-        let mut req_headers = self.profile.h1_headers(&authority);
+        let mut req_headers = self.profile.h1_headers(&authority, &path);
         if use_jar {
             let jar = self.jar.lock().unwrap();
             if let Some(cookie) = jar.header_for(host, &path) {

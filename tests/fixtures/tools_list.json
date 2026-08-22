@@ -72,6 +72,10 @@
             "description": "Change check instead of full read: if the page is unchanged since your last fetch, output collapses to a one-line verdict; if changed, you get the section-level delta (added/removed/changed). Refetch without it for full content. Monitoring/re-verification at ~zero tokens.",
             "type": "boolean"
           },
+          "stitch": {
+            "description": "Multi-page articles: follow rel=next pagination and return the WHOLE article in one call (up to 6 parts / 48k chars) with *(part N)* markers, instead of re-fetching page by page. Same-host only.",
+            "type": "boolean"
+          },
           "tier": {
             "description": "auto (default, always use for real work): HTTP first, auto-escalates to headless browser on bot-walls/JS-shells, auto-detects and parses PDFs. \"1\" (testing): HTTP only, no browser — fails on JS sites. \"2\" (testing): browser directly — slower, skips HTTP entirely.",
             "enum": [

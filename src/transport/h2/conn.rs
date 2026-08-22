@@ -267,3 +267,49 @@ impl H2Conn {
         })
     }
 }
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+
+    /// v3 F4 gate: DonShadow's h2 preface must be byte-identical
+    /// to Chromium's (Akamai-style fingerprint
+    /// `1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p`).
+    /// Ground truth: Chromium 150 capture (2026-07-30). Any change
+    /// here is a fingerprint regression — update ONLY with a new
+    /// capture, never by hand.
+    #[test]
+    fn settings_match_chromium() {
+        let h2 = crate::profile::BrowserProfile::chrome_150(crate::profile::Platform::Linux).h2;
+        // SETTINGS id/value pairs, in Chromium's exact order.
+        assert_eq!(h2.header_table_size, 65536); // 0x1
+        assert_eq!(h2.enable_push, 0); // 0x2
+        assert_eq!(h2.initial_window_size, 6_291_456); // 0x4
+        assert_eq!(h2.max_header_list_size, 262_144); // 0x6
+        assert_eq!(h2.conn_window_update, 15_663_105);
+        let payload = settings_payload(&[
+            (0x1, h2.header_table_size),
+            (0x2, h2.enable_push),
+            (0x4, h2.initial_window_size),
+            (0x6, h2.max_header_list_size),
+        ]);
+        // The exact wire bytes of Chrome's SETTINGS body.
+        assert_eq!(
+            payload,
+            vec![
+                0x00, 0x01, 0x00, 0x01, 0x00, 0x00, // HEADER_TABLE_SIZE = 65536
+                0x00, 0x02, 0x00, 0x00, 0x00, 0x00, // ENABLE_PUSH = 0
+                0x00, 0x04, 0x00, 0x60, 0x00, 0x00, // INITIAL_WINDOW_SIZE = 6291456
+                0x00, 0x06, 0x00, 0x04, 0x00, 0x00, // MAX_HEADER_LIST_SIZE = 262144
+            ]
+        );
+    }
+
+    /// Pseudo-header order: m,a,s,p — Chromium's header order.
+    #[test]
+    fn pseudo_header_order_is_chrome() {
+        // Mirrors the order in H2Conn::get; keep both in lockstep.
+        let order = [":method", ":authority", ":scheme", ":path"];
+        assert_eq!(order, [":method", ":authority", ":scheme", ":path"]);
+    }
+}

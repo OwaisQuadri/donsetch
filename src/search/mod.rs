@@ -104,6 +104,65 @@ pub struct Searcher {
     /// leader's result. Stampedes are an agent reality
     /// (parallel tool calls love the same query).
     inflight: Mutex<std::collections::HashSet<String>>,
+    /// v3 warm handoff: enrichment bodies cached for the
+    /// subsequent `web_fetch` of a top result (search → fetch
+    /// is THE agent pipeline). One-shot, TTL'd, bounded.
+    prewarms: std::sync::Arc<std::sync::Mutex<PrewarmCache>>,
+}
+
+/// v3 F1: search→fetch warm handoff store.
+pub struct PrewarmCache {
+    entries: HashMap<String, PrewarmEntry>,
+}
+
+pub struct PrewarmEntry {
+    pub body: Vec<u8>,
+    pub content_type: String,
+    pub at: Instant,
+}
+
+const PREWARM_CAP: usize = 10;
+const PREWARM_BODY_MAX: usize = 1_500_000;
+const PREWARM_TTL: Duration = Duration::from_secs(600);
+
+impl PrewarmCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+
+    fn put(&mut self, url: &str, body: Vec<u8>, content_type: String) {
+        if body.len() > PREWARM_BODY_MAX {
+            return; // huge pages: extraction is cheap, RAM isn't
+        }
+        // Bound: evict oldest beyond cap.
+        if self.entries.len() >= PREWARM_CAP
+            && !self.entries.contains_key(url)
+            && let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, e)| e.at)
+                .map(|(k, _)| k.clone())
+        {
+            self.entries.remove(&oldest);
+        }
+        self.entries.insert(
+            url.to_string(),
+            PrewarmEntry {
+                body,
+                content_type,
+                at: Instant::now(),
+            },
+        );
+    }
+
+    /// One-shot: a served prewarm is consumed — the second
+    /// fetch of the same URL goes to the network for freshness.
+    pub fn take(&mut self, url: &str) -> Option<PrewarmEntry> {
+        let e = self.entries.remove(url)?;
+        (e.at.elapsed() < PREWARM_TTL).then_some(e)
+    }
 }
 
 /// Per-engine outcome for honest reporting.
@@ -141,7 +200,14 @@ impl Searcher {
             cache: Mutex::new(load_cache_disk()),
             failures: Mutex::new(HashMap::new()),
             inflight: Mutex::new(std::collections::HashSet::new()),
+            prewarms: std::sync::Arc::new(std::sync::Mutex::new(PrewarmCache::new())),
         }
+    }
+
+    /// v3 F1: warm-handoff store — filled by enrichment, drained
+    /// by the fetch tool.
+    pub fn prewarms(&self) -> &std::sync::Arc<std::sync::Mutex<PrewarmCache>> {
+        &self.prewarms
     }
 
     /// Proxy preflight: probe every proxy at startup so
@@ -607,9 +673,11 @@ impl Searcher {
                     + 'a,
             >,
         >;
+        let prewarms = self.prewarms.clone();
         let mut futures: Vec<EnrichFut> = Vec::new();
         for (i, r) in results.iter().take(n).enumerate() {
             let url = r.url.clone();
+            let sink = prewarms.clone();
             futures.push(Box::pin(async move {
                 let out = tokio::time::timeout(
                     ENRICH_TIMEOUT,
@@ -628,16 +696,17 @@ impl Searcher {
                         if !matches!(o.verdict, Verdict::ContentOk) {
                             return (i, None, Some(String::new()));
                         }
-                        let html = crate::extract::charset::decode(
-                            &o.body,
-                            o.headers
-                                .iter()
-                                .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
-                                .map(|(_, v)| v.as_str())
-                                .unwrap_or(""),
-                        );
+                        let ct = o
+                            .headers
+                            .iter()
+                            .find(|(n, _)| n.eq_ignore_ascii_case("content-type"))
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or_default();
+                        let html = crate::extract::charset::decode(&o.body, &ct);
                         let title = extract_title(&html);
                         let desc = extract_description(&html);
+                        // v3 F1: keep the body for the warm handoff.
+                        sink.lock().unwrap().put(&url, o.body.clone(), ct);
                         (i, title, desc)
                     }
                 }
@@ -892,7 +961,12 @@ fn site_filter(query: &str, results: &mut Vec<Merged>) {
 }
 
 /// Markdown rendering for the MCP/CLI surface.
-pub fn render_markdown(out: &SearchOutcome, query: &str, handles: Option<&[String]>) -> String {
+pub fn render_markdown(
+    out: &SearchOutcome,
+    query: &str,
+    handles: Option<&[String]>,
+    hints: &[Option<String>],
+) -> String {
     // Search answers ONE question: "what should I fetch?"
     // Snippets carry just enough to decide — content is
     // the fetch tool's job.
@@ -908,7 +982,13 @@ pub fn render_markdown(out: &SearchOutcome, query: &str, handles: Option<&[Strin
         // raw URL — `fetch S3` is worth more than 80 tokens of URL.
         match handles {
             Some(hs) if let Some(h) = hs.get(i) => {
-                md.push_str(&format!("   {h}\n"));
+                // v3 F2: a known-walled domain carries its route
+                // cost — pick a faster source or budget time
+                // BEFORE spending the fetch.
+                match hints.get(i).and_then(|h| h.as_deref()) {
+                    Some(hint) => md.push_str(&format!("   {h} {hint}\n")),
+                    None => md.push_str(&format!("   {h}\n")),
+                }
             }
             _ => {
                 md.push_str(&format!("   {}\n", r.url));

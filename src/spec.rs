@@ -174,6 +174,14 @@ const FETCH_PARAMS: &[ParamSpec] = &[
         help: "Change check instead of full read: if the page is unchanged since your last fetch, output collapses to a one-line verdict; if changed, you get the section-level delta (added/removed/changed). Refetch without it for full content. Monitoring/re-verification at ~zero tokens.",
     },
     ParamSpec {
+        name: "stitch",
+        flag: "stitch",
+        kind: ParamKind::SetTrue,
+        cli: CliKind::Flag,
+        required: false,
+        help: "Multi-page articles: follow rel=next pagination and return the WHOLE article in one call (up to 6 parts / 48k chars) with *(part N)* markers, instead of re-fetching page by page. Same-host only.",
+    },
+    ParamSpec {
         name: "image_text",
         flag: "image-text",
         kind: ParamKind::SetTrue,

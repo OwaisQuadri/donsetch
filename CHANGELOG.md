@@ -60,6 +60,18 @@ A keyless adapter registry for the sites agents actually hit. Fetch-level rewrit
 - **Docs frameworks**: mkdocs / Docusaurus / Sphinx / Antora sites (detected via generator meta or framework markers) prepend a compact `Site outline` built from the nav — the site map with cheap L-handle links — before the page content. Version-switcher noise filtered.
 - `donsetch dev extract --url <url> --input <file>`: run the extraction pipeline on a saved HTML file against a URL (adapter development, fixture capture). `DONSETCH_ADAPTER_DUMP=<dir>` captures every body the adapters inspect.
 
+### Added (M5 — speed & stealth)
+
+- **Search→fetch warm handoff**: search enrichment already fetches the top results — that content is now cached (bounded: 10 bodies, 1.5MB each, 10min TTL) and the subsequent `web_fetch` of a result serves it instantly. `structuredContent.prewarmed_by_search: true`, tier reads `prewarmed` (the search→fetch second hop measured at ~3ms). One-shot: a second fetch goes to the wire for freshness; extraction, thin→ghost escalation and page history run unchanged on the cached body.
+- **Route hints on search results**: domains the self-improving store knows need the browser are annotated in the results (`⚠ needs browser (~+6s)`) — the agent can pick a faster source or budget time before spending the fetch.
+- **Article stitching (`stitch=true`)**: multi-page articles with rel=next pagination are walked (up to 6 parts, 48k budget, same-host only) and returned as ONE article with `*(part N)*` markers — an 8-part spread costs one call, not eight. `structuredContent.stitched` reports the part count.
+- **h2 fingerprint parity gate**: DonShadow's h2 preface (SETTINGS values+order, connection WINDOW_UPDATE, pseudo-header order, no PRIORITY frames) is now asserted byte-identical to the Chromium capture in a CI test — any future divergence is a red build, not a silent detectability regression.
+- **Locale-coherent Accept-Language**: the header now follows the target's locale (host TLD map + percent-encoded script in the path) — an en-US header on a .ru page gets the English stub on some sites and is a mild incoherence signal; localized sites now serve their real content. Default remains Chrome's en-US.
+
+### Decision
+
+- **HTTP/3: not in 3.0.0** (timeboxed spike concluded — see design notes): h3 fingerprinting is not yet a vendor signal, h2 fallback is first-class everywhere, and a second transport stack (quiche + duplicate BoringSSL) pre-3.0 trades proven reliability for an unmeasured signal. The bar to ship post-3.0 is documented.
+
 
 ## [2.5.0] - 2026-08-22
 
