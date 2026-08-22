@@ -15,6 +15,10 @@
             "description": "Batch mode (array url): total output token budget shared across all results (200-500k). DonSeTch allocates it across pages by size — small pages stay whole, big ones get sliced with a resume note. Without it each page uses max_chars independently.",
             "type": "integer"
           },
+          "deadline_ms": {
+            "description": "Hard time budget for this call in ms (500-600000). On expiry: honest deadline error + next_action — never a silent hang. Batch mode: per-URL budget.",
+            "type": "integer"
+          },
           "focus": {
             "description": "Relevance query — returns ONLY blocks relevant to your question, cutting tokens 50-80% on long pages. Hybrid keyword + semantic matching catches blocks with different vocabulary than your query. If nothing matches, returns full page with a notice. ALWAYS set when you know what you're looking for — #1 token saver.",
             "type": "string"
@@ -90,6 +94,10 @@
       "description": "Web search — returns URLs + titles + short snippets. Use to discover WHAT to fetch, not to read content (use web_fetch for content). Multi-engine (independent indexes + Bing family) fused by cross-engine consensus + semantic reranking (automatic, no config). Keyless verticals: GitHub, Wikipedia, HN, Scholar, news, StackExchange, MDN.\n\nBYOK: if external search providers (Tavily, Exa, Serper, TinyFish) are configured via `donsetch keys`, the local engine is bypassed and the configured provider handles search. structuredContent.provider shows which provider was used (null = local engine). Falls back to local engine if all provider keys are exhausted.\n\nResponse: content[0].text = numbered markdown list (N. **Title** — domain / snippet / URL). structuredContent = {intent, weak, cached, elapsed_ms, provider, results: [{title, url, snippet, score, consensus, engines}], engines: [{engine, status, hits, ms}]}.\n\nKey signals: weak=true = low cross-engine consensus, treat with care. consensus = how many independent engines returned this URL (higher = more authoritative). engines[].status shows per-engine health (ok|blocked:NNN|timeout|no-results). provider = which search provider was used (null = local keyless engine).\n\nAfter search, use fetch on the best URL(s) to get actual content.",
       "inputSchema": {
         "properties": {
+          "deadline_ms": {
+            "description": "Hard time budget in ms (500-600000). Engines have their own timeouts; this caps the whole call. On expiry: honest deadline error.",
+            "type": "integer"
+          },
           "intent": {
             "description": "auto (default) detects from query. code: adds GitHub, HN, StackExchange, MDN verticals. paper: adds Scholar, arXiv. news: adds Google News, HN. entity: adds Wikipedia. web: general only.",
             "enum": [

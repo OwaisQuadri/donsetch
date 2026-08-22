@@ -343,7 +343,6 @@ impl FrontierQueue {
             .collect()
     }
 
-    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.heap.len()
     }

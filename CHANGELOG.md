@@ -30,6 +30,14 @@ The context-warfare milestone (v3 M1): every tool now respects the agent's conte
 
 - Comic/gallery pages (text-thin, image-rich) lost their content images when extraction fell back to raw text — fallbacks now carry the scoped image list through.
 - CI and release workflows pin rustc 1.98 (was floating `stable`), ending local-vs-CI clippy drift.
+### Added (M2 — the clock)
+
+- **Deadline contracts (`deadline_ms`)**: fetch (single and batch, per-URL) and search accept a hard time budget (500ms–600s). On expiry: honest `deadline` error with a next_action that names the usual eater (browser escalation) — never a silent hang.
+- **Real MCP cancellation**: `notifications/cancelled` now aborts in-flight work. Fetch/search drop via select (all persistent state was already written atomically); the crawl stops its workers gracefully through the existing stop-flag and persists its resume token — partial progress is never lost. Cancelled requests get no response, per spec.
+- **Progress notifications**: requests carrying `_meta.progressToken` get `notifications/progress` beats — per-page during crawls ("12 pages, 34 queued", throttled to 2s) and per-URL during batch fetches.
+- **Cost footer**: every fetch result's `[meta]` line and structuredContent carries `ms` — the agent sees what latency cost.
+- Crawl stop reason `Cancelled` with its own next_action ("resume with the token above").
+
 
 ## [2.5.0] - 2026-08-22
 

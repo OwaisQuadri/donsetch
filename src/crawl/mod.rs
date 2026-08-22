@@ -107,6 +107,9 @@ pub enum StopReason {
     CharBudget,
     DepthLimit,
     Deadline,
+    /// Client cancelled (MCP notifications/cancelled) — workers
+    /// stopped gracefully, resume token persisted.
+    Cancelled,
     /// Host boxed us out (all lanes walled) — resume later.
     ThrottledOut,
 }
@@ -154,6 +157,12 @@ pub struct CrawlOptions {
     pub concurrency: usize,
     /// Obey robots.txt Disallow rules.
     pub respect_robots: bool,
+    /// v3: cancellation — the client aborted the request. Workers
+    /// observe this between pages and stop gracefully.
+    pub cancel: Option<tokio::sync::watch::Receiver<bool>>,
+    /// v3: progress callback (done, queued) — fired per completed
+    /// page, throttled by the caller.
+    pub progress: Option<std::sync::Arc<dyn Fn(usize, usize) + Send + Sync>>,
     /// Map hard cap.
     pub map_cap: usize,
     /// Minimum content quality (0.0-1.0). Pages below this
@@ -176,6 +185,8 @@ impl Default for CrawlOptions {
             deadline: Duration::from_secs(120),
             concurrency: 1,
             respect_robots: true,
+            cancel: None,
+            progress: None,
             map_cap: 120,
             min_quality: 0.05,
         }
@@ -522,6 +533,17 @@ impl Crawler {
                         let mut s = stop_flag.lock().unwrap();
                         if s.is_none() {
                             *s = Some(StopReason::Deadline);
+                        }
+                        break 'work;
+                    }
+                    // v3: client cancellation — graceful stop; the
+                    // resume checkpoint keeps everything gathered.
+                    if let Some(rx) = &opts_worker.cancel
+                        && (*rx.borrow() || rx.has_changed().unwrap_or(false))
+                    {
+                        let mut s = stop_flag.lock().unwrap();
+                        if s.is_none() {
+                            *s = Some(StopReason::Cancelled);
                         }
                         break 'work;
                     }
@@ -962,7 +984,10 @@ impl Crawler {
                             .unwrap()
                             .push((page.url.clone(), "out of scope (navigation-only)".into()));
                     } else {
-                        pages_done.fetch_add(1, Ordering::SeqCst);
+                        let done = pages_done.fetch_add(1, Ordering::SeqCst) + 1;
+                        if let Some(cb) = &opts_worker.progress {
+                            cb(done, queue.lock().unwrap().len());
+                        }
                         if !duplicate {
                             chars_total.fetch_add(chars, Ordering::SeqCst);
                         }

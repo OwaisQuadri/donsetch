@@ -150,6 +150,14 @@ const FETCH_PARAMS: &[ParamSpec] = &[
         help: "true = heading outline only, no body text. Read structure first, then target with section or focus.",
     },
     ParamSpec {
+        name: "deadline_ms",
+        flag: "deadline-ms",
+        kind: ParamKind::Usize,
+        cli: CliKind::Flag,
+        required: false,
+        help: "Hard time budget for this call in ms (500-600000). On expiry: honest deadline error + next_action — never a silent hang. Batch mode: per-URL budget.",
+    },
+    ParamSpec {
         name: "image_text",
         flag: "image-text",
         kind: ParamKind::SetTrue,
@@ -233,6 +241,14 @@ const SEARCH_PARAMS: &[ParamSpec] = &[
         cli: CliKind::Flag,
         required: false,
         help: "Max results (default 7, max 12). The most relevant results almost always live in the top 7. Increase only when results are weak.",
+    },
+    ParamSpec {
+        name: "deadline_ms",
+        flag: "deadline-ms",
+        kind: ParamKind::Usize,
+        cli: CliKind::Flag,
+        required: false,
+        help: "Hard time budget in ms (500-600000). Engines have their own timeouts; this caps the whole call. On expiry: honest deadline error.",
     },
     ParamSpec {
         name: "intent",

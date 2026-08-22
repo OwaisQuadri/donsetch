@@ -166,16 +166,37 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Cancellation registry: request-id → cancel sender. The MCP
+    // client fires notifications/cancelled with a requestId; the
+    // in-flight tool observes it (fetch/search abort via select,
+    // crawl stops its workers gracefully and persists its resume
+    // token before returning).
+    let cancels: Arc<
+        std::sync::Mutex<std::collections::HashMap<i64, tokio::sync::watch::Sender<bool>>>,
+    > = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;
         }
+        // Cancellation notifications are handled inline — they must
+        // reach the running tool NOW, not after a spawn.
+        if let Ok(v) = serde_json::from_str::<Value>(&line)
+            && v.get("id").is_none()
+            && v.get("method").and_then(Value::as_str) == Some("notifications/cancelled")
+            && let Some(rid) = v.pointer("/params/requestId").and_then(Value::as_i64)
+            && let Some(sender) = cancels.lock().unwrap().remove(&rid)
+        {
+            let _ = sender.send(true);
+            continue;
+        }
         let daemon = Arc::clone(&daemon);
         let tx = tx.clone();
+        let cancels = Arc::clone(&cancels);
         tokio::spawn(async move {
-            if let Some(resp) = handle(&daemon, &line).await {
+            if let Some(resp) = handle(&daemon, &line, &cancels, &tx).await {
                 let _ = tx.send(resp).await;
             }
         });
@@ -188,9 +209,115 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Per-request tool context (v3): cancellation signal + progress
+/// emitter. `None` = CLI invocation (no client to cancel us).
+#[derive(Clone)]
+pub(crate) struct ToolCtx {
+    cancel: tokio::sync::watch::Receiver<bool>,
+    /// The raw _meta.progressToken from the request, if the client
+    /// asked for progress notifications.
+    progress_token: Option<Value>,
+    progress_tx: Option<mpsc::UnboundedSender<String>>,
+}
+
+/// Standalone progress emission for spawned subtasks (batch fetch
+/// workers) that own cloned parts instead of the whole ctx.
+pub(crate) fn emit_progress(
+    parts: &(Option<Value>, Option<mpsc::UnboundedSender<String>>),
+    done: u64,
+    total: Option<u64>,
+    message: &str,
+) {
+    let (Some(token), Some(tx)) = (&parts.0, &parts.1) else {
+        return;
+    };
+    let mut params = json!({ "progressToken": token, "progress": done });
+    if let Some(t) = total {
+        params["total"] = json!(t);
+    }
+    if !message.is_empty() {
+        params["message"] = json!(message);
+    }
+    let line = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/progress",
+        "params": params,
+    })
+    .to_string();
+    let _ = tx.send(line);
+}
+
+impl ToolCtx {
+    pub fn cancelled(&self) -> bool {
+        *self.cancel.borrow() || self.cancel.has_changed().unwrap_or(false)
+    }
+
+    /// Resolves when the client cancels this request.
+    pub async fn cancelled_async(&mut self) -> bool {
+        if self.cancelled() {
+            return true;
+        }
+        self.cancel.changed().await.is_err() || *self.cancel.borrow()
+    }
+
+    /// Emit an MCP progress notification if the client asked for
+    /// progress. Never blocks, never panics — progress is a
+    /// courtesy, not a contract.
+    /// Cloneable progress parts for subtasks and closures.
+    pub fn progress_parts(&self) -> (Option<Value>, Option<mpsc::UnboundedSender<String>>) {
+        (self.progress_token.clone(), self.progress_tx.clone())
+    }
+
+    /// Clone the cancel receiver (e.g. for the crawl's graceful
+    /// stop flag).
+    pub fn cancel_receiver(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.cancel.clone()
+    }
+}
+
+/// Run a tool future under an optional deadline and cancellation,
+/// collapsing the 2×2 combination into one place. Cancelled
+/// results are discarded by the caller (handle suppresses the
+/// response); the sentinel just keeps types simple.
+pub(crate) async fn run_with_budget<F>(
+    fut: F,
+    deadline: Option<std::time::Duration>,
+    ctx: Option<&mut ToolCtx>,
+    on_deadline: impl FnOnce() -> Value,
+) -> Value
+where
+    F: std::future::Future<Output = Value>,
+{
+    match (deadline, ctx) {
+        (Some(d), Some(c)) => tokio::select! {
+            r = fut => r,
+            _ = tokio::time::sleep(d) => on_deadline(),
+            _ = c.cancelled_async() => tool_error("cancelled"),
+        },
+        (Some(d), None) => tokio::select! {
+            r = fut => r,
+            _ = tokio::time::sleep(d) => on_deadline(),
+        },
+        (None, Some(c)) => tokio::select! {
+            r = fut => r,
+            _ = c.cancelled_async() => tool_error("cancelled"),
+        },
+        (None, None) => fut.await,
+    }
+}
+
+type CancelMap =
+    Arc<std::sync::Mutex<std::collections::HashMap<i64, tokio::sync::watch::Sender<bool>>>>;
+
 /// Handle one line. Returns Some(response) for requests,
-/// None for notifications.
-async fn handle(daemon: &Arc<Daemon>, line: &str) -> Option<String> {
+/// None for notifications and cancelled requests (per MCP spec,
+/// a cancelled request gets no response).
+async fn handle(
+    daemon: &Arc<Daemon>,
+    line: &str,
+    cancels: &CancelMap,
+    writer_tx: &mpsc::Sender<String>,
+) -> Option<String> {
     let msg: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(_) => {
@@ -208,14 +335,62 @@ async fn handle(daemon: &Arc<Daemon>, line: &str) -> Option<String> {
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
 
     // Notifications (no id) that we recognize: stay silent.
+    // (cancelled is intercepted in run() before this point.)
     id.as_ref()?;
     let id = id.unwrap();
+
+    // tools/call gets the full context: cancel + progress.
+    if method == "tools/call" {
+        let rid = id.as_i64();
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        if let Some(r) = rid {
+            cancels.lock().unwrap().insert(r, cancel_tx);
+        }
+        // Probe kept outside the ctx so the final suppression check
+        // still works after the ctx is consumed.
+        let cancel_probe = cancel_rx.clone();
+        // Progress plumbing: if the request carried a progressToken,
+        // give the tool a channel straight to the writer.
+        let progress_token = params.pointer("/_meta/progressToken").cloned();
+        let (ptx, mut prx) = mpsc::unbounded_channel::<String>();
+        let progress_tx = progress_token.as_ref().map(|_| ptx);
+        let writer_tx = writer_tx.clone();
+        let forwarder = tokio::spawn(async move {
+            while let Some(line) = prx.recv().await {
+                let _ = writer_tx.send(line).await;
+            }
+        });
+        let ctx = ToolCtx {
+            cancel: cancel_rx,
+            progress_token,
+            progress_tx,
+        };
+        let result = call_tool_ctx(daemon, &params, Some(ctx)).await;
+        // Deregister + stop forwarding progress. The forwarder ends
+        // when ptx drops — it moved into ctx, dropped at await end.
+        if let Some(r) = rid {
+            cancels.lock().unwrap().remove(&r);
+        }
+        let _ = forwarder.await;
+        // A cancelled request never gets a response, even if the
+        // tool managed to finish before observing the cancel.
+        if *cancel_probe.borrow() || cancel_probe.has_changed().unwrap_or(false) {
+            return None;
+        }
+        let resp = match result {
+            Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
+            Err((code, message)) => json!({
+                "jsonrpc": "2.0", "id": id,
+                "error": { "code": code, "message": message }
+            }),
+        };
+        return Some(resp.to_string());
+    }
 
     let result: Result<Value, (i64, String)> = match method {
         "initialize" => Ok(initialize(&params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(tools::list()),
-        "tools/call" => call_tool(daemon, &params).await,
         "notifications/initialized" | "notifications/cancelled" => {
             return None;
         }
@@ -257,12 +432,20 @@ pub(crate) async fn call_tool(
     daemon: &Arc<Daemon>,
     params: &Value,
 ) -> Result<Value, (i64, String)> {
+    call_tool_ctx(daemon, params, None).await
+}
+
+pub(crate) async fn call_tool_ctx(
+    daemon: &Arc<Daemon>,
+    params: &Value,
+    ctx: Option<ToolCtx>,
+) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     match name {
-        "web_fetch" => Ok(fetch_tool(daemon, &args).await),
-        "web_search" => Ok(search_tool(daemon, &args).await),
-        "web_crawl" => Ok(crawl_tool(daemon, &args).await),
+        "web_fetch" => Ok(fetch_tool(daemon, &args, ctx).await),
+        "web_search" => Ok(search_tool(daemon, &args, ctx).await),
+        "web_crawl" => Ok(crawl_tool(daemon, &args, ctx).await),
         _ => Err((-32602, format!("unknown tool: {name}"))),
     }
 }
@@ -272,7 +455,7 @@ pub(crate) async fn call_tool(
 /// Phase 2 = Governor-paced frontier walk riding DonShadow +
 /// DonSift. Resume tokens make huge sites paginable.
 #[allow(clippy::field_reassign_with_default)]
-async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
+async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value, ctx: Option<ToolCtx>) -> Value {
     // Resume can work without a url (the seed is stored in the
     // resume state). If url is missing AND no resume token, error.
     let url = match args.get("url").and_then(Value::as_str) {
@@ -334,6 +517,33 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         opts.min_quality = q.clamp(0.0, 1.0) as f32;
     }
     let resume = args.get("resume").and_then(Value::as_str).map(String::from);
+
+    // v3: cancellation + progress. The crawl stops its workers
+    // gracefully on cancel (the stop-flag mechanism) and persists
+    // its resume token — partial progress is never lost.
+    if let Some(c) = &ctx {
+        opts.cancel = Some(c.cancel_receiver());
+        let parts = c.progress_parts();
+        let last_emit = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        opts.progress = Some(Arc::new(move |done, queued| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            // Throttle: first pages + one beat every 2s.
+            if done <= 2
+                || now.saturating_sub(last_emit.load(std::sync::atomic::Ordering::Relaxed)) > 2_000
+            {
+                last_emit.store(now, std::sync::atomic::Ordering::Relaxed);
+                emit_progress(
+                    &parts,
+                    done as u64,
+                    None,
+                    &format!("{done} pages, {queued} queued"),
+                );
+            }
+        }));
+    }
 
     // SSRF guard on the seed — the fetch tool has one, the crawl
     // tool must too (it fetches just as hard).
@@ -558,6 +768,9 @@ fn compute_crawl_next_action(result: &crate::crawl::CrawlResult) -> String {
         StopReason::Deadline => {
             "crawl hit the time deadline. Increase deadline_s or use resume to continue.".into()
         }
+        StopReason::Cancelled => {
+            "crawl cancelled — resume with the token above to continue where it stopped.".into()
+        }
         StopReason::ThrottledOut => {
             "the host throttled the crawler. Wait a few minutes and resume.".into()
         }
@@ -647,7 +860,11 @@ fn verdict_error(verdict: Verdict, status: u16, url: &str) -> String {
 /// → DonSift. Ports the CLI escalation into the daemon,
 /// with warm-start and render cache.
 #[allow(clippy::field_reassign_with_default)]
-async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
+async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value, mut ctx: Option<ToolCtx>) -> Value {
+    let deadline = args
+        .get("deadline_ms")
+        .and_then(Value::as_u64)
+        .map(|ms| std::time::Duration::from_millis(ms.clamp(500, 600_000)));
     // v3: url accepts one URL/handle OR an array of them — batch
     // fetch in a single call, optionally under a shared token
     // budget (budget_tokens) allocated across results.
@@ -678,7 +895,13 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
             Ok(u) => u,
             Err(e) => return e,
         };
-        return fetch_single(daemon, args, &url).await;
+        return run_with_budget(
+            fetch_single(daemon, args, &url),
+            deadline,
+            ctx.as_mut(),
+            || deadline_error(&url),
+        )
+        .await;
     }
     let mut resolved: Vec<String> = Vec::with_capacity(urls.len());
     for u in &urls {
@@ -690,7 +913,23 @@ async fn fetch_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     if resolved.len() == 1 {
         return fetch_single(daemon, args, &resolved[0]).await;
     }
-    fetch_multi(daemon, args, resolved, budget_tokens).await
+    fetch_multi(daemon, args, resolved, budget_tokens, deadline, ctx).await
+}
+
+/// Honest deadline error (v3 D1): the tool respects the agent's
+/// clock. What was fetched so far is described; nothing pretends.
+fn deadline_error(url: &str) -> Value {
+    let mut trace = Trace::default();
+    trace.step("clock", "deadline", "hit", 0);
+    tool_error_structured(
+        format!("fetch: deadline_ms exceeded at {url}"),
+        "transient",
+        Some(json!({
+            "url": url,
+            "escalation": trace.value(),
+            "next_action": "retry with a higher deadline_ms, or tier=1 (skips browser escalation — the usual deadline eater on walled sites)",
+        })),
+    )
 }
 
 /// Resolve a raw url-or-handle argument to a fetchable http(s)
@@ -736,6 +975,8 @@ async fn fetch_multi(
     args: &Value,
     urls: Vec<String>,
     budget_tokens: Option<usize>,
+    deadline: Option<std::time::Duration>,
+    ctx: Option<ToolCtx>,
 ) -> Value {
     // Under a budget, let each fetch run up to the whole budget
     // (slicing happens in composition); without one, defaults rule.
@@ -743,13 +984,32 @@ async fn fetch_multi(
     if let Some(b) = budget_tokens {
         call_args["max_chars"] = json!(b * 4);
     }
+    let progress_parts = ctx.as_ref().map(|c| c.progress_parts());
+    let n_total = urls.len();
     let futs: Vec<_> = urls
         .iter()
-        .map(|u| {
+        .enumerate()
+        .map(|(i, u)| {
             let a = call_args.clone();
             let d = Arc::clone(daemon);
             let url = u.clone();
-            async move { fetch_single(&d, &a, &url).await }
+            let dl = deadline;
+            let prog = progress_parts.clone();
+            async move {
+                let v = run_with_budget(fetch_single(&d, &a, &url), dl, None, || {
+                    deadline_error(&url)
+                })
+                .await;
+                if let Some(p) = &prog {
+                    emit_progress(
+                        p,
+                        (i + 1) as u64,
+                        Some(n_total as u64),
+                        &format!("{}/{} done", i + 1, n_total),
+                    );
+                }
+                v
+            }
         })
         .collect();
     let results = futures_util::future::join_all(futs).await;
@@ -922,6 +1182,7 @@ async fn fetch_multi(
 
 #[allow(clippy::field_reassign_with_default)]
 async fn fetch_single(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
+    let t0 = std::time::Instant::now();
     // Full parse up front: an unparseable URL would otherwise flow
     // through the whole pipeline with host="" — poisoning domain
     // profiles and producing confusing late errors.
@@ -1335,8 +1596,15 @@ async fn fetch_single(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
             if !matches!(cached_verdict, crate::detect::walls::Verdict::Challenge(_)) {
                 let vstr = format!("{:?}", cached_verdict);
                 trace.step("cache", "render-hit", "ok", 0);
-                let mut res =
-                    finish_result(&e2, "render-cache", final_status, &vstr, &final_url, &trace);
+                let mut res = finish_result(
+                    &e2,
+                    "render-cache",
+                    final_status,
+                    &vstr,
+                    &final_url,
+                    &trace,
+                    t0.elapsed().as_millis(),
+                );
                 res["_meta"] = json!({ "ttlMs": 300_000, "cacheScope": "session" });
                 apply_link_handles(daemon, &mut res).await;
                 return res;
@@ -1428,6 +1696,7 @@ async fn fetch_single(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Value {
         &final_verdict,
         &final_url,
         &trace,
+        t0.elapsed().as_millis(),
     );
     apply_link_handles(daemon, &mut res).await;
     if image_text {
@@ -1953,7 +2222,15 @@ async fn fetch_with_actions(
         .iter()
         .map(|o| json!({"step": o.step, "action": o.action, "outcome": o.outcome, "ms": o.ms}))
         .collect();
-    let mut res = finish_result(&ex, "2-actions", 200, "ContentOk", url, &trace);
+    let mut res = finish_result(
+        &ex,
+        "2-actions",
+        200,
+        "ContentOk",
+        url,
+        &trace,
+        t0.elapsed().as_millis(),
+    );
     res["structuredContent"]["actions"] = Value::Array(steps_json);
     apply_link_handles(daemon, &mut res).await;
     if image_text {
@@ -2108,6 +2385,7 @@ fn finish_result(
     verdict: &str,
     url: &str,
     trace: &Trace,
+    elapsed_ms: u128,
 ) -> Value {
     // PDF per-page stats: chars, ocr flag, per-page confidence.
     // Cap at 50 pages to avoid blowing up the response on large
@@ -2151,6 +2429,7 @@ fn finish_result(
         "escalation": trace.value(),
         "pdf": pdf,
         "url": url,
+        "ms": elapsed_ms,
     });
     // Compact metadata text block prepended for clients (Claude Code,
     // VSCode) that drop text content when structuredContent is present.
@@ -2162,6 +2441,7 @@ fn finish_result(
         "thin": ex.thin,
         "tokens_est": ex.tokens_est,
         "total_chars": ex.total_chars,
+        "ms": elapsed_ms,
         "lang": ex.lang,
     });
     if let Some(n) = ex.next_offset {
@@ -2198,7 +2478,11 @@ async fn bind_search_handles(
     hs
 }
 
-async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
+async fn search_tool(daemon: &Arc<Daemon>, args: &Value, mut ctx: Option<ToolCtx>) -> Value {
+    let deadline = args
+        .get("deadline_ms")
+        .and_then(Value::as_u64)
+        .map(|ms| std::time::Duration::from_millis(ms.clamp(500, 600_000)));
     let query = match args.get("query").and_then(Value::as_str) {
         Some(q) if !q.trim().is_empty() => q.to_string(),
         _ => return tool_error("search: query required"),
@@ -2213,17 +2497,39 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
         _ => None,
     };
 
-    // BYOK: if external search providers are configured,
-    // try them first. The provider handles everything (IP,
-    // rate limits, search). Falls back to local search if
-    // all providers are exhausted (rate-limited, credits
-    // depleted, invalid keys).
-    //
-    // If "local" is set as the default (donsetch keys default
-    // local), the order is flipped: local search is tried
-    // first, BYOK is the fallback. This lets users test the
-    // local engine without removing their keys.
-    //
+    run_with_budget(
+        search_inner(daemon, &query, max, intent),
+        deadline,
+        ctx.as_mut(),
+        || search_deadline_error(&query),
+    )
+    .await
+}
+
+/// Honest deadline error for search (v3 D1).
+fn search_deadline_error(query: &str) -> Value {
+    let mut trace = Trace::default();
+    trace.step("search", "engines", "deadline", 0);
+    tool_error_structured(
+        format!("search: deadline_ms exceeded for \"{query}\""),
+        "transient",
+        Some(json!({
+            "query": query,
+            "escalation": trace.value(),
+            "next_action": "retry with a higher deadline_ms, or without one (engines have their own timeouts)",
+        })),
+    )
+}
+
+/// The search pipeline: BYOK providers (if configured) with
+/// local-engine fallback, or local-first when keys say so.
+/// No deadline/cancel logic here — the wrapper owns the clock.
+async fn search_inner(
+    daemon: &Arc<Daemon>,
+    query: &str,
+    max: usize,
+    intent: Option<Intent>,
+) -> Value {
     // Reload from disk first — picks up keys added/removed
     // via CLI while the daemon was running.
     daemon.byok.reload();
@@ -2232,10 +2538,10 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
 
     // BYOK-first mode: try providers, fall back to local.
     if byok_configured && !local_first {
-        match daemon.byok.search(&query, max, intent).await {
+        match daemon.byok.search(query, max, intent).await {
             Ok(out) => {
                 let hs = bind_search_handles(daemon, &out).await;
-                let md = search::render_markdown(&out, &query, Some(&hs));
+                let md = search::render_markdown(&out, query, Some(&hs));
                 let meta = search::render_meta(&out);
                 return json!({
                     "content": [{ "type": "text", "text": md }],
@@ -2252,10 +2558,10 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     }
 
     // Local search (primary in local-first mode, fallback in BYOK-first).
-    match daemon.searcher.search(&query, max, intent).await {
+    match daemon.searcher.search(query, max, intent).await {
         Ok(out) => {
             let hs = bind_search_handles(daemon, &out).await;
-            let md = search::render_markdown(&out, &query, Some(&hs));
+            let md = search::render_markdown(&out, query, Some(&hs));
             let meta = search::render_meta(&out);
             json!({
                 "content": [{ "type": "text", "text": md }],
@@ -2269,20 +2575,20 @@ async fn search_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
                 if std::env::var_os("DONSEEK_DEBUG").is_some() {
                     eprintln!("[byok] local search failed, trying BYOK fallback: {e}");
                 }
-                match daemon.byok.search(&query, max, intent).await {
+                match daemon.byok.search(query, max, intent).await {
                     Ok(out) => {
                         let hs = bind_search_handles(daemon, &out).await;
-                        let md = search::render_markdown(&out, &query, Some(&hs));
+                        let md = search::render_markdown(&out, query, Some(&hs));
                         let meta = search::render_meta(&out);
                         json!({
                             "content": [{ "type": "text", "text": md }],
                             "structuredContent": meta,
                         })
                     }
-                    Err(e2) => search_error(&query, &format!("local ({e}); byok ({e2})"), true),
+                    Err(e2) => search_error(query, &format!("local ({e}); byok ({e2})"), true),
                 }
             } else {
-                search_error(&query, &e.to_string(), false)
+                search_error(query, &e.to_string(), false)
             }
         }
     }
