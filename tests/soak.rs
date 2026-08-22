@@ -26,14 +26,24 @@ fn soak_rss_stays_bounded() {
 
     // 200 extraction cycles (full pipeline + focus + toc + probe).
     for i in 0..200 {
-        let mut opts = donsetch::extract::ExtractOptions::default();
-        opts.max_chars = Some(20_000);
-        match i % 4 {
-            0 => {}
-            1 => opts.focus = Some("ownership borrow checker".into()),
-            2 => opts.toc = true,
-            _ => opts.must_contain = Some("borrow".into()),
-        }
+        let opts = donsetch::extract::ExtractOptions {
+            max_chars: Some(20_000),
+            ..match i % 4 {
+                1 => donsetch::extract::ExtractOptions {
+                    focus: Some("ownership borrow checker".into()),
+                    ..Default::default()
+                },
+                2 => donsetch::extract::ExtractOptions {
+                    toc: true,
+                    ..Default::default()
+                },
+                3 => donsetch::extract::ExtractOptions {
+                    must_contain: Some("borrow".into()),
+                    ..Default::default()
+                },
+                _ => Default::default(),
+            }
+        };
         let ex = donsetch::extract::extract(
             &corpus,
             "text/html",

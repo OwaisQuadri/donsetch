@@ -92,11 +92,10 @@ pub fn run() -> std::io::Result<()> {
                 }
             });
             // Held bytes first — they predate this child.
-            if !pending.is_empty() {
-                if stdin.write_all(&pending).is_ok() {
-                    let _ = stdin.flush();
-                    pending.clear();
-                } // else: this child already died; keep pending
+            // (Write failure: this child already died; keep pending.)
+            if !pending.is_empty() && stdin.write_all(&pending).is_ok() {
+                let _ = stdin.flush();
+                pending.clear();
             }
             child = Some((c, stdin));
         }
