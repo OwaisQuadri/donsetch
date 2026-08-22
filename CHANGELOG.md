@@ -72,6 +72,14 @@ A keyless adapter registry for the sites agents actually hit. Fetch-level rewrit
 
 - **Daemon-abort panic in jsdata blob discovery (fuzzer find, CI fuzz gate)**: a known-global assignment (`__NUXT__ = `) matching at the very end of a page whose preceding byte was invalid UTF-8 (decoded to a 3-byte replacement char) advanced the scan cursor past the string / mid-character — `html[from..]` panicked. The cursor now floors to the next char boundary, clamped to the string length. Found by the new CI fuzz gate on its first green-config run; regression-tested with the crash input.
 
+### Added (M6 — foundation)
+
+- **Stable error codes**: every error on all three tools carries a machine-readable `code` (`guard.ssrf`, `deadline.hit`, `network.dns`, `wall.challenge`, `wall.paywall`, `content.binary`, `crawl.resume`, `archive.stale`, `cloak.suspected`, …) alongside the prose and `next_action` — agents branch on codes, not string matching.
+- **Token-efficiency CI gate**: the live claims (focus ≥40% savings, toc ≤5%, probe ≤2% of page, link rendering) are now asserted offline against saved real-page corpora on every build (`tests/token_invariants.rs`).
+- **Memory soak gate**: 200 full-pipeline extractions + 10k handle churn + 800 page-history records with RSS growth asserted bounded (`tests/soak.rs`) — a creeping daemon is a build failure, not a surprise.
+- **Crash-only supervisor**: `donsetch mcp --supervised` proxies stdio over a supervised child daemon — a panic-abort (or a SIGKILL) restarts the daemon (500ms backoff, 5-crash give-up), held requests are replayed, idle deaths are caught within 500ms, and the MCP session survives. Live-verified: SIGKILL mid-session, all requests answered after restart.
+- **Homebrew tap**: `brew tap dondai44423/donsetch && brew install donsetch` (formula staged, published with the release).
+
 ### Decision
 
 - **HTTP/3: not in 3.0.0** (timeboxed spike concluded — see design notes): h3 fingerprinting is not yet a vendor signal, h2 fallback is first-class everywhere, and a second transport stack (quiche + duplicate BoringSSL) pre-3.0 trades proven reliability for an unmeasured signal. The bar to ship post-3.0 is documented.

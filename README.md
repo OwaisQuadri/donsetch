@@ -57,7 +57,28 @@ Works with every MCP client: Claude Code, Cursor, OpenCode, Pi, anything that sp
 | 🔑 **Keyless search** | 10+ backends in parallel, fused by cross-engine consensus. No API keys, no accounts, no billing. $0 forever. BYOK optional. |
 | 📄 **Pixel-fusion PDF** | Glyphs + rendered pixels from the same stream, fused deterministically. No hallucination. Per-region trust audit. Scanned PDFs auto-OCR'd. |
 | 🧬 **Built from scratch** | Own HTTP/2 (HPACK, flow control), own extraction engine, own PDF parser, own search aggregator, own crawl engine. Zero dependency on existing OSS web tooling. |
-| 🪶 **2,363 tokens** | Three tools, 2,363 tokens total in the MCP context — measured with tiktoken (GPT-4o tokenizer). No bloat, no redundancy, every token earns its place. |
+| 🪶 **~2.4k tokens** | Three tools, ~2.4k tokens total in the MCP context. No bloat, no redundancy, every token earns its place. |
+
+---
+
+## 🆕 v3 — the agent-first upgrade
+
+Four things no free (or paid) competitor has, plus a stack of agent-first mechanics:
+
+| | What it does |
+|---|---|
+| 🔗 **Reference handles** | Fetched-page links render as `[text](L12)`, search results as `S1…Sn` — and `fetch S3` just works. URLs cost 80 tokens a piece; handles cost 3. Raw URLs stay in `structuredContent` for citation. |
+| 🧾 **Probe mode** | `must_contain: "CVE-2026-1234"` verifies a claim against the FULLY-fetched page but returns MATCH/NO-MATCH + ≤3 excerpts (~60 tokens instead of 4k). Verification questions stop paying reading prices. |
+| ♻️ **Resurrection fetch** | Dead link? `archive=auto` transparently serves the nearest Wayback snapshot, labeled `ARCHIVED COPY — 2021-04-03 (5 years old)`. Dead ends become honest answers. |
+| 🕵️ **Anti-cloak check** | On domains known to serve decoys, tier-1 responses are equivalence-checked against a headless render — `decoy suspected` is stamped, never silently passed off as content. |
+| 📌 **Page memory** | Every fetch is fingerprinted; re-fetches report `changed (minor/changed/rewritten)` with section-level diffs. `since_last=true` collapses a re-check to one line (~30 tokens). Delta crawls skip unchanged pages. |
+| 🧠 **Domain intelligence** | Reddit `.json`, npm/PyPI/crates.io/Go/RubyGems, GitHub issues/releases, Stack Overflow QA trees, Wikipedia infoboxes, docs-site outlines — restructured from each site's own keyless endpoints/DOM, honestly labeled `via=adapter:…`, kill-switchable, always falling back to the generic pipeline. |
+| ⏱️ **The clock** | `deadline_ms` on fetch/search, real MCP cancellation, progress notifications per crawl page, and an `ms` cost footer on every result. No operation can silently hang. |
+| 🧵 **Article stitching** | `stitch=true` walks `rel=next` and returns an 8-part article as ONE call with part markers. |
+| ⚡ **Warm handoff** | Search enrichment pre-fetches the top results; your next `fetch S1` serves from that cache — the search→fetch second hop runs in ~3ms. |
+| 🛡️ **h2 parity, gated** | The HTTP/2 preface (SETTINGS, window update, header order) is asserted byte-identical to Chromium in CI. Detectability regressions are build failures. |
+| 🧯 **Crash-only daemon** | `donsetch mcp --supervised` — a panic is a blip: the daemon restarts, state reloads, the session survives (SIGKILL-verified). |
+| 🧾 **Error codes** | Every error carries a stable machine code (`wall.challenge`, `guard.ssrf`, `deadline.hit`, `archive.stale`, …) — branch on codes, not prose. |
 
 ---
 
@@ -91,7 +112,16 @@ Downloads the prebuilt binary for your platform from GitHub Releases with SHA256
 | Windows x86_64 | `donsetch-win32-x64.tar.gz` |
 | Termux (Android) | Build from source (see build notes) |
 
-### Option 2 — Pi agent (native extension)
+### Option 2 — Homebrew (macOS / Linux)
+
+```bash
+brew tap dondai44423/donsetch
+brew install donsetch
+```
+
+Installs the same official release binaries.
+
+### Option 3 — Pi agent (native extension)
 
 ```bash
 pi install npm:donsetch
@@ -101,7 +131,7 @@ Installs DonSeTch as a native pi extension. The donsetch MCP binary spawns at se
 
 Update with `pi update --extensions` — both the binary and extension update together.
 
-### Option 3 — Build from source
+### Option 4 — Build from source
 
 | Dependency | Why | Linux | macOS | Windows |
 |---|---|---|---|---|

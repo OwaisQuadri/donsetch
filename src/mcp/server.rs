@@ -3378,6 +3378,50 @@ fn tool_error_kind(message: impl Into<String>, kind: &str) -> Value {
 /// next_action, and the escalation trace — so an agent can
 /// decide its fallback without parsing prose. Human message
 /// stays in content[0].text exactly as before.
+/// v3 error taxonomy: stable machine-readable codes so agents
+/// branch on `code`, not prose. One classifier, every tool.
+///
+/// | code | meaning |
+/// |---|---|
+/// | network.dns / network.timeout / network.ratelimit | transport |
+/// | wall.challenge / wall.captcha / wall.paywall / wall.auth | blocked |
+/// | cloak.suspected | tier-1 content is likely decoy |
+/// | content.notfound / content.binary / content.oversize / content.extract | body |
+/// | guard.ssrf | blocked by design |
+/// | parse.encoding | charset-level failure |
+/// | archive.stale | served an old snapshot |
+/// | deadline.hit | time budget exhausted |
+/// | crawl.seed / crawl.resume / fetch.invalid | input errors |
+fn error_code(msg: &str, structured: Option<&Value>) -> &'static str {
+    let m = msg.to_ascii_lowercase();
+    let v = structured
+        .and_then(|s| s.get("verdict"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    match () {
+        _ if m.contains("ssrf") || m.contains("private/loopback") => "guard.ssrf",
+        _ if m.contains("deadline") => "deadline.hit",
+        _ if m.contains("dns") => "network.dns",
+        _ if m.contains("timeout") || m.contains("timed out") => "network.timeout",
+        _ if m.contains("rate limit") || m.contains("429") => "network.ratelimit",
+        _ if m.contains("binary content") => "content.binary",
+        _ if m.contains("too large") || m.contains("oversize") => "content.oversize",
+        _ if m.contains("invalid url") => "fetch.invalid",
+        _ if m.contains("bad seed") => "crawl.seed",
+        _ if m.contains("resume token") => "crawl.resume",
+        _ if m.contains("charset") || m.contains("decode") => "parse.encoding",
+        _ if m.contains("captcha") => "wall.captcha",
+        _ if m.contains("archived copy") || m.contains("snapshot") => "archive.stale",
+        _ if v == "Challenge" => "wall.challenge",
+        _ if v == "Paywall" => "wall.paywall",
+        _ if v == "AuthWall" => "wall.auth",
+        _ if v == "SoftNotFound" => "content.notfound",
+        _ if m.contains("extraction failed") || m.contains("no content") => "content.extract",
+        _ if m.contains("cloak") => "cloak.suspected",
+        _ => "content.extract",
+    }
+}
+
 fn tool_error_structured(
     message: impl Into<String>,
     kind: &str,
@@ -3396,7 +3440,8 @@ fn tool_error_structured(
     let mut v = json!({
         "content": [{ "type": "text", "text": text }],
         "isError": true,
-        "errorKind": kind
+        "errorKind": kind,
+        "code": error_code(&text, structured.as_ref())
     });
     if let Some(s) = structured {
         v["structuredContent"] = s;
@@ -3519,5 +3564,45 @@ mod stitch_tests {
             "# My Story\nhttps://example.com/p2\n> Same description\n\nPart two content here.";
         assert_eq!(strip_part_frontmatter(part), "Part two content here.");
         assert_eq!(strip_part_frontmatter("Just content"), "Just content");
+    }
+}
+
+#[cfg(test)]
+mod error_code_tests {
+    use super::error_code;
+    use serde_json::json;
+
+    #[test]
+    fn codes_are_stable() {
+        assert_eq!(
+            error_code(
+                "blocked: 10.0.0.1 is a private/loopback address — SSRF guard",
+                None
+            ),
+            "guard.ssrf"
+        );
+        assert_eq!(
+            error_code("deadline: exceeded 2000ms", None),
+            "deadline.hit"
+        );
+        assert_eq!(error_code("dns: resolve failed", None), "network.dns");
+        assert_eq!(
+            error_code("walled", Some(&json!({"verdict": "Challenge"}))),
+            "wall.challenge"
+        );
+        assert_eq!(
+            error_code("walled", Some(&json!({"verdict": "Paywall"}))),
+            "wall.paywall"
+        );
+        assert_eq!(
+            error_code("binary content: image/png", None),
+            "content.binary"
+        );
+        assert_eq!(error_code("crawl: bad seed URL", None), "crawl.seed");
+        assert_eq!(
+            error_code("crawl: resume token expired", None),
+            "crawl.resume"
+        );
+        assert_eq!(error_code("fetch: invalid URL", None), "fetch.invalid");
     }
 }

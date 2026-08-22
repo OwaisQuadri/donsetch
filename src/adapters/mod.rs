@@ -192,6 +192,12 @@ pub fn extract_html(
     if !enabled() {
         return None;
     }
+    // Focus/toc/probe are pipeline features the adapters don't
+    // reproduce — when the agent asks for a specific cut, the
+    // generic path (which implements them) wins.
+    if opts.focus.is_some() || opts.toc || opts.must_contain.is_some() {
+        return None;
+    }
     debug_dump(html, url);
     github::extract(html, url, opts)
         .or_else(|| stackexchange::extract(html, url, opts))

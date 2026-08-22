@@ -5,4 +5,5 @@
 //! interleave. The daemon never dies on bad input.
 
 pub mod server;
+pub mod supervisor;
 pub mod tools;

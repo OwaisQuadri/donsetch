@@ -19,7 +19,19 @@ async fn main() {
 
         // ── Management ──
         "mcp" => {
-            if let Err(e) = mcp::server::run().await {
+            // v3 crash-only design: `--supervised` spawns a child
+            // daemon and proxies stdio; a panic-abort (release runs
+            // panic=abort — one dead request would otherwise kill
+            // the whole MCP session) restarts the child instead.
+            // Persistent state (handles, history, profiles) reloads
+            // from disk; the client sees a blip, not a death.
+            if args.iter().any(|a| a == "--supervised") {
+                eprintln!("[supervisor] donsetch mcp --supervised");
+                if let Err(e) = mcp::supervisor::run() {
+                    eprintln!("[supervisor] {e}");
+                    std::process::exit(1);
+                }
+            } else if let Err(e) = mcp::server::run().await {
                 eprintln!("mcp daemon: {e}");
                 std::process::exit(1);
             }
