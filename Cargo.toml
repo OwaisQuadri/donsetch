@@ -2,7 +2,7 @@
 name = "donsetch"
 version = "2.5.0"
 edition = "2024"
-license = "AGPL-3.0"
+license = "AGPL-3.0-only"
 description = "Web fetch, search and crawl for AI agents. Custom stealthy HTTP fetch tier on BoringSSL."
 
 [dependencies]

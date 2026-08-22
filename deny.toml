@@ -14,7 +14,12 @@ version = 2
 # Unmaintained crates: warn, don't block — an unmaintained transitive
 # dep is common and usually harmless; the maintainers bump it soon.
 yanked = "warn"
-ignore = []
+# Unmaintained transitive deps (paste, ttf-parser — via scraper/image;
+# nothing actionable until upstream bumps): acknowledged, not blocking.
+ignore = [
+    "RUSTSEC-2024-0436", # paste
+    "RUSTSEC-2026-0192", # ttf-parser
+]
 
 [licenses]
 version = 2
@@ -35,6 +40,10 @@ allow = [
     "OpenSSL",
     "Unicode-3.0",
     "Unicode-DFS-2016",
+    "BSL-1.0",
+    "AGPL-3.0-only",
+    # libFuzzer runtime (fuzz targets only) — the LLVM license family.
+    "NCSA",
     "CC0-1.0",
     "CDLA-Permissive-2.0",
     "0BSD",

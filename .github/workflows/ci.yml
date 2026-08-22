@@ -165,10 +165,14 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
+      - name: Install Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '>=1.22.0'
       - name: Install build deps (boring-sys)
         run: |
           sudo apt-get update -o Acquire::Retries=5
-          sudo apt-get install -y --no-install-recommends cmake go nasm libclang-dev curl
+          sudo apt-get install -y --no-install-recommends cmake nasm libclang-dev
       - name: Fuzz (90s smoke)
         working-directory: fuzz
         run: |
