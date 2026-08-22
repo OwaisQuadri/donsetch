@@ -174,10 +174,10 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '>=1.22.0'
-      - name: Install build deps (boring-sys)
+      - name: Install build deps (boring-sys + musl)
         run: |
           sudo apt-get update -o Acquire::Retries=5
-          sudo apt-get install -y --no-install-recommends cmake nasm libclang-dev
+          sudo apt-get install -y --no-install-recommends cmake nasm libclang-dev musl-tools
       - name: Fuzz (90s smoke)
         working-directory: fuzz
         run: |
