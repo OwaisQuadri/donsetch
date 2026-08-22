@@ -1,0 +1,52 @@
+[package]
+name = "donsetch-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# The parent crate as a library dependency. NOTE: building the fuzz
+# targets compiles boring-sys (needs cmake, go, nasm, libclang) —
+# same requirements as the main build.
+donsetch = { path = ".." }
+
+# Harness names map 1:1 to fuzz_targets/*.rs
+[[bin]]
+name = "extract"
+path = "fuzz_targets/extract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "charset"
+path = "fuzz_targets/charset.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "paginate"
+path = "fuzz_targets/paginate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sitemap"
+path = "fuzz_targets/sitemap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "feed"
+path = "fuzz_targets/feed.rs"
+test = false
+doc = false
+bench = false

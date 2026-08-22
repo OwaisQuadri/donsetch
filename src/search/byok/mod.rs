@@ -92,6 +92,12 @@ pub struct ByokSearcher {
     client: reqwest::Client,
 }
 
+impl Default for ByokSearcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ByokSearcher {
     /// Load from disk. If no keys configured, search() returns
     /// Err("not configured") and the caller falls back to local.

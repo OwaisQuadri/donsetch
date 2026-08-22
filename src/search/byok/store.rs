@@ -398,6 +398,12 @@ pub struct ByokStore {
     config: Mutex<ByokConfig>,
 }
 
+impl Default for ByokStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ByokStore {
     pub fn new() -> Self {
         Self {

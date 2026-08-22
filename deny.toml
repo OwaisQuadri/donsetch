@@ -1,0 +1,58 @@
+# cargo-deny configuration — supply-chain gate for CI.
+#
+# Checks: licenses (we are AGPL-3.0; deps must be permissive or
+# OSI-acceptable), security advisories (RustSec), duplicate crate
+# versions (bloat signal), and banned sources.
+
+[graph]
+# Check all feature combinations that matter: the default core
+# build and the full ocr+rerank build.
+all-features = true
+
+[advisories]
+version = 2
+# Unmaintained crates: warn, don't block — an unmaintained transitive
+# dep is common and usually harmless; the maintainers bump it soon.
+yanked = "warn"
+ignore = []
+
+[licenses]
+version = 2
+# DonSeTch is AGPL-3.0. Dependencies may be permissive (MIT,
+# Apache-2.0, BSD, ISC, MPL-2.0, zlib) or the OpenSSL license
+# (BoringSSL). Copyleft deps would taint distribution — deny them.
+private = { ignore = true }
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Zlib",
+    "OpenSSL",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "0BSD",
+]
+confidence-threshold = 0.93
+
+[bans]
+# Duplicate versions: warn (some duplication is unavoidable in a
+# BoringSSL + tokio + scraper graph).
+multiple-versions = "warn"
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+# Only crates.io + vendored paths (PDFium static libs are fetched
+# by build.rs, not a registry dep).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
