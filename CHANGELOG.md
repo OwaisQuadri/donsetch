@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-08-22
+
+The polish & reliability release: one daemon-crashing charset bug fixed (#35), four panic-abort paths closed, one infinite hang capped, the error contract extended to every tool, and installation/upgrades hardened across platforms.
+
+### Fixed
+
+- **ghost-dom double-decoded browser text as GB18030 mojibake (#35)**: the headless-browser tier reads UTF-8 text from the live DOM via CDP — the browser already decoded the page. But the rendered DOM keeps the page's original `<meta charset=gb18030>` declaration, so the charset sniffer honored it and "decoded" the already-UTF-8 bytes a second time (末日乐园 → 鏈棩涔愐涯 on 69shuba). Browser-provided text is now pinned as UTF-8 (`GHOST_TEXT_CT`) at every extraction site (fetch ghost paths, actions, render cache, crawl ghost escalation). Raw HTTP bytes keep full detection — the v2.3.8 GBK/Big5/Shift-JIS fixes are untouched.
+
+- **Daemon-abort panics (release builds run `panic=abort` — each of these was a one-request kill)**:
+  - `js_unescape`: a literal backslash before a multi-byte UTF-8 character (hostile or sloppy page in a Next.js flight frame) advanced the cursor mid-character; the next string slice panicked. Copy the full character instead.
+  - Pagination: unclamped `max_chars`/`offset` tool args wrapped `start + max_chars` below `start` (integer overflow) → slice panic. Now saturating arithmetic plus server-side clamps (`max_chars` 200..=1 MiB, `offset` ≤ 1e9).
+  - Pagination resume: the 500-byte block-boundary search window could split a multi-byte character on CJK pages → slice panic. Window end is floored to a char boundary.
+  - Ghost debug HTML dump could slice a multi-byte character at byte 1200.
+
+- **Infinite hang**: `Cdp::connect` — the only unguarded network primitive in the ghost stack — could hang a tool call forever if the browser accepted TCP but stalled the WebSocket handshake. 10-second cap.
+
+- **Unclamped action waits**: a `wait` step with `ms: 3600000` stalled the tool call for an hour with no cancellation path. Per-step waits cap at 30s, selector/text polls at 60s.
+
+- **Crawl resume via CLI**: `donsetch crawl "" --resume <token>` errored with "url must be http(s)" before reaching the resume loader (the MCP path accepted it, the CLI didn't). Empty-URL resume-only invocation now works.
+
+### Changed
+
+- **Windows browser discovery** now probes Microsoft Edge install directories (often the only CDP-capable browser on a stock Windows box — its directory is never on PATH), per-user Chromium, and the Playwright cache. Ghost escalation, browser actions, and `doctor` work on default Windows installs.
+
+- **macOS Intel (darwin-x64) supported end-to-end**: prebuilt binaries now build in CI (native `macos-15-intel` runner), `npm install` accepts the platform, and self-update maps it correctly.
+
+- **npm install.js hardened**: musl (Alpine) systems are detected up front with an honest "glibc-linked binary will not run" error instead of a deferred cryptic spawn failure; `tar` presence is checked on Windows before downloading; stale/truncated leftover binaries (< 1 MiB) are re-fetched instead of shadowing a fresh install; extraction is verified before chmod.
+
+- **Error contract extended to every tool**: `web_crawl` and `web_search` failures now return structured errors with escalation trace + `next_action` (crawl failures classified permanent vs transient — bad seed/expired token no longer masquerade as retryable); crawl ghost-escalation failures surface their reason (launch error, captcha, timeouts) in `skipped[]` instead of vanishing; SSRF / binary-content / extraction-failure errors carry `next_action`; zero-result searches suggest the available levers.
+
+- **CLI exit codes honest**: `update`, `doctor`, and `rollback` exit 1 on failure (scripts gate on `$?`); bulk-fetch JSON mode no longer collapses walled/transient failures to the permanent exit code; signal exit code matches the received signal.
+
+- **Search meta reports rerank state**: a silently-degraded cross-encoder (feature off / model failed to load) is now visible in `structuredContent.rerank` instead of stderr-only.
+
+### Security / Reliability
+
+- **Sitemap decompression bomb capped**: gzip sitemaps decompress through the same 64 MiB cap as every other path — a malicious `.xml.gz` could previously OOM the daemon via unbounded allocation.
+- **HPACK hostile index 0**: `checked_sub` instead of unsigned wrap (protocol-violation byte from a hostile server).
+- **MCP stdout write failures** now log and shut down instead of silently serving into a broken pipe while the client waits forever.
+- **Update flow**: backup-copy failure warns before the atomic swap (rollback would otherwise be silently impossible); cookie-vault persist failure logs instead of silently dropping warm clearance state.
+- **Key masking** (`donsetch keys list`) is char-boundary-safe for keys containing multi-byte characters.
+- `fetch` validates URL parse up front — an unparseable URL can no longer flow through the pipeline with an empty host, poisoning domain profiles.
+- `/tmp` literals replaced with `std::env::temp_dir()` (ghost screenshots, search debug dumps) — Windows-safe.
+- `doctor`'s browser-timeout remedy is platform-appropriate (no `pkill`/`/tmp` advice on Windows/macOS).
+
 ## [2.4.1] - 2026-08-20
 
 ### Fixed
