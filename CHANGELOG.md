@@ -48,6 +48,18 @@ The context-warfare milestone (v3 M1): every tool now respects the agent's conte
 - **Loud engine degradation**: search results from degraded engines carry a `*degraded: 3/5 engines ok (duckduckgo: timeout)*` line — silent quality collapse is visible in-band.
 - **Delta crawl (`since_last=true`)**: crawl skips pages whose recorded fingerprint is still fresh (24h window), reporting each as `unchanged (since_last)` in the skipped list — re-crawling a site after an edit returns just what moved.
 
+### Added (M4 — domain intelligence)
+
+A keyless adapter registry for the sites agents actually hit. Fetch-level rewrites route page URLs to the site's own public JSON APIs (one plain-HTTP request for structured truth — often skipping the wall entirely); extract-level adapters restructure HTML the generic pipeline mangles. Every result is honestly labeled `via=adapter:…` in `[meta]` and structuredContent; any adapter miss falls back to the generic path, and an adapter failure (rate limit, login wall, non-JSON 200) transparently retries the ORIGINAL url through the full pipeline. Kill switch: `DONSETCH_NO_ADAPTERS=1`.
+
+- **Reddit `.json`**: threads and subreddit listings fetched from the site's keyless JSON endpoints and rendered as comment trees with scores, ages, OP/sticky/NSFW flags and collapsed-reply counts; nested replies indented. Replaces the HTML scrape when available (an IP under Reddit's logged-out limit still gets the old.reddit/generic/ghost cascade).
+- **Package registries**: npm, PyPI, crates.io, Go module proxy and RubyGems page URLs (e.g. `npmjs.com/package/react`) resolve to their JSON APIs and render one unified package card — description, current version, publish/update dates, license, repo, download counts, dependencies, deprecation/`DEPRECATED` warnings, yanked markers, and a recent-versions list that prefers stable releases over canaries. Version-specific URLs fetch the version manifest (crates.io version pages carry the dependency tree).
+- **GitHub**: issue/PR lists, individual issues/PRs, releases and commits restructured from the server-rendered DOM (both the current React markup via stable `data-testid` hooks and the legacy markup). Issue lists: title, number, open/closed, author, date, labels. Issue threads: state, author, date, full body — plus an honest note that comments stream via JS (re-fetch with `tier=2` to read the discussion). No auth, no API rate jail.
+- **Stack Exchange**: question + answers as a QA tree with per-post scores (from `data-score`), accepted-answer ✓ marking, asker/answerer authorship and asked-dates.
+- **Wikipedia infoboxes**: the summary table (born/died/founded/license/versions…) becomes a clean `field | value` table at the top of the output, with the full article body (headings, paragraphs, data tables, lists) below — navbox/infobox duplication and citation markers stripped.
+- **Docs frameworks**: mkdocs / Docusaurus / Sphinx / Antora sites (detected via generator meta or framework markers) prepend a compact `Site outline` built from the nav — the site map with cheap L-handle links — before the page content. Version-switcher noise filtered.
+- `donsetch dev extract --url <url> --input <file>`: run the extraction pipeline on a saved HTML file against a URL (adapter development, fixture capture). `DONSETCH_ADAPTER_DUMP=<dir>` captures every body the adapters inspect.
+
 
 ## [2.5.0] - 2026-08-22
 

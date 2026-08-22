@@ -119,6 +119,10 @@ pub struct Extracted {
     /// pagination markdown. Stable across max_chars settings —
     /// re-fetches compare apples to apples.
     pub fingerprint: Option<String>,
+    /// Domain-intelligence adapter that produced this result
+    /// (v3): the honest `via=adapter:...` label. `None` = the
+    /// generic DonSift pipeline.
+    pub via: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,6 +317,14 @@ pub fn extract(
         return Ok(ex);
     }
 
+    // Domain-intelligence adapters (v3): JSON payloads from the
+    // registry's URL rewrites (reddit .json, package APIs) render
+    // structured — BEFORE the non-HTML passthrough so adapter JSON
+    // never dumps raw.
+    if !is_pdf && let Some(ex) = crate::adapters::extract_json(body, &ct, url, opts) {
+        return Ok(ex);
+    }
+
     // A "text/plain" body that is actually HTML (misconfigured
     // servers, raw git URLs): parse it as HTML, not as literal
     // text full of angle brackets.
@@ -340,6 +352,7 @@ pub fn extract(
             pdf_pages: None,
             images: Vec::new(),
             fingerprint: None,
+            via: None,
         });
     }
 
@@ -403,6 +416,12 @@ pub fn extract(
     // table layout the generic pipeline mangles. Full comment
     // text with authors and reply depth.
     if let Some(extracted) = hn::extract(&html_text, url, opts) {
+        return Ok(extracted);
+    }
+
+    // Domain-intelligence adapters (v3): GitHub / Stack Exchange /
+    // Wikipedia infobox / docs-framework pages restructured.
+    if let Some(extracted) = crate::adapters::extract_html(&html_text, url, opts) {
         return Ok(extracted);
     }
 
@@ -575,6 +594,7 @@ pub fn text_fallback(
         pdf_pages: None,
         images: Vec::new(),
         fingerprint: None,
+        via: None,
     })
 }
 
@@ -684,6 +704,7 @@ fn empty_pdf(url: &str, reason: &str) -> Extracted {
         pdf_pages: None,
         images: Vec::new(),
         fingerprint: None,
+        via: None,
     }
 }
 
@@ -751,6 +772,7 @@ fn downstream(
             pdf_pages: None,
             images: Vec::new(),
             fingerprint: None,
+            via: None,
         });
     }
 
@@ -939,6 +961,7 @@ fn downstream(
             pdf_pages,
             images,
             fingerprint: None,
+            via: None,
         });
     }
 
@@ -960,6 +983,7 @@ fn downstream(
         pdf_pages,
         images,
         fingerprint: Some(crate::pages::history::PageHistory::fingerprint(&full)),
+        via: None,
     })
 }
 

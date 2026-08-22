@@ -167,6 +167,7 @@ fn extract_listing(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Extra
         pdf_pages: None,
         images: Vec::new(),
         fingerprint: None,
+        via: None,
     })
 }
 
@@ -254,6 +255,7 @@ fn extract_thread(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Extrac
         pdf_pages: None,
         images: Vec::new(),
         fingerprint: None,
+        via: None,
     })
 }
 

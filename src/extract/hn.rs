@@ -135,6 +135,7 @@ fn extract_permalink(doc: &Html, url: &str, opts: &ExtractOptions) -> Option<Ext
         pdf_pages: None,
         images: Vec::new(),
         fingerprint: None,
+        via: None,
     })
 }
 
@@ -370,6 +371,7 @@ fn extract_thread(
         pdf_pages: None,
         images: Vec::new(),
         fingerprint: None,
+        via: None,
     })
 }
 

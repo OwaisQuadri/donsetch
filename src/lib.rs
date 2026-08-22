@@ -14,6 +14,7 @@
 //!
 //! The binary in `main.rs` is a thin shell over this library.
 
+pub mod adapters;
 pub mod cli;
 pub mod crawl;
 pub mod detect;

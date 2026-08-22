@@ -1271,23 +1271,30 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
     };
     let url_host = parsed_url.host_str().unwrap_or("").to_string();
 
-    // Universal reddit optimization: rewrite all reddit.com
-    // URLs to old.reddit.com — Reddit's legacy SSR domain
-    // serves real content to plain HTTP clients. No JS shell,
-    // no login overlay, no CAPTCHA. One cheap tier-1 request
-    // beats a 60s ghost burn. The dedicated reddit extractor
-    // in extract/reddit.rs formats the output.
-    let url = if let Ok(mut u) = url::Url::parse(url) {
-        match u.host_str() {
-            Some("www.reddit.com") | Some("reddit.com") => {
-                let _ = u.set_host(Some("old.reddit.com"));
-                u.to_string()
-            }
-            _ => url.to_string(),
+    // Domain intelligence (v3): the adapters registry may rewrite
+    // the URL to the site's own structured endpoint (reddit .json,
+    // npm/PyPI/crates/Go/RubyGems APIs) — one cheap tier-1 request
+    // for structured truth. `orig_url` stays the agent-facing
+    // identity: history, handles, and display key on it.
+    let no_adapter = args
+        .get("_no_adapter")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let orig_url = url.to_string();
+    let adapter_used: Option<&'static str>;
+    let url = match crate::adapters::rewrite(&parsed_url) {
+        Some((new_url, name)) if !no_adapter => {
+            adapter_used = Some(name);
+            new_url
         }
-    } else {
-        url.to_string()
+        _ => {
+            adapter_used = None;
+            url.to_string()
+        }
     };
+    // Adapter endpoints (registry CDNs, reddit .json) are plain
+    // GET targets — never route them at the browser.
+    let adapter_host = adapter_used.is_some();
 
     // SSRF guard: never fetch private/loopback addresses.
     let parsed = match url::Url::parse(&url) {
@@ -1384,15 +1391,14 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
     // === Decision: how to route this fetch? ===
     // The self-improving loop: the domain profile decides
     // cold / warm / skip-to-solve / recheck-cold.
-    // Reddit is always SSR (old.reddit.com rewrite) — never
-    // needs a browser. Force Cold route even if a stale
-    // profile says SkipToSolve (from a previous Xvfb failure
-    // that poisoned the domain). old.reddit.com serves 80KB+
-    // of server-rendered HTML to plain HTTP clients.
-    let is_reddit = host.ends_with("reddit.com");
-    let route = if tier == "2" && !is_pdf_url && !is_reddit {
+    // Adapter endpoints (reddit .json / old.reddit SSR, package
+    // registry APIs) are plain-GET structured targets — never
+    // need a browser. Force Cold even if a stale profile says
+    // SkipToSolve (from a previous Xvfb failure that poisoned
+    // the domain).
+    let route = if tier == "2" && !is_pdf_url && !adapter_host {
         RouteDecision::SkipToSolve
-    } else if tier == "1" || is_pdf_url || is_reddit {
+    } else if tier == "1" || is_pdf_url || adapter_host {
         RouteDecision::Cold
     } else {
         daemon.state.lock().await.route_for(&host)
@@ -1433,6 +1439,13 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
         let fetched = match daemon.fetcher.fetch(&url).await {
             Ok(o) => o,
             Err(e) => {
+                if adapter_host && !no_adapter {
+                    // Transport failure on the adapter endpoint —
+                    // try the original URL before giving up.
+                    let mut args2 = args.clone();
+                    args2["_no_adapter"] = json!(true);
+                    return Box::pin(fetch_single_inner(daemon, &args2, &orig_url)).await;
+                }
                 return tool_error_structured(
                     friendly_fetch_error(&e),
                     fetch_error_kind(&e),
@@ -1499,11 +1512,31 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
     // === Verdict gate: everything except ContentOk/Challenge ===
     // is a terminal, legitimate response — clean error, no ghost.
     // Challenge on an explicit tier=1 request is also terminal.
+    // Adapter failures (rate-limited .json, registry hiccup)
+    // first fall back to the ORIGINAL URL through the generic
+    // path — the adapter is an optimization, never a dependency.
     if let Some(o) = &out {
         match o.verdict {
             Verdict::ContentOk => {}
             Verdict::Challenge(_) if tier != "1" => {}
             v => {
+                if adapter_host && !no_adapter {
+                    let mut args2 = args.clone();
+                    args2["_no_adapter"] = json!(true);
+                    trace.step(
+                        "adapter",
+                        "fallback",
+                        &format!("{:?} — retrying original URL", v),
+                        0,
+                    );
+                    let mut res = Box::pin(fetch_single_inner(daemon, &args2, &orig_url)).await;
+                    // Fold the adapter attempt into the trace so
+                    // the agent sees why there are two hops.
+                    if let Some(sc) = res.pointer_mut("/structuredContent") {
+                        sc["adapter_fallback"] = json!(true);
+                    }
+                    return res;
+                }
                 let kind = verdict_kind(v, o.status);
                 return tool_error_structured(
                     verdict_error(v, o.status, &o.url),
@@ -1518,6 +1551,35 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
                 );
             }
         }
+    }
+
+    // === Adapter shape check ===
+    // A 200 that isn't JSON on a rewritten endpoint (login walls,
+    // HTML error interstitials) bought the adapter nothing — fall
+    // back to the original URL through the full generic pipeline
+    // (which still escalates to ghost if the page is a shell).
+    if adapter_host
+        && !no_adapter
+        && let Some(o) = &out
+        && matches!(o.verdict, Verdict::ContentOk)
+        && !matches!(
+            o.body.iter().find(|b| !b.is_ascii_whitespace()),
+            Some(b'{') | Some(b'[')
+        )
+    {
+        trace.step(
+            "adapter",
+            "shape-mismatch",
+            "200 but not JSON — retrying original URL",
+            0,
+        );
+        let mut args2 = args.clone();
+        args2["_no_adapter"] = json!(true);
+        let mut res = Box::pin(fetch_single_inner(daemon, &args2, &orig_url)).await;
+        if let Some(sc) = res.pointer_mut("/structuredContent") {
+            sc["adapter_fallback"] = json!(true);
+        }
+        return res;
     }
 
     // === Tier-1 extraction (when we have a body) ===
@@ -1652,7 +1714,7 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
     let is_small_404 =
         page_size > 0 && page_size < 5_000 && still_thin && !challenge && !is_pdf_content;
     let need_ghost = !is_pdf_content
-        && !is_reddit // old.reddit.com is SSR — never needs a browser
+        && !adapter_host // adapter endpoints (reddit .json, registry APIs) are plain GETs
         && ((challenge && tier != "1" && !is_small_404)
             || skip_tier1
             || (still_thin && tier == "auto" && !is_small_404));
@@ -1772,12 +1834,20 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
         );
     }
 
+    // v3 adapters: the agent-facing URL stays the one they asked
+    // for — history, handles, and display key on it, not the
+    // rewritten API endpoint.
+    let display_url = if adapter_used.is_some() {
+        orig_url.clone()
+    } else {
+        final_url.clone()
+    };
     let mut res = finish_result(
         &ex,
         final_tier,
         final_status,
         &final_verdict,
-        &final_url,
+        &display_url,
         &trace,
         t0.elapsed().as_millis(),
     );
@@ -1822,7 +1892,7 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
     apply_page_history(
         daemon,
         &mut res,
-        &final_url,
+        &display_url,
         PageFacts {
             fingerprint: ex.fingerprint.as_deref(),
             markdown: &ex.markdown,
@@ -2886,7 +2956,7 @@ fn finish_result(
             "per_page_capped": pages.len() > 50,
         })
     });
-    let structured = json!({
+    let mut structured = json!({
         "status": status,
         "tier": tier,
         "verdict": verdict,
@@ -2909,6 +2979,11 @@ fn finish_result(
         "url": url,
         "ms": elapsed_ms,
     });
+    // v3: the honest adapter label — the agent sees WHICH
+    // structured source produced this result.
+    if let Some(via) = ex.via {
+        structured["via"] = json!(via);
+    }
     // Compact metadata text block prepended for clients (Claude Code,
     // VSCode) that drop text content when structuredContent is present.
     let mut meta = json!({
@@ -2924,6 +2999,9 @@ fn finish_result(
     });
     if let Some(n) = ex.next_offset {
         meta["next_offset"] = json!(n);
+    }
+    if let Some(via) = ex.via {
+        meta["via"] = json!(via);
     }
     if let Some(t) = &ex.title {
         meta["title"] = json!(t);

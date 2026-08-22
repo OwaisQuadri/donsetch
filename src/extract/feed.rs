@@ -263,6 +263,7 @@ fn finish(
         pdf_pages: None,
         images: Vec::new(),
         fingerprint: None,
+        via: None,
     })
 }
 

@@ -30,6 +30,7 @@ pub async fn dispatch(args: &[String]) {
 
 async fn extract_cmd(args: &[String]) {
     let mut input_file: Option<String> = None;
+    let mut base_url: Option<String> = None;
     let mut opts = extract::ExtractOptions::default();
     let mut i = 0;
     while i < args.len() {
@@ -54,6 +55,10 @@ async fn extract_cmd(args: &[String]) {
                 i += 1;
                 input_file = args.get(i).cloned();
             }
+            "--url" => {
+                i += 1;
+                base_url = args.get(i).cloned();
+            }
             _ => {}
         }
         i += 1;
@@ -71,7 +76,12 @@ async fn extract_cmd(args: &[String]) {
         "text/html"
     };
     let t0 = std::time::Instant::now();
-    let ex = match extract::extract(&body, sniff_ct, "https://local/", &opts) {
+    let ex = match extract::extract(
+        &body,
+        sniff_ct,
+        base_url.as_deref().unwrap_or("https://local/"),
+        &opts,
+    ) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("error: {e}");
