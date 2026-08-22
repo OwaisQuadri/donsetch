@@ -275,13 +275,16 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value) -> Value {
     // resume state). If url is missing AND no resume token, error.
     let url = match args.get("url").and_then(Value::as_str) {
         Some(u) if u.starts_with("http://") || u.starts_with("https://") => u.to_string(),
-        Some(u) => return tool_error(format!("crawl: url must be http(s), got: {u}")),
-        None => {
+        // Empty string (the CLI's explicit resume-only positional) and
+        // a missing key are the same case: the seed is loaded from
+        // the resume state.
+        None | Some("") => {
             if args.get("resume").and_then(Value::as_str).is_none() {
                 return tool_error("crawl: url required (or provide resume token to continue)");
             }
             String::new()
         }
+        Some(u) => return tool_error(format!("crawl: url must be http(s), got: {u}")),
     };
     let mut opts = CrawlOptions::default();
     opts.focus = args.get("focus").and_then(Value::as_str).map(String::from);

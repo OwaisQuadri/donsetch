@@ -202,6 +202,8 @@ impl ByokSearcher {
                         cached: false,
                         elapsed: started.elapsed(),
                         provider: Some(provider),
+                        // Provider-ranked, not cross-encoder-ranked.
+                        reranked: false,
                     });
                 }
                 Err(key_error) => {

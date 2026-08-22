@@ -128,6 +128,8 @@ pub struct SearchOutcome {
     pub elapsed: Duration,
     /// BYOK provider name (None = local search).
     pub provider: Option<String>,
+    /// Cross-encoder reranking applied (feature on + model loaded).
+    pub reranked: bool,
 }
 
 impl Searcher {
@@ -238,7 +240,8 @@ impl Searcher {
                         cached: true,
                         elapsed: started.elapsed(),
                         provider: None,
-                    });
+                                        reranked: crate::search::rerank::active(),
+                });
                 }
             }
             // Leader died or timed out — compute ourselves.
@@ -278,7 +281,8 @@ impl Searcher {
                 cached: true,
                 elapsed: started.elapsed(),
                 provider: None,
-            });
+                                reranked: crate::search::rerank::active(),
+                });
         }
 
         let engines = intent::engines_for(intent);
@@ -561,6 +565,7 @@ impl Searcher {
             cached: false,
             elapsed: started.elapsed(),
             provider: None,
+                    reranked: crate::search::rerank::active(),
         })
     }
 
@@ -931,6 +936,7 @@ pub fn render_meta(out: &SearchOutcome) -> Value {
         "cached": out.cached,
         "elapsed_ms": out.elapsed.as_millis() as u64,
         "provider": out.provider,
+        "rerank": if out.reranked { "on" } else { "off (RRF+BM25 fallback)" },
         "results": out.results.iter().map(|r| json!({
             "title": r.title,
             "url": r.url,

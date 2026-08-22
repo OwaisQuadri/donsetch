@@ -199,6 +199,12 @@ mod inner {
     /// extraction to decide whether semantic scoring is available
     /// without surprising the user with a model download during
     /// a plain fetch.
+    /// True when the cross-encoder is loaded and was used for the
+    /// last ranking pass in this process (feature on + model ok).
+    pub fn active() -> bool {
+        get().is_some()
+    }
+
     pub fn is_model_cached() -> bool {
         let dir = cache_dir();
         dir.join("model_quantized.onnx").exists() && dir.join("tokenizer.json").exists()
@@ -490,6 +496,9 @@ mod inner {
 mod inner {
     /// No-op stubs when the `rerank` feature is disabled.
     pub fn rerank(_query: &str, _results: &mut [crate::search::rank::Merged]) {}
+    pub fn active() -> bool {
+        false
+    }
     pub fn cross_encoder_scores(_query: &str, _docs: &[(String, String)]) -> Option<Vec<f64>> {
         None
     }
@@ -498,4 +507,4 @@ mod inner {
     }
 }
 
-pub use inner::{cross_encoder_scores, is_model_cached, rerank};
+pub use inner::{active, cross_encoder_scores, is_model_cached, rerank};
