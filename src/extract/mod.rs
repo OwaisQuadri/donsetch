@@ -501,8 +501,7 @@ pub fn extract(
     // structure (h1-h6 → markdown headings) and paragraph breaks.
     // When focus is active, short content is intentional (the agent
     // asked for a filtered slice), not a sign of extraction failure.
-    let needs_fallback =
-        extracted.thin || (extracted.total_chars < 200 && opts.focus.is_none());
+    let needs_fallback = extracted.thin || (extracted.total_chars < 200 && opts.focus.is_none());
     if needs_fallback && let Some(mut fb) = text_fallback(&html_text, &meta, url, opts, max_chars) {
         // Comic/gallery pages go thin and fall back here; the
         // scoped Media blocks (the actual content images) must

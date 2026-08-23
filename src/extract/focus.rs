@@ -899,10 +899,13 @@ fn build_sections(blocks: &[Block]) -> Vec<Section> {
         match b {
             Block::Heading { .. } => {
                 if !current.body_idx.is_empty() || current.heading_idx.is_some() {
-                    sections.push(std::mem::replace(&mut current, Section {
-                        heading_idx: Some(i),
-                        body_idx: Vec::new(),
-                    }));
+                    sections.push(std::mem::replace(
+                        &mut current,
+                        Section {
+                            heading_idx: Some(i),
+                            body_idx: Vec::new(),
+                        },
+                    ));
                 } else {
                     current.heading_idx = Some(i);
                 }
@@ -931,11 +934,7 @@ fn build_sections(blocks: &[Block]) -> Vec<Section> {
 ///
 /// Returns kept block indices (unsorted) and whether any
 /// section was selected.
-fn select_sections_core(
-    blocks: &[Block],
-    scores: &[f64],
-    threshold: f64,
-) -> Vec<usize> {
+fn select_sections_core(blocks: &[Block], scores: &[f64], threshold: f64) -> Vec<usize> {
     let sections = build_sections(blocks);
     let mut kept: Vec<usize> = Vec::new();
     let mut kept_set: HashSet<usize> = HashSet::new();
@@ -947,9 +946,10 @@ fn select_sections_core(
         if heading_matches {
             // Section Gravity: heading match pulls in entire section.
             if let Some(hi) = s.heading_idx
-                && kept_set.insert(hi) {
-                    kept.push(hi);
-                }
+                && kept_set.insert(hi)
+            {
+                kept.push(hi);
+            }
             for &bi in &s.body_idx {
                 if kept_set.insert(bi) {
                     kept.push(bi);
@@ -969,9 +969,10 @@ fn select_sections_core(
             // Inverse Gravity: body match pulls in the heading.
             if body_matched
                 && let Some(hi) = s.heading_idx
-                    && kept_set.insert(hi) {
-                        kept.push(hi);
-                    }
+                && kept_set.insert(hi)
+            {
+                kept.push(hi);
+            }
         }
     }
 
@@ -982,20 +983,16 @@ fn select_sections_core(
 /// heading blocks from its path that are not already kept.
 /// This ensures the agent always sees structural context,
 /// never an orphaned block.
-fn expand_breadcrumbs(
-    blocks: &[Block],
-    kept: &mut Vec<usize>,
-    kept_set: &mut HashSet<usize>,
-) {
+fn expand_breadcrumbs(blocks: &[Block], kept: &mut Vec<usize>, kept_set: &mut HashSet<usize>) {
     let snapshot: Vec<usize> = kept.clone();
     for (hi, b) in blocks.iter().enumerate() {
         if let Block::Heading { text, .. } = b {
             if kept_set.contains(&hi) {
                 continue;
             }
-            let in_path = snapshot.iter().any(|&bi| {
-                blocks[bi].path().iter().any(|p| p == text)
-            });
+            let in_path = snapshot
+                .iter()
+                .any(|&bi| blocks[bi].path().iter().any(|p| p == text));
             if in_path {
                 kept_set.insert(hi);
                 kept.push(hi);
@@ -1050,10 +1047,7 @@ pub fn filter_semantic<'a>(
                         let mut kept_set: HashSet<usize> = kept.iter().copied().collect();
                         expand_breadcrumbs(blocks, &mut kept, &mut kept_set);
                         kept.sort_unstable();
-                        return (
-                            kept.into_iter().map(|i| &blocks[i]).collect(),
-                            false,
-                        );
+                        return (kept.into_iter().map(|i| &blocks[i]).collect(), false);
                     }
                 }
             }
@@ -1089,13 +1083,17 @@ pub fn filter_semantic<'a>(
                     continue;
                 }
                 let heading_xenc = s.heading_idx.map(|h| xenc_scores[h]).unwrap_or(0.0);
-                let body_xenc_max =
-                    s.body_idx.iter().map(|&b| xenc_scores[b]).fold(0.0f64, f64::max);
+                let body_xenc_max = s
+                    .body_idx
+                    .iter()
+                    .map(|&b| xenc_scores[b])
+                    .fold(0.0f64, f64::max);
                 if heading_xenc >= XENC_THRESHOLD {
                     if let Some(hi) = s.heading_idx
-                        && kept_set.insert(hi) {
-                            kept.push(hi);
-                        }
+                        && kept_set.insert(hi)
+                    {
+                        kept.push(hi);
+                    }
                     for &bi in &s.body_idx {
                         if kept_set.insert(bi) {
                             kept.push(bi);
@@ -1103,9 +1101,10 @@ pub fn filter_semantic<'a>(
                     }
                 } else if body_xenc_max >= XENC_THRESHOLD {
                     if let Some(hi) = s.heading_idx
-                        && kept_set.insert(hi) {
-                            kept.push(hi);
-                        }
+                        && kept_set.insert(hi)
+                    {
+                        kept.push(hi);
+                    }
                     for &bi in &s.body_idx {
                         if xenc_scores[bi] >= XENC_THRESHOLD && kept_set.insert(bi) {
                             kept.push(bi);
@@ -1149,13 +1148,14 @@ pub fn expand_code_blocks(blocks: Vec<Block>) -> Vec<Block> {
     let mut expanded = Vec::with_capacity(blocks.len());
     for b in blocks {
         if let Block::Code { code, lang, path } = &b
-            && code.len() > 2000 {
-                let subs = split_code_block(code, lang.clone(), path.clone());
-                if subs.len() > 1 {
-                    expanded.extend(subs);
-                    continue;
-                }
+            && code.len() > 2000
+        {
+            let subs = split_code_block(code, lang.clone(), path.clone());
+            if subs.len() > 1 {
+                expanded.extend(subs);
+                continue;
             }
+        }
         expanded.push(b);
     }
     expanded
@@ -1168,11 +1168,7 @@ pub fn expand_code_blocks(blocks: Vec<Block>) -> Vec<Block> {
 /// Fallback: split at regular intervals.
 ///
 /// Sub-blocks smaller than 200 chars are merged with neighbors.
-fn split_code_block(
-    code: &str,
-    lang: Option<String>,
-    path: Vec<String>,
-) -> Vec<Block> {
+fn split_code_block(code: &str, lang: Option<String>, path: Vec<String>) -> Vec<Block> {
     let lines: Vec<&str> = code.lines().collect();
     if lines.len() < 15 || code.len() < 2000 {
         return vec![Block::Code {
@@ -1678,10 +1674,7 @@ mod tests {
         let blocks = vec![
             heading(2, "History", vec!["Guide", "History"]),
             para_in("The project started in 2010.", vec!["Guide", "History"]),
-            para_in(
-                "Ownership was introduced later.",
-                vec!["Guide", "History"],
-            ),
+            para_in("Ownership was introduced later.", vec!["Guide", "History"]),
             para_in("The logo was redesigned.", vec!["Guide", "History"]),
         ];
         // Query "ownership" matches only block 2 (body), not the heading.
@@ -1705,7 +1698,10 @@ mod tests {
             heading(1, "Features", vec!["Features"]),
             para_in("Overview of features.", vec!["Features"]),
             heading(2, "Memory", vec!["Features", "Memory"]),
-            para_in("The borrow checker prevents errors.", vec!["Features", "Memory"]),
+            para_in(
+                "The borrow checker prevents errors.",
+                vec!["Features", "Memory"],
+            ),
         ];
         // Query "borrow checker" matches block 3 (body under "Memory").
         let (kept, fell_back) = filter_semantic(&blocks, "borrow checker", &en());
@@ -1728,7 +1724,10 @@ mod tests {
             heading(1, "Cooking Recipes", vec!["Cooking Recipes"]),
             para_in("How to make pasta.", vec!["Cooking Recipes"]),
             heading(1, "Troubleshooting", vec!["Troubleshooting"]),
-            para_in("If installation fails, check logs.", vec!["Troubleshooting"]),
+            para_in(
+                "If installation fails, check logs.",
+                vec!["Troubleshooting"],
+            ),
         ];
         let (kept, fell_back) = filter_semantic(&blocks, "installation", &en());
         assert!(!fell_back);
