@@ -5,7 +5,9 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.0] - 2026-08-23
+
+The context-warfare release: six milestones — reference handles, budgets, probe and structure-first reading (M1); deadlines, real cancellation and ms-precision costs (M2); page fingerprints, deltas, Wayback resurrection and anti-cloak (M3); keyless domain adapters for reddit/npm/PyPI/crates/Go/RubyGems/GitHub/StackExchange/Wikipedia/docs frameworks (M4); search→fetch warm handoff, stitching and Chrome-parity TLS (M5); stable error codes, CI token/memory gates, a crash-only supervisor and the pi-agent v3 extension (M6). Plus a community fix for a Windows tier-1 boot hang (#36, @problaems).
 
 The context-warfare milestone (v3 M1): every tool now respects the agent's context window as the scarce resource it is.
 
