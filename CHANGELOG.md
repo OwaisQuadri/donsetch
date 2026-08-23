@@ -5,7 +5,9 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.2.0] - 2026-08-23
+
+The search-legibility release: signals the merge already computed now reach the text channel, where every client can read them.
 
 ### Changed
 
