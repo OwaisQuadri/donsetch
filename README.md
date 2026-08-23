@@ -57,7 +57,7 @@ Works with every MCP client: Claude Code, Cursor, OpenCode, Pi, anything that sp
 | 🔑 **Keyless search** | 10+ backends in parallel, fused by cross-engine consensus. No API keys, no accounts, no billing. $0 forever. BYOK optional. |
 | 📄 **Pixel-fusion PDF** | Glyphs + rendered pixels from the same stream, fused deterministically. No hallucination. Per-region trust audit. Scanned PDFs auto-OCR'd. |
 | 🧬 **Built from scratch** | Own HTTP/2 (HPACK, flow control), own extraction engine, own PDF parser, own search aggregator, own crawl engine. Zero dependency on existing OSS web tooling. |
-| 🪶 **~2.4k tokens** | Three tools, ~2.4k tokens total in the MCP context. No bloat, no redundancy, every token earns its place. |
+| 🪶 **~3.5k tokens** | Three tools, ~3.5k tokens total in the MCP context. No bloat, no redundancy, every token earns its place. |
 
 ---
 
@@ -593,7 +593,7 @@ Every layer built in Rust. No dependency on existing OSS web tooling.
 | **CLI** | ✅ | ❌ | ✅ | ❌ | ❌ |
 | **Runs locally** | ✅ | ✅ | ✅ | ❌ | self-host |
 | **MCP server** | ✅ | ✅ | community | ✅ | build it |
-| **Token cost** | ~2.4K (3 tools) | ~2.7K (6 tools) | varies | n/a | varies |
+| **Token cost** | ~3.5K (3 tools) | ~2.7K (6 tools) | varies | n/a | varies |
 | **License** | AGPL v3 | MIT | Apache 2.0 | proprietary | MIT |
 
 ---
