@@ -26,7 +26,13 @@ env:
 
 jobs:
   build-test:
-    name: ${{ matrix.name }}
+    # Context MUST stay "build-test (<platform>)": master's branch
+    # protection requires exactly these three check names
+    # (build-test (linux-x86_64) / (macos-arm64) / (windows-x86_64)).
+    # GitHub generates this format for matrix jobs without an explicit
+    # name; setting it explicitly keeps the required-checks contract
+    # stable no matter how the matrix evolves.
+    name: build-test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
