@@ -166,18 +166,23 @@ impl Fetcher {
         let mut redirects = 0u8;
         let mut first_request = true;
 
-        // Resolve proxy when no explicit proxy lane is passed.
-        // Checks env vars first (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY),
-        // then falls back to config-file proxies (proxies.txt)
-        // with round-robin rotation. This ensures `donsetch proxy
-        // add` routes ALL traffic (fetch + search + crawl), not
-        // just search and crawl. NO_PROXY is respected.
-        let resolved_proxy = if proxy.is_none() {
-            crate::transport::proxy::pick_proxy(url_str)
+        // Resolve env-var proxy (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY)
+        // when no explicit proxy lane is passed. This follows the
+        // curl/wget convention so users can route all DonSeTch
+        // traffic through a proxy with a single env var. Resolved
+        // once here and reused across redirect hops for consistency.
+        // Proxies are NOT used for single-URL fetch by default:
+        // one request to one URL does not rate-limit, and routing
+        // through a proxy wastes bandwidth and hurts the TLS
+        // fingerprint (residential proxies don't use our Chrome-true
+        // BoringSSL stack). Proxies belong on search (many engines)
+        // and crawl (many pages, same host) where rate limits bite.
+        let env_proxy = if proxy.is_none() {
+            crate::transport::proxy::from_env_for(url_str)
         } else {
             None
         };
-        let effective_proxy = proxy.or(resolved_proxy.as_ref());
+        let effective_proxy = proxy.or(env_proxy.as_ref());
 
         loop {
             let host = host_of(&current)?;

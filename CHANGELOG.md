@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.1.0] - 2026-08-23
 
-The focus + proxy release: the focus parameter rebuilt from flat BM25 block scoring to hierarchical section-aware scoring, and proxy configuration unified across all three egress paths.
+The focus release: the `focus` parameter rebuilt from flat BM25 block scoring to hierarchical section-aware scoring. Plus a homebrew tap URL fix.
 
 ### Changed
 
@@ -18,7 +18,10 @@ The focus + proxy release: the focus parameter rebuilt from flat BM25 block scor
   - **Code Block Fission**: large code blocks (>2000 chars) are split into sub-blocks at logical boundaries (JSON top-level keys, blank-line sections) before scoring. A 38k JSON schema becomes scorable sub-blocks instead of one monolithic document.
   - The body-only match threshold is now `>0` (any keyword appearance) instead of `max*0.15`. Never cut relevant info: noise costs tokens, cut info is unrecoverable.
   - Fixed: focus on small pages no longer gets overridden by the raw-text fallback when the short content is intentional (the agent asked for a filtered slice, not a shell).
-- **Proxy unification**: `donsetch proxy add` now routes all three egress paths (search, crawl, fetch+ghost) instead of just search and crawl. Previously, standalone fetch and the Ghost browser only checked env-var proxies (`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`), ignoring the config-file proxies. A new `pick_proxy` function checks env vars first (curl convention, `NO_PROXY` respect), then falls back to config-file proxies with round-robin rotation. The user's home IP is now protected on every fetch, not just search and crawl.
+
+### Fixed
+
+- Homebrew tap URLs included the version number in the asset filename (e.g. `donsetch-v3.0.0-darwin-arm64.tar.gz`) but the release workflow names assets without it (`donsetch-darwin-arm64.tar.gz`). This caused a 404 on `brew install donsetch`. (#38)
 
 ## [3.0.0] - 2026-08-23
 

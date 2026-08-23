@@ -10,7 +10,6 @@
 //! (no local DNS leak = stealth-preserving).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -19,10 +18,6 @@ use tokio::net::TcpStream;
 use crate::error::FetchError;
 
 const PROXY_TIMEOUT: Duration = Duration::from_secs(12);
-
-/// Round-robin index for config-file proxy selection. Shared
-/// across all callers (fetch, ghost) so rotation is global.
-static PROXY_RR: AtomicUsize = AtomicUsize::new(0);
 
 /// True when `host` matches a NO_PROXY entry. Comma-separated
 /// suffix match: "example.com" matches "foo.example.com".
@@ -500,36 +495,6 @@ pub fn from_env_for(url: &str) -> Option<Proxy> {
         return None;
     }
     Proxy::parse(env_val).ok()
-}
-
-/// Pick a proxy for a URL. Checks env vars first (with NO_PROXY
-/// bypass), then falls back to config-file proxies (round-robin).
-/// This is the unified entry point for fetch and ghost: a single
-/// `donsetch proxy add` configures all three paths (search,
-/// crawl, fetch/ghost) instead of just search and crawl.
-///
-/// Round-robin is a static atomic counter: rotation is global
-/// across all callers. No health tracking here (the search
-/// egress pool owns that for search; for fetch, a dead proxy
-/// fails fast and the caller can retry). The user can verify
-/// health via `donsetch proxy check`.
-pub fn pick_proxy(url: &str) -> Option<Proxy> {
-    // 1. Env vars first (curl convention, respects NO_PROXY).
-    if let Some(p) = from_env_for(url) {
-        return Some(p);
-    }
-    // 2. Fall back to config-file proxies (round-robin).
-    let parsed = url::Url::parse(url).ok()?;
-    let host = parsed.host_str()?;
-    if no_proxy_match(host) {
-        return None;
-    }
-    let proxies = load_config();
-    if proxies.is_empty() {
-        return None;
-    }
-    let idx = PROXY_RR.fetch_add(1, Ordering::Relaxed) % proxies.len();
-    Some(proxies[idx].clone())
 }
 
 /// Save proxies to the config file. Atomic write (temp + rename).
