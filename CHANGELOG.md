@@ -5,6 +5,21 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-08-23
+
+The focus + proxy release: the focus parameter rebuilt from flat BM25 block scoring to hierarchical section-aware scoring, and proxy configuration unified across all three egress paths.
+
+### Changed
+
+- **Section Gravity focus**: the `focus` parameter was rebuilt. The previous flat BM25 scoring treated every block in isolation: a heading match did not pull in its section, a body match did not pull in its heading, blocks were orphaned. Four mechanisms now replace it:
+  - **Section Gravity**: a heading match pulls in its entire section. The heading defines the topic; all content under it is relevant.
+  - **Inverse Gravity**: a body match pulls in its section heading. The agent needs the heading for context, never an orphaned block.
+  - **Breadcrumb Expansion**: for each kept block, all parent heading blocks from its path are added. Structural context is never lost.
+  - **Code Block Fission**: large code blocks (>2000 chars) are split into sub-blocks at logical boundaries (JSON top-level keys, blank-line sections) before scoring. A 38k JSON schema becomes scorable sub-blocks instead of one monolithic document.
+  - The body-only match threshold is now `>0` (any keyword appearance) instead of `max*0.15`. Never cut relevant info: noise costs tokens, cut info is unrecoverable.
+  - Fixed: focus on small pages no longer gets overridden by the raw-text fallback when the short content is intentional (the agent asked for a filtered slice, not a shell).
+- **Proxy unification**: `donsetch proxy add` now routes all three egress paths (search, crawl, fetch+ghost) instead of just search and crawl. Previously, standalone fetch and the Ghost browser only checked env-var proxies (`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`), ignoring the config-file proxies. A new `pick_proxy` function checks env vars first (curl convention, `NO_PROXY` respect), then falls back to config-file proxies with round-robin rotation. The user's home IP is now protected on every fetch, not just search and crawl.
+
 ## [3.0.0] - 2026-08-23
 
 The context-warfare release: six milestones — reference handles, budgets, probe and structure-first reading (M1); deadlines, real cancellation and ms-precision costs (M2); page fingerprints, deltas, Wayback resurrection and anti-cloak (M3); keyless domain adapters for reddit/npm/PyPI/crates/Go/RubyGems/GitHub/StackExchange/Wikipedia/docs frameworks (M4); search→fetch warm handoff, stitching and Chrome-parity TLS (M5); stable error codes, CI token/memory gates, a crash-only supervisor and the pi-agent v3 extension (M6). Plus a community fix for a Windows tier-1 boot hang (#36, @problaems).

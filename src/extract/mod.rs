@@ -477,7 +477,10 @@ pub fn extract(
     // DonSift came up thin, mine the embedded JSON — if it's
     // richer, it wins. This is the tier-1 unlock for the SPA
     // class of sites.
-    if (extracted.thin || extracted.total_chars < 600)
+    // When focus is active, short content is intentional
+    // (the agent asked for a slice), not a shell signal. Only
+    // apply the < 600 threshold when focus is not set.
+    if (extracted.thin || (extracted.total_chars < 600 && opts.focus.is_none()))
         && let Some(mut js) = jsdata::extract(&html_text, url, opts)
         && js.total_chars > extracted.total_chars
     {
@@ -496,7 +499,10 @@ pub fn extract(
     // extraction (no proper paragraphs/lists/tables), but infinitely
     // better than returning nothing. The fallback preserves heading
     // structure (h1-h6 → markdown headings) and paragraph breaks.
-    let needs_fallback = extracted.thin || extracted.total_chars < 200;
+    // When focus is active, short content is intentional (the agent
+    // asked for a filtered slice), not a sign of extraction failure.
+    let needs_fallback =
+        extracted.thin || (extracted.total_chars < 200 && opts.focus.is_none());
     if needs_fallback && let Some(mut fb) = text_fallback(&html_text, &meta, url, opts, max_chars) {
         // Comic/gallery pages go thin and fall back here; the
         // scoped Media blocks (the actual content images) must
@@ -828,6 +834,14 @@ fn downstream(
         }
     }
 
+    // Code block fission: split large code blocks into sub-blocks
+    // so focus can score and select relevant parts of structured
+    // content (JSON schemas, large code listings) instead of
+    // treating the entire block as one monolithic document.
+    if opts.focus.is_some() {
+        all_blocks = focus::expand_code_blocks(all_blocks);
+    }
+
     let blocks_total = all_blocks.len();
 
     // Content images for on-demand OCR (v3) — capped, order kept.
@@ -840,8 +854,9 @@ fn downstream(
         .take(12)
         .collect();
 
-    // Focus: BM25 block filter. fell_back = query matched
-    // nothing → full content returned, MUST be signaled.
+    // Focus: section-aware block filter (Section Gravity).
+    // fell_back = query matched nothing → full content returned,
+    // MUST be signaled.
     let (kept, focus_fell_back): (Vec<&blocks::Block>, bool) = match &opts.focus {
         Some(q) => focus::filter_semantic(&all_blocks, q, &lang_info),
         None => (all_blocks.iter().collect(), false),

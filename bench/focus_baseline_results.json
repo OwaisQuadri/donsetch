@@ -1,0 +1,109 @@
+[
+  {
+    "name": "pi MCP servers doc (small prose)",
+    "tokens": 0,
+    "fell_back": false,
+    "dropped_manifest": false,
+    "present": {
+      "naming convention": false,
+      "permissions": false
+    },
+    "absent": {
+      "oauth": true,
+      "remote servers": true
+    },
+    "no_focus_tokens": 0,
+    "token_savings": 0
+  },
+  {
+    "name": "pi plugins doc (focus currently hurts)",
+    "tokens": 0,
+    "fell_back": false,
+    "dropped_manifest": false,
+    "present": {
+      "plugin structure": false,
+      "export format": false
+    },
+    "absent": {},
+    "no_focus_tokens": 0,
+    "token_savings": 0
+  },
+  {
+    "name": "Rust std docs (code-heavy)",
+    "tokens": 0,
+    "fell_back": false,
+    "dropped_manifest": false,
+    "present": {
+      "push": false,
+      "insert": false
+    },
+    "absent": {},
+    "no_focus_tokens": 0,
+    "token_savings": 0
+  },
+  {
+    "name": "Wikipedia: Rust programming language",
+    "tokens": 0,
+    "fell_back": false,
+    "dropped_manifest": false,
+    "present": {
+      "ownership": false,
+      "borrow checker": false,
+      "memory safety": false
+    },
+    "absent": {
+      "history": true
+    },
+    "no_focus_tokens": 0,
+    "token_savings": 0
+  },
+  {
+    "name": "GitHub tokio README",
+    "tokens": 0,
+    "fell_back": false,
+    "dropped_manifest": false,
+    "present": {
+      "async": false,
+      "runtime": false
+    },
+    "absent": {},
+    "no_focus_tokens": 0,
+    "token_savings": 0
+  },
+  {
+    "name": "MDN Array.prototype.map",
+    "tokens": 0,
+    "fell_back": false,
+    "dropped_manifest": false,
+    "present": {
+      "callback": false,
+      "parameters": false
+    },
+    "absent": {},
+    "no_focus_tokens": 0,
+    "token_savings": 0
+  },
+  {
+    "name": "HN thread (forum)",
+    "tokens": 0,
+    "fell_back": false,
+    "dropped_manifest": false,
+    "present": {},
+    "absent": {},
+    "no_focus_tokens": 0,
+    "token_savings": 0
+  },
+  {
+    "name": "Python asyncio docs",
+    "tokens": 0,
+    "fell_back": false,
+    "dropped_manifest": false,
+    "present": {
+      "event loop": false,
+      "run": false
+    },
+    "absent": {},
+    "no_focus_tokens": 0,
+    "token_savings": 0
+  }
+]

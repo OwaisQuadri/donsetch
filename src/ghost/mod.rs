@@ -304,14 +304,16 @@ impl Ghost {
             "--disable-gpu-shader-disk-cache".into(),
             "--disable-features=SiteEngagementService".into(),
         ];
-        // ── HTTP proxy (env var) ──
-        // If HTTP_PROXY/HTTPS_PROXY/ALL_PROXY is set, route the
-        // Ghost browser through the same proxy as tier 1. Chrome
-        // handles proxy auth via its own dialog (which we never see
-        // in headless/off-screen mode), so for authenticated proxies
-        // the user may need a proxy-auth extension. For unauthenticated
-        // proxies this just works.
-        if let Some(p) = crate::transport::proxy::from_env_for("https://ghost.local/") {
+        // ── HTTP proxy ──
+        // Checks env vars first (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY),
+        // then falls back to config-file proxies (proxies.txt)
+        // with round-robin rotation. This ensures `donsetch proxy
+        // add` routes the Ghost browser through the same proxy
+        // pool as tier 1, not just env-var proxies. Chrome handles
+        // proxy auth via its own dialog (not seen in headless), so
+        // authenticated proxies may need a proxy-auth extension.
+        // For unauthenticated proxies this just works.
+        if let Some(p) = crate::transport::proxy::pick_proxy("https://ghost.local/") {
             chrome_args.push(format!("--proxy-server={}", p.chrome_proxy_arg()));
         }
         // ── Stealth mode selection ──

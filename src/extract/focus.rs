@@ -876,22 +876,153 @@ pub fn filter<'a>(blocks: &'a [Block], query: &str, lang: &LanguageInfo) -> (Vec
     (kept, false)
 }
 
-/// Hybrid BM25 + cross-encoder block filter.
+// ── Section model ────────────────────────────────────────────
+
+/// A section: heading block (if any) + body blocks until the
+/// next heading at any level. The preamble (blocks before the
+/// first heading) is a section with heading_idx = None.
+struct Section {
+    heading_idx: Option<usize>,
+    body_idx: Vec<usize>,
+}
+
+/// Group blocks into sections. Each heading starts a new
+/// section. Blocks before the first heading form a preamble
+/// section with no heading.
+fn build_sections(blocks: &[Block]) -> Vec<Section> {
+    let mut sections: Vec<Section> = Vec::new();
+    let mut current = Section {
+        heading_idx: None,
+        body_idx: Vec::new(),
+    };
+    for (i, b) in blocks.iter().enumerate() {
+        match b {
+            Block::Heading { .. } => {
+                if !current.body_idx.is_empty() || current.heading_idx.is_some() {
+                    sections.push(std::mem::replace(&mut current, Section {
+                        heading_idx: Some(i),
+                        body_idx: Vec::new(),
+                    }));
+                } else {
+                    current.heading_idx = Some(i);
+                }
+            }
+            _ => {
+                current.body_idx.push(i);
+            }
+        }
+    }
+    if !current.body_idx.is_empty() || current.heading_idx.is_some() {
+        sections.push(current);
+    }
+    sections
+}
+
+/// Section-aware block selection core.
 ///
-/// Runs BM25 first (microseconds, zero dependency). If the
-/// cross-encoder model is already cached on disk (downloaded
-/// during search reranking), it runs a second pass on all blocks
-/// and adds semantically relevant blocks that BM25 missed —
-/// catching cases where the query and block use different
-/// vocabulary ("backpropagation" vs "backward pass computes
-/// gradients").
+/// For each section:
+/// - Heading score > threshold (Section Gravity): keep the
+///   heading AND every body block in the section. The heading
+///   defines the topic; all content under it is relevant.
+/// - Body score > threshold but heading does not (Inverse
+///   Gravity): keep only the matching body blocks AND the
+///   heading (the agent needs it for context).
+/// - No match: drop the entire section.
 ///
-/// If the model isn't cached, falls back to pure BM25 (same as
-/// `filter`). No model download is triggered during fetch.
+/// Returns kept block indices (unsorted) and whether any
+/// section was selected.
+fn select_sections_core(
+    blocks: &[Block],
+    scores: &[f64],
+    threshold: f64,
+) -> Vec<usize> {
+    let sections = build_sections(blocks);
+    let mut kept: Vec<usize> = Vec::new();
+    let mut kept_set: HashSet<usize> = HashSet::new();
+
+    for s in &sections {
+        let heading_score = s.heading_idx.map(|h| scores[h]).unwrap_or(0.0);
+        let heading_matches = heading_score > threshold;
+
+        if heading_matches {
+            // Section Gravity: heading match pulls in entire section.
+            if let Some(hi) = s.heading_idx
+                && kept_set.insert(hi) {
+                    kept.push(hi);
+                }
+            for &bi in &s.body_idx {
+                if kept_set.insert(bi) {
+                    kept.push(bi);
+                }
+            }
+        } else {
+            // Check body blocks for matches.
+            let mut body_matched = false;
+            for &bi in &s.body_idx {
+                if scores[bi] > threshold {
+                    if kept_set.insert(bi) {
+                        kept.push(bi);
+                    }
+                    body_matched = true;
+                }
+            }
+            // Inverse Gravity: body match pulls in the heading.
+            if body_matched
+                && let Some(hi) = s.heading_idx
+                    && kept_set.insert(hi) {
+                        kept.push(hi);
+                    }
+        }
+    }
+
+    kept
+}
+
+/// Breadcrumb Expansion: for each kept block, add all parent
+/// heading blocks from its path that are not already kept.
+/// This ensures the agent always sees structural context,
+/// never an orphaned block.
+fn expand_breadcrumbs(
+    blocks: &[Block],
+    kept: &mut Vec<usize>,
+    kept_set: &mut HashSet<usize>,
+) {
+    let snapshot: Vec<usize> = kept.clone();
+    for (hi, b) in blocks.iter().enumerate() {
+        if let Block::Heading { text, .. } = b {
+            if kept_set.contains(&hi) {
+                continue;
+            }
+            let in_path = snapshot.iter().any(|&bi| {
+                blocks[bi].path().iter().any(|p| p == text)
+            });
+            if in_path {
+                kept_set.insert(hi);
+                kept.push(hi);
+            }
+        }
+    }
+}
+
+/// Section-aware focus filter with Section Gravity.
 ///
-/// The cross-encoder also rescues the BM25 fell_back case: when
-/// BM25 finds zero keyword matches, the cross-encoder may still
-/// find semantic matches, preventing a full-page fallback.
+/// Replaces flat BM25 block scoring with hierarchical section
+/// scoring. Four mechanisms:
+///
+/// 1. **Section Gravity**: A heading match pulls in its entire
+///    section. The heading defines the topic; all content under
+///    it is relevant.
+/// 2. **Inverse Gravity**: A body match pulls in its section
+///    heading. The agent needs the heading for context.
+/// 3. **Breadcrumb Expansion**: For each kept block, add all
+///    parent heading blocks from its path. Never orphan a
+///    block without structural context.
+/// 4. **Cross-encoder Augmentation**: When the model is cached,
+///    sections BM25 missed are checked by the cross-encoder.
+///
+/// The threshold for body-only matches is >0 (any keyword
+/// appearance), not max*0.15. This is intentional: never cut
+/// relevant info. Noise costs tokens; cut info is unrecoverable.
 pub fn filter_semantic<'a>(
     blocks: &'a [Block],
     query: &str,
@@ -902,57 +1033,234 @@ pub fn filter_semantic<'a>(
         return (blocks.iter().collect(), false);
     }
 
-    // ── Phase 1: BM25 (always — microseconds) ──
+    // Phase 1: BM25 scores for all blocks.
     let scores = bm25_scores(blocks, query, lang);
     let max_bm25 = scores.iter().cloned().fold(0.0f64, f64::max);
-    let has_bm25_hits = max_bm25 > 0.0;
 
-    let mut kept: Vec<usize> = if has_bm25_hits {
-        let threshold = max_bm25 * 0.15;
-        scores
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| **s >= threshold)
-            .map(|(i, _)| i)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    if max_bm25 <= 0.0 {
+        // BM25 found nothing. Try cross-encoder rescue.
+        if blocks.len() <= SEMANTIC_MAX_BLOCKS && crate::search::rerank::is_model_cached() {
+            let docs: Vec<(String, String)> =
+                blocks.iter().map(|b| (b.text(), String::new())).collect();
+            if let Some(xenc_scores) = crate::search::rerank::cross_encoder_scores(query, &docs) {
+                let xenc_max = xenc_scores.iter().cloned().fold(0.0f64, f64::max);
+                if xenc_max >= XENC_THRESHOLD {
+                    let mut kept = select_sections_core(blocks, &xenc_scores, XENC_THRESHOLD);
+                    if !kept.is_empty() {
+                        let mut kept_set: HashSet<usize> = kept.iter().copied().collect();
+                        expand_breadcrumbs(blocks, &mut kept, &mut kept_set);
+                        kept.sort_unstable();
+                        return (
+                            kept.into_iter().map(|i| &blocks[i]).collect(),
+                            false,
+                        );
+                    }
+                }
+            }
+        }
+        return (blocks.iter().collect(), true); // fell_back
+    }
 
-    // ── Phase 2: Cross-encoder semantic augmentation ──
-    // Only when the model is already cached (from search use).
-    // Never triggers a model download during a plain fetch.
+    // Phase 2: Section-aware BM25 selection.
+    let mut kept = select_sections_core(blocks, &scores, 0.0);
+
+    if kept.is_empty() {
+        return (blocks.iter().collect(), true);
+    }
+
+    let mut kept_set: HashSet<usize> = kept.iter().copied().collect();
+
+    // Phase 3: Cross-encoder augmentation.
+    // For sections not selected by BM25, check if the cross-encoder
+    // finds them relevant. Catches semantic matches BM25 missed
+    // (different vocabulary, synonyms, paraphrase).
     if blocks.len() <= SEMANTIC_MAX_BLOCKS && crate::search::rerank::is_model_cached() {
         let docs: Vec<(String, String)> =
             blocks.iter().map(|b| (b.text(), String::new())).collect();
         if let Some(xenc_scores) = crate::search::rerank::cross_encoder_scores(query, &docs) {
-            if !has_bm25_hits {
-                // BM25 found nothing — cross-encoder rescues.
-                for (i, xenc) in xenc_scores.iter().enumerate() {
-                    if *xenc >= XENC_THRESHOLD {
-                        kept.push(i);
-                    }
+            let sections = build_sections(blocks);
+            for s in &sections {
+                let already = s
+                    .heading_idx
+                    .map(|h| kept_set.contains(&h))
+                    .unwrap_or(false)
+                    || s.body_idx.iter().any(|b| kept_set.contains(b));
+                if already {
+                    continue;
                 }
-            } else {
-                // Union: add cross-encoder matches BM25 missed.
-                let bm25_set: HashSet<usize> = kept.iter().copied().collect();
-                for (i, xenc) in xenc_scores.iter().enumerate() {
-                    if *xenc >= XENC_THRESHOLD && !bm25_set.contains(&i) {
-                        kept.push(i);
+                let heading_xenc = s.heading_idx.map(|h| xenc_scores[h]).unwrap_or(0.0);
+                let body_xenc_max =
+                    s.body_idx.iter().map(|&b| xenc_scores[b]).fold(0.0f64, f64::max);
+                if heading_xenc >= XENC_THRESHOLD {
+                    if let Some(hi) = s.heading_idx
+                        && kept_set.insert(hi) {
+                            kept.push(hi);
+                        }
+                    for &bi in &s.body_idx {
+                        if kept_set.insert(bi) {
+                            kept.push(bi);
+                        }
+                    }
+                } else if body_xenc_max >= XENC_THRESHOLD {
+                    if let Some(hi) = s.heading_idx
+                        && kept_set.insert(hi) {
+                            kept.push(hi);
+                        }
+                    for &bi in &s.body_idx {
+                        if xenc_scores[bi] >= XENC_THRESHOLD && kept_set.insert(bi) {
+                            kept.push(bi);
+                        }
                     }
                 }
             }
         }
     }
 
-    if kept.is_empty() {
-        return (blocks.iter().collect(), true);
-    }
+    // Phase 4: Breadcrumb expansion.
+    expand_breadcrumbs(blocks, &mut kept, &mut kept_set);
 
     // Sort by index to preserve document order.
     kept.sort_unstable();
-    let kept_blocks = kept.into_iter().map(|i| &blocks[i]).collect();
-    (kept_blocks, false)
+    (kept.into_iter().map(|i| &blocks[i]).collect(), false)
+}
+
+// ── Code block fission ──────────────────────────────────────
+
+/// Split large code blocks into sub-blocks for finer-grained
+/// focus scoring. Called before focus when a focus query is
+/// set. A 38k JSON schema becomes ~15 sub-blocks; focus can
+/// then keep only the sub-blocks that match the query instead
+/// of the entire monolith.
+///
+/// Returns the expanded block list. Blocks that are too small
+/// or can't be split are passed through unchanged.
+pub fn expand_code_blocks(blocks: Vec<Block>) -> Vec<Block> {
+    let has_large_code = blocks.iter().any(|b| {
+        if let Block::Code { code, .. } = b {
+            code.len() > 2000
+        } else {
+            false
+        }
+    });
+    if !has_large_code {
+        return blocks;
+    }
+
+    let mut expanded = Vec::with_capacity(blocks.len());
+    for b in blocks {
+        if let Block::Code { code, lang, path } = &b
+            && code.len() > 2000 {
+                let subs = split_code_block(code, lang.clone(), path.clone());
+                if subs.len() > 1 {
+                    expanded.extend(subs);
+                    continue;
+                }
+            }
+        expanded.push(b);
+    }
+    expanded
+}
+
+/// Split a code block into logical sub-blocks.
+///
+/// JSON: split on top-level keys (2-space indent `"key":`).
+/// Other: split on blank-line-delimited sections.
+/// Fallback: split at regular intervals.
+///
+/// Sub-blocks smaller than 200 chars are merged with neighbors.
+fn split_code_block(
+    code: &str,
+    lang: Option<String>,
+    path: Vec<String>,
+) -> Vec<Block> {
+    let lines: Vec<&str> = code.lines().collect();
+    if lines.len() < 15 || code.len() < 2000 {
+        return vec![Block::Code {
+            lang,
+            code: code.to_string(),
+            path,
+        }];
+    }
+
+    let is_json = code.trim_start().starts_with('{') || code.trim_start().starts_with('[');
+
+    // Find split boundaries.
+    let mut boundaries: Vec<usize> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if is_json {
+            // Top-level key in pretty-printed JSON: 2-space indent,
+            // starts with quote, not deeper indentation.
+            if line.starts_with("  \"") && !line.starts_with("    ") {
+                boundaries.push(i);
+            }
+        } else if line.trim().is_empty() && i > 0 && i < lines.len() - 1 {
+            boundaries.push(i);
+        }
+    }
+
+    if boundaries.len() < 2 {
+        // Not enough natural boundaries. Fall back to interval split.
+        let chunk = 40.max(lines.len() / 8);
+        for i in (chunk..lines.len()).step_by(chunk) {
+            boundaries.push(i);
+        }
+    }
+
+    if boundaries.is_empty() {
+        return vec![Block::Code {
+            lang,
+            code: code.to_string(),
+            path,
+        }];
+    }
+
+    // Build sub-blocks, merging small chunks (< 200 chars).
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0;
+    let min_chars = 200;
+
+    for &b in &boundaries {
+        if b <= start {
+            continue;
+        }
+        let chunk_len: usize = lines[start..b].iter().map(|l| l.len() + 1).sum();
+        if chunk_len >= min_chars {
+            ranges.push((start, b));
+            start = b;
+        }
+    }
+    if start < lines.len() {
+        ranges.push((start, lines.len()));
+    }
+
+    // Merge last chunk if too small.
+    if ranges.len() > 1 {
+        let last = ranges.len() - 1;
+        let (ls, le) = ranges[last];
+        let last_len: usize = lines[ls..le].iter().map(|l| l.len() + 1).sum();
+        if last_len < min_chars {
+            let (ps, _) = ranges[last - 1];
+            ranges[last - 1] = (ps, le);
+            ranges.pop();
+        }
+    }
+
+    if ranges.len() <= 1 {
+        return vec![Block::Code {
+            lang,
+            code: code.to_string(),
+            path,
+        }];
+    }
+
+    ranges
+        .into_iter()
+        .map(|(s, e)| Block::Code {
+            lang: lang.clone(),
+            code: lines[s..e].join("\n"),
+            path: path.clone(),
+        })
+        .collect()
 }
 
 // ── Tests ────────────────────────────────────────────────────
@@ -1319,5 +1627,202 @@ mod tests {
                     <= blocks.iter().position(|b| std::ptr::eq(b, w[1]))
             );
         }
+    }
+
+    // ── Section Gravity tests ──
+
+    fn heading(level: u8, text: &str, path: Vec<&str>) -> Block {
+        Block::Heading {
+            level,
+            text: text.to_string(),
+            path: path.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn para_in(text: &str, path: Vec<&str>) -> Block {
+        Block::Para {
+            md: text.to_string(),
+            link_density: 0.0,
+            path: path.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn section_gravity_heading_match_keeps_entire_section() {
+        // Heading matches query: entire section (heading + all body)
+        // is kept, even body blocks with zero BM25 score.
+        let blocks = vec![
+            heading(1, "Installation", vec!["Installation"]),
+            para_in("Run the installer.", vec!["Installation"]),
+            para_in("Follow the prompts on screen.", vec!["Installation"]),
+            heading(1, "Usage", vec!["Usage"]),
+            para_in("Type commands to use the tool.", vec!["Usage"]),
+        ];
+        let (kept, fell_back) = filter_semantic(&blocks, "installation", &en());
+        assert!(!fell_back);
+        // Section "Installation" has 3 blocks (heading + 2 paras).
+        // Section "Usage" has 0 matches (heading and body don't match).
+        assert_eq!(kept.len(), 3);
+        assert!(kept.iter().any(|b| b.text().contains("Installation")));
+        assert!(kept.iter().any(|b| b.text().contains("installer")));
+        assert!(kept.iter().any(|b| b.text().contains("prompts")));
+        // "Usage" section should be dropped.
+        assert!(!kept.iter().any(|b| b.text().contains("commands")));
+    }
+
+    #[test]
+    fn inverse_gravity_body_match_keeps_heading() {
+        // Body block matches but heading does not: keep the body
+        // block AND its heading (for context), drop the rest of
+        // the section.
+        let blocks = vec![
+            heading(2, "History", vec!["Guide", "History"]),
+            para_in("The project started in 2010.", vec!["Guide", "History"]),
+            para_in(
+                "Ownership was introduced later.",
+                vec!["Guide", "History"],
+            ),
+            para_in("The logo was redesigned.", vec!["Guide", "History"]),
+        ];
+        // Query "ownership" matches only block 2 (body), not the heading.
+        let (kept, fell_back) = filter_semantic(&blocks, "ownership", &en());
+        assert!(!fell_back);
+        // Should keep heading "History" + matching body block.
+        // Non-matching body blocks should be dropped.
+        assert!(kept.iter().any(|b| b.text().contains("Ownership")));
+        assert!(kept.iter().any(|b| b.text().contains("History")));
+        // Non-matching body blocks should be dropped.
+        assert!(!kept.iter().any(|b| b.text().contains("started")));
+        assert!(!kept.iter().any(|b| b.text().contains("logo")));
+    }
+
+    #[test]
+    fn breadcrumb_expansion_adds_parent_headings() {
+        // A body block deep in a heading hierarchy is kept. Its
+        // parent heading (which is in a different section) must
+        // also be kept for structural context.
+        let blocks = vec![
+            heading(1, "Features", vec!["Features"]),
+            para_in("Overview of features.", vec!["Features"]),
+            heading(2, "Memory", vec!["Features", "Memory"]),
+            para_in("The borrow checker prevents errors.", vec!["Features", "Memory"]),
+        ];
+        // Query "borrow checker" matches block 3 (body under "Memory").
+        let (kept, fell_back) = filter_semantic(&blocks, "borrow checker", &en());
+        assert!(!fell_back);
+        // Block 3 (matching body) must be kept.
+        assert!(kept.iter().any(|b| b.text().contains("borrow checker")));
+        // Heading "Memory" (section heading) must be kept (Inverse Gravity).
+        assert!(kept.iter().any(|b| b.text().contains("Memory")));
+        // Heading "Features" (parent heading) must be kept (Breadcrumb).
+        assert!(kept.iter().any(|b| b.text().contains("Features")));
+    }
+
+    #[test]
+    fn non_matching_sections_dropped() {
+        // Sections with no keyword match in heading or body are
+        // dropped entirely.
+        let blocks = vec![
+            heading(1, "Installation", vec!["Installation"]),
+            para_in("Run setup.exe.", vec!["Installation"]),
+            heading(1, "Cooking Recipes", vec!["Cooking Recipes"]),
+            para_in("How to make pasta.", vec!["Cooking Recipes"]),
+            heading(1, "Troubleshooting", vec!["Troubleshooting"]),
+            para_in("If installation fails, check logs.", vec!["Troubleshooting"]),
+        ];
+        let (kept, fell_back) = filter_semantic(&blocks, "installation", &en());
+        assert!(!fell_back);
+        assert!(kept.iter().any(|b| b.text().contains("Installation")));
+        assert!(kept.iter().any(|b| b.text().contains("setup")));
+        // "Cooking Recipes" section: no match, fully dropped.
+        assert!(!kept.iter().any(|b| b.text().contains("pasta")));
+        // "Troubleshooting" section: body mentions "installation",
+        // so it should be kept (body match + heading).
+        assert!(kept.iter().any(|b| b.text().contains("Troubleshooting")));
+        assert!(kept.iter().any(|b| b.text().contains("logs")));
+    }
+
+    #[test]
+    fn section_gravity_preamble_blocks() {
+        // Blocks before the first heading (preamble) are scored as
+        // a section with no heading. Matching blocks are kept.
+        let blocks = vec![
+            para("Introduction to the tool."),
+            para("It uses ownership for memory safety."),
+            heading(1, "Setup", vec!["Setup"]),
+            para_in("Install via cargo.", vec!["Setup"]),
+        ];
+        let (kept, fell_back) = filter_semantic(&blocks, "ownership", &en());
+        assert!(!fell_back);
+        // Preamble block matching "ownership" is kept.
+        assert!(kept.iter().any(|b| b.text().contains("ownership")));
+        // Non-matching preamble block is dropped.
+        assert!(!kept.iter().any(|b| b.text().contains("Introduction")));
+        // Non-matching section "Setup" is dropped.
+        assert!(!kept.iter().any(|b| b.text().contains("cargo")));
+    }
+
+    // ── Code block fission tests ──
+
+    #[test]
+    fn fission_splits_large_json_code_block() {
+        // A large JSON code block should be split into sub-blocks
+        // at top-level key boundaries.
+        let json = "".to_string()
+            + "{\n"
+            + "  \"$schema\": \"http://example.com\",\n"
+            + "  \"name\": \"test\",\n"
+            + "  \"description\": \""
+            + &"x".repeat(1800)
+            + "\",\n"
+            + "  \"mcp\": {\n"
+            + "    \"command\": \"node\",\n"
+            + "    \"args\": [\"server.js\"]\n"
+            + "  },\n"
+            + "  \"$defs\": {\n"
+            + "    \"ServerConfig\": {\n"
+            + "      \"type\": \"object\",\n"
+            + "      \"properties\": {\n"
+            + "        \"command\": { \"type\": \"string\" }\n"
+            + "      }\n"
+            + "    }\n"
+            + "  }\n"
+            + "}";
+        assert!(json.len() > 2000);
+        let block = Block::Code {
+            lang: Some("json".to_string()),
+            code: json,
+            path: vec![],
+        };
+        let expanded = expand_code_blocks(vec![block]);
+        assert!(
+            expanded.len() > 1,
+            "large JSON should be split into sub-blocks, got {}",
+            expanded.len()
+        );
+    }
+
+    #[test]
+    fn fission_no_split_small_code() {
+        // Small code blocks are passed through unchanged.
+        let code = "fn main() { println!(\"hello\"); }";
+        let block = Block::Code {
+            lang: Some("rust".to_string()),
+            code: code.to_string(),
+            path: vec![],
+        };
+        let expanded = expand_code_blocks(vec![block]);
+        assert_eq!(expanded.len(), 1);
+    }
+
+    #[test]
+    fn fission_no_code_blocks_passthrough() {
+        // Blocks without code blocks are passed through unchanged.
+        let blocks = vec![
+            heading(1, "Title", vec!["Title"]),
+            para_in("Some content.", vec!["Title"]),
+        ];
+        let expanded = expand_code_blocks(blocks.clone());
+        assert_eq!(expanded.len(), blocks.len());
     }
 }
