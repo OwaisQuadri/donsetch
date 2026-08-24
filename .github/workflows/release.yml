@@ -125,6 +125,16 @@ jobs:
         run: cargo build --release --locked ${{ matrix.features }} --target ${{ matrix.target }}
         timeout-minutes: 30
 
+      # Release-mode test sweep: debug CI never exercises LTO/
+      # optimizer/overflow-checks-off paths that users actually run.
+      # Run once per release on the full-feature x64 target (reuses
+      # the compiled release lib above). Catches release-only bugs
+      # before anything ships.
+      - name: Release-mode tests
+        if: matrix.name == 'linux-x64'
+        run: cargo test --release --locked --features ocr,rerank --target ${{ matrix.target }}
+        timeout-minutes: 30
+
       # Verify the binary actually runs — catches broken cross-target
       # builds, missing DLLs, and link-time issues that don't show
       # up as compile errors. Also asserts the binary reports the
