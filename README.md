@@ -23,7 +23,7 @@ Works with **Claude Code**, **Cursor**, **OpenCode**, **Pi**, **Windsurf**, and 
 [![Rust](https://img.shields.io/badge/Rust-edition%202024-ce422b?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![MCP](https://img.shields.io/badge/MCP-server-7c3aed?logo=modelcontextprotocol&logoColor=white)](https://modelcontextprotocol.io)
 [![License](https://img.shields.io/badge/license-AGPL%203.0-2563eb)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-622%20passed-00d4aa)](#)
+[![Tests](https://img.shields.io/badge/tests-637%20passed-00d4aa)](#)
 
 </div>
 
@@ -570,7 +570,7 @@ Every layer built in Rust. No dependency on existing OSS web tooling.
 | 📄 **DonSheet** | PDF extraction — PDFium FFI, pixel-truth fusion, OCR arbitration cascade, forms | `src/pdf/` |
 | 🔌 **MCP daemon** | stdio server — JSON-RPC 2.0, 3 tools | `src/mcp/` |
 
-**622 tests. Zero clippy warnings.** `cargo clippy --release -- -Dwarnings` is the law.
+**637 tests. Zero clippy warnings.** `cargo clippy --all-targets --features ocr,rerank -- -Dwarnings` is the law.
 
 ---
 
@@ -650,7 +650,7 @@ DonSeTch is install and use. wigolo is install, download ~1.5 GB of models and b
 
 ## 🤝 Contributing
 
-PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Run `cargo clippy --features ocr,rerank -- -Dwarnings` and `cargo test --features ocr,rerank` before submitting. AGPL v3 — all contributions under the same license.
+PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Run `cargo clippy --all-targets --features ocr,rerank -- -Dwarnings` and `cargo test --features ocr,rerank` before submitting. AGPL v3: all contributions under the same license.
 
 ## 📄 License
 
