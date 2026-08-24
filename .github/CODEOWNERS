@@ -1,1 +1,5 @@
 * @dondai44423
+
+# Auto-request review on search + CI changes.
+/src/search/ @Mart-Bogdan
+/.github/workflows/ @Mart-Bogdan

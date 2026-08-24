@@ -652,6 +652,10 @@ DonSeTch is install and use. wigolo is install, download ~1.5 GB of models and b
 
 PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Run `cargo clippy --all-targets --features ocr,rerank -- -Dwarnings` and `cargo test --features ocr,rerank` before submitting. AGPL v3: all contributions under the same license.
 
+### Contributors
+
+- [Bohdan Mart (@Mart-Bogdan)](https://github.com/Mart-Bogdan) — search legibility, CI/clippy hardening
+
 ## 📄 License
 
 Copyright (c) 2026 Bishesh Bhandari. AGPL-3.0 — see [LICENSE](LICENSE).
