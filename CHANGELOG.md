@@ -5,6 +5,22 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] - 2026-08-23
+
+Hotfix: pi extension crashed with `write EPIPE` on Windows WSL when
+the MCP server died mid-request. The extension wrote to the child's
+stdin with no `'error'` listener; Node escalated the EPIPE to an
+uncaughtException and killed the whole pi process.
+
+### Fixed
+
+- **pi-extension: stream `'error'` handlers on stdin/stdout/stderr**
+  reject in-flight requests and drop the dead server instead of
+  crashing pi with an uncaughtException. `sendNotification` writes
+  are also guarded. Verified: loads the real extension, ran a real
+  MCP round-trip, SIGKILLed the server mid-session, and survived the
+  kill+rewrite window without crashing.
+
 ## [3.2.0] - 2026-08-23
 
 The search-legibility release: signals the merge already computed now reach the text channel, where every client can read them.

@@ -182,6 +182,24 @@ function startServer(): Promise<void> {
       pending.clear();
     });
 
+    // A write to a server that just died sinks into the stream and
+    // comes back as an async 'error' event (EPIPE/ECONNRESET). With
+    // no listener Node escalates it to an uncaughtException, killing
+    // the whole pi process, the "write EPIPE" crash. Handling it like
+    // an unexpected exit keeps pi alive and fails the request cleanly.
+    const onStreamError = (err: NodeJS.ErrnoException) => {
+      proc = null;
+      initialized = false;
+      for (const [, e] of pending) {
+        clearTimeout(e.timer);
+        e.reject(new Error(`donsetch MCP server stream error: ${err.code || err.message}`));
+      }
+      pending.clear();
+    };
+    proc.stdin?.on("error", onStreamError);
+    proc.stdout?.on("error", onStreamError);
+    proc.stderr?.on("error", onStreamError);
+
     sendRequest(
       "initialize",
       {
@@ -260,7 +278,11 @@ function sendRequest(
 function sendNotification(method: string, params: any): void {
   if (!proc?.stdin?.writable) return;
   const msg = JSON.stringify({ jsonrpc: "2.0", method, params });
-  proc.stdin.write(msg + "\n");
+  try {
+    proc.stdin.write(msg + "\n");
+  } catch {
+    // Stream error handler covers the async EPIPE; nothing to do here.
+  }
 }
 
 async function callMcpTool(name: string, args: any, signal?: AbortSignal): Promise<any> {
