@@ -60,17 +60,67 @@ if (!plat) {
 // The Linux binaries are glibc-linked. On musl systems they install
 // fine but can never exec (missing ld-linux loader) — fail HERE with
 // the actual cause instead of a cryptic spawn error on first run.
+//
+// Checking for /lib/ld-musl-*.so.1 existence is a false positive on
+// glibc systems that also have musl installed as a secondary libc
+// (e.g. Arch/Manjaro with the `musl` package). Instead, check what
+// the RUNNING Node process actually uses: read /proc/self/exe's ELF
+// interpreter (.interp section). On glibc it's ld-linux-*.so.2, on
+// musl it's ld-musl-*.so.1. An env var escape hatch is also provided.
 if (process.platform === 'linux') {
-  const isMusl = fs.existsSync('/lib/ld-musl-x86_64.so.1')
-    || fs.existsSync('/lib/ld-musl-aarch64.so.1');
-  if (isMusl) {
-    console.error('donsetch: musl libc detected (Alpine?).');
-    console.error('The prebuilt Linux binaries are glibc-linked and will not run.');
-    console.error('');
-    console.error('Options:');
-    console.error('  - build from source: git clone https://github.com/' + REPO + ' && cargo build --release');
-    console.error('  - use a glibc-based image/dist (debian, ubuntu, fedora)');
-    process.exit(1);
+  // Escape hatch: force glibc path even on a musl system (user knows
+  // the binary will run, e.g. via gcompat or a glibc chroot).
+  if (process.env.DONSETCH_FORCE_GLIBC === '1') {
+    // skip musl check
+  } else {
+    let isMusl = false;
+    try {
+      // Read the ELF interpreter of /proc/self/exe (this Node process).
+      // The .interp section starts at offset 0x18 in the ELF header
+      // for the program header table, but the reliable way is to parse
+      // the program headers for PT_INTERP.
+      const exe = '/proc/self/exe';
+      const fd = fs.openSync(exe, 'r');
+      // ELF header: first 64 bytes for 64-bit.
+      const hdr = Buffer.alloc(64);
+      fs.readSync(fd, hdr, 0, 64, 0);
+      // e_phoff at offset 0x20 (64-bit), e_phentsize at 0x36, e_phnum at 0x38.
+      const e_phoff = hdr.readBigUInt64LE(0x20);
+      const e_phentsize = hdr.readUInt16LE(0x36);
+      const e_phnum = hdr.readUInt16LE(0x38);
+      for (let i = 0; i < e_phnum; i++) {
+        const ph = Buffer.alloc(e_phentsize);
+        fs.readSync(fd, ph, 0, e_phentsize, Number(e_phoff) + i * e_phentsize);
+        // PT_INTERP = 3
+        if (ph.readUInt32LE(0) === 3) {
+          // p_offset at 0x08 (64-bit), p_filesz at 0x20.
+          const p_offset = Number(ph.readBigUInt64LE(0x08));
+          const p_filesz = ph.readBigUInt64LE(0x20);
+          const interp = Buffer.alloc(Number(p_filesz));
+          fs.readSync(fd, interp, 0, Number(p_filesz), p_offset);
+          fs.closeSync(fd);
+          const loaderPath = interp.toString('ascii').replace(/\0/g, '').trim();
+          isMusl = loaderPath.includes('ld-musl');
+          break;
+        }
+      }
+      if (!isMusl) fs.closeSync(fd);
+    } catch (_) {
+      // /proc/self/exe not readable (some containers). Fall back to
+      // the old existence check, but only as a last resort.
+      isMusl = fs.existsSync('/lib/ld-musl-x86_64.so.1')
+        || fs.existsSync('/lib/ld-musl-aarch64.so.1');
+    }
+    if (isMusl) {
+      console.error('donsetch: musl libc detected (Alpine?).');
+      console.error('The prebuilt Linux binaries are glibc-linked and will not run.');
+      console.error('');
+      console.error('Options:');
+      console.error('  - build from source: git clone https://github.com/' + REPO + ' && cargo build --release');
+      console.error('  - use a glibc-based image/dist (debian, ubuntu, fedora)');
+      console.error('  - set DONSETCH_FORCE_GLIBC=1 if you have a glibc compat layer (gcompat)');
+      process.exit(1);
+    }
   }
 }
 
