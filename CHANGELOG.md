@@ -5,13 +5,18 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.2.2] - 2026-08-25
+
+Process-leak hotfix: orphaned Chrome, profile collision, and a
+fuzz-found byte-boundary panic in the JSON extractor.
 
 ### Fixed
 
 - **Ghost browser leak (issue #43):** Chrome processes survived after the tool call returned on macOS because `Ghost` had no `Drop` impl and tokio's `Child` does not kill on drop. Added `impl Drop for Ghost` that calls `kill_group()` synchronously: the safety net that fires on every code path that drops a Ghost without an explicit `kill().await` (macOS `GhostGuard::Drop`, panic, CLI exit). Also set `kill_on_drop(true)` on the tokio Child as belt-and-suspenders.
 - **Profile collision (issue #43):** concurrent donsetch processes launched Chrome against the same fixed `ghost-profile` dir, colliding on `SingletonLock` and surfacing a user-visible error dialog. Added an `flock`-based profile lock: if another process holds the lock, the caller falls back to a throwaway temp profile (no collision, no cookie warmth, the job still runs). The lock lives for the Ghost's lifetime. `SingletonLock` files are now only removed when we hold the lock.
 - **`donsetch stop` command:** kills orphaned Chrome instances using the ghost profile and cleans up stale lock files + temp profiles. Use after a crash or when Chrome from a previous session is still resident.
+- **Xvfb process leak:** `Xvfb` had no `Drop` impl, so it leaked if the GhostManager was dropped without calling `shutdown()` (panic, crash). Added `impl Drop for Xvfb` that calls `start_kill()` synchronously.
+- **Fuzz crash in `find_blobs` (extract):** advancing `from` by the JSON value's string length instead of its end position in the source HTML could land mid-character on invalid UTF-8 (U+FFFD), panicking with "byte index is not a char boundary". Fixed: `extract_js_value` now returns the consumed byte position; `from` advances past the closing bracket (always ASCII, always a char boundary). Regression test added with the exact fuzz input.
 
 ## [3.2.1] - 2026-08-23
 
