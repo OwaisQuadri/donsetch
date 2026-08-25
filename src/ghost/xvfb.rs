@@ -147,6 +147,18 @@ mod linux {
         }
     }
 
+    impl Drop for Xvfb {
+        fn drop(&mut self) {
+            // Safety net: if the GhostManager is dropped without
+            // calling shutdown() (panic, crash, runtime exit),
+            // the Xvfb child would leak. start_kill sends SIGKILL
+            // synchronously, no async needed.
+            if let Some(child) = &mut self.child {
+                let _ = child.start_kill();
+            }
+        }
+    }
+
     /// Check if Xvfb binary is available on the system.
     pub fn is_available() -> bool {
         std::process::Command::new("which")
