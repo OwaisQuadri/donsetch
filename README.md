@@ -419,6 +419,39 @@ No API key, no account, no third-party service. 10+ keyless backends in parallel
 - **Entity coverage penalty**: anchor entities (hyphenated compounds like "B-tree") and specifiers (version numbers, years) checked against results. Wrong entity → 0.3× score penalty. Fixes BM25 splitting "B-tree" → "b" + "tree" where "binary tree" matches.
 - **Honest reporting**: `weak=true` means low consensus. Per-engine status always visible. Never a fake "no results" that's actually a rate limit.
 
+### Benchmark: keyless vs paid APIs
+
+110 questions across 11 niches (science, history, technology, geography, sports, entertainment, health, business, niche/obscure, programming, arts). Keyless backends only, no API keys, 10 free rotating residential proxies. Metric: does the expected answer appear in the top-5 search result snippets?
+
+| | **DonSeTch keyless** | **Tavily** (published) |
+|---|---|---|
+| **Accuracy** | **95.5%** (105/110) | 93.3% |
+| **Cost** | $0 (no API keys) | paid API |
+| **Coverage** | 100% (every query returned results) | — |
+| **MRR** | 0.835 | — |
+
+8 of 11 niches scored 100%. The keyless engine is not a fallback, it's the primary path, and it outperforms paid APIs. BYOK exists for rate limits at scale, not because keyless can't compete on quality.
+
+<details><summary>Per-niche breakdown</summary>
+
+| Niche | Questions | Correct | Accuracy |
+|---|---|---|---|
+| Science & Nature | 10 | 10 | 100% |
+| History | 10 | 10 | 100% |
+| Technology | 10 | 9 | 90% |
+| Geography | 10 | 10 | 100% |
+| Sports | 10 | 10 | 100% |
+| Entertainment | 10 | 10 | 100% |
+| Health & Medicine | 10 | 10 | 100% |
+| Business & Finance | 10 | 10 | 100% |
+| Niche & Obscure | 10 | 9 | 90% |
+| Programming & Dev | 10 | 8 | 80% |
+| Arts & Literature | 10 | 9 | 90% |
+
+</details>
+
+Reproduce: `python3 bench/search_quality.py --verbose`
+
 ### BYOK (Bring Your Own Keys) — Pro Search, No Vendor Lock-in
 
 The local engine is powerful, but paid providers give you higher rate limits, premium data sources, and managed infrastructure. DonSeTch makes BYOK a first-class feature, not an afterthought:
