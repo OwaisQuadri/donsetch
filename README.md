@@ -462,6 +462,8 @@ Our benchmark is also smaller (110 hand-curated questions vs SimpleQA's 4,326) a
 
 Reproduce: `python3 bench/search_quality.py --verbose`
 
+> **Take these numbers with a grain of salt.** This is a small benchmark (110 questions) with an easier metric (answer-in-snippet, not LLM-graded). Tavily ran 4,326 questions through GPT-4.1 with OpenAI's grader. Running the same scale of benchmark on DonSeTch requires reliable rotating proxies (free ones die fast) and an LLM API key for grading, both of which are the hard part. The keyless search is still genuinely good at finding the right information. Anyone is free to run a deeper, more realistic benchmark and report their own numbers. The script is in the repo.
+
 ### BYOK (Bring Your Own Keys) — Pro Search, No Vendor Lock-in
 
 The local engine is powerful, but paid providers give you higher rate limits, premium data sources, and managed infrastructure. DonSeTch makes BYOK a first-class feature, not an afterthought:
