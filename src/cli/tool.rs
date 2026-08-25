@@ -432,6 +432,10 @@ pub fn print_top_help() {
     println!("  {:8} Manage BYOK search provider keys", "keys");
     println!("  {:8} Manage proxy configuration", "proxy");
     println!("  {:8} Quick status overview", "status");
+    println!(
+        "  {:8} Kill orphaned Chrome instances + clean stale locks",
+        "stop"
+    );
     println!("  {:8} Health check with auto-fix", "doctor");
     println!("  {:8} Self-update from GitHub Releases", "update");
     println!("  {:8} Revert to previous version", "rollback");

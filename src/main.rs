@@ -39,6 +39,7 @@ async fn main() {
         "keys" => cli::keys::run(&args),
         "proxy" => cli::proxy::run(&args).await,
         "status" => cli::status::run().await,
+        "stop" => cli::stop::run(),
         "doctor" | "--doctor" => cli::doctor::run().await,
         "update" | "-u" | "--update" => cli::update::run().await,
         "rollback" | "--rollback" => cli::rollback::run(),

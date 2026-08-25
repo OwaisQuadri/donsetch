@@ -50,6 +50,15 @@ pub struct Ghost {
     target: String,
     frozen: bool,
     pub last_used: Instant,
+    /// Holds an flock on the shared profile dir. Kept alive for
+    /// the Ghost's lifetime so concurrent donsetch processes see
+    /// the lock and fall back to a temp profile instead of
+    /// colliding on SingletonLock.
+    #[allow(dead_code)] // RAII: held alive for the flock, never read
+    profile_lock: Option<std::fs::File>,
+    /// Temp profile dir if we couldn't get the shared profile's
+    /// lock. Cleaned up in Drop. None = using the shared profile.
+    temp_profile: Option<PathBuf>,
 }
 
 /// Persistent profile dir: aged state passes challenges
@@ -274,13 +283,65 @@ impl Ghost {
         let _ = display;
 
         let bin = chrome_binary()?;
-        let dir = profile_dir();
+
+        // ── Profile lock: prevent cross-process collision ──
+        // Multiple donsetch processes (CLI + MCP daemon, parallel
+        // subagents) share the same profile dir. Chrome enforces
+        // one-instance-per-profile via SingletonLock; a second launch
+        // against the same dir either fails or opens in a crippled
+        // mode that surfaces a user-visible error dialog.
+        //
+        // Fix: flock a lockfile. If we get it, we own the shared
+        // profile and can safely clear stale SingletonLock files.
+        // If another process holds it, we use a throwaway temp
+        // profile instead: no collision, no cookie warmth, but
+        // the job still runs. The lock lives for the Ghost's
+        // lifetime (stored in the struct), so concurrent callers
+        // see it and diverge to temp profiles.
+        let lockfile = crate::paths::cache_dir().join("ghost-profile.lock");
+        let profile_lock = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lockfile)
+            .ok();
+
+        let (dir, temp_profile) = match profile_lock.as_ref() {
+            Some(f) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::io::AsRawFd;
+                    let got = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+                    if got == 0 {
+                        (profile_dir(), None)
+                    } else {
+                        let t = std::env::temp_dir()
+                            .join(format!("donsetch-ghost-{}", std::process::id()));
+                        (t.clone(), Some(t))
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    (profile_dir(), None)
+                }
+            }
+            None => {
+                let t = std::env::temp_dir().join(format!("donsetch-ghost-{}", std::process::id()));
+                (t.clone(), Some(t))
+            }
+        };
+
         std::fs::create_dir_all(&dir)
             .map_err(|e| FetchError::ghost(format!("profile dir: {e}")))?;
-        // Stale singleton files from a SIGKILLed ghost
-        // (e.g. outer timeout) block the next launch.
-        for f in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
-            let _ = std::fs::remove_file(dir.join(f));
+        // Only clear stale SingletonLock files when we hold the
+        // profile lock. If we are on a temp profile the shared
+        // dir's lock belongs to a LIVE Chrome; removing its
+        // SingletonLock corrupts that instance's session and
+        // triggers the "Something went wrong" dialog.
+        if temp_profile.is_none() {
+            for f in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
+                let _ = std::fs::remove_file(dir.join(f));
+            }
         }
         let mut cmd = Command::new(bin);
         let mut chrome_args: Vec<String> = vec![
@@ -375,6 +436,7 @@ impl Ghost {
             cmd.as_std_mut().pre_exec(proc::pdeath_pre_exec);
         }
         let mut child = cmd
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| FetchError::ghost(format!("spawn: {e}")))?;
         let proc = proc::Proc::from_child(&child)?;
@@ -505,6 +567,8 @@ impl Ghost {
             target,
             frozen: false,
             last_used: Instant::now(),
+            profile_lock,
+            temp_profile,
         })
     }
 
@@ -993,6 +1057,27 @@ impl Ghost {
         // Let scroll-triggered rendering settle.
         tokio::time::sleep(std::time::Duration::from_millis(180)).await;
         Ok(())
+    }
+}
+
+impl Drop for Ghost {
+    fn drop(&mut self) {
+        // Safety net: kill_group sends SIGKILL to the whole
+        // browser tree (process group on Unix, Job Object on
+        // Windows). If kill().await was already called (reaper,
+        // shutdown, acquire-replace), this hits a dead process
+        // group (no-op). If the Ghost is dropped WITHOUT an
+        // explicit kill (macOS GhostGuard::Drop, a panic, an
+        // early return), this ensures Chrome does not survive.
+        // The macOS leak in issue #43 was exactly this: take()
+        // dropped the Ghost, but without a Drop impl the tokio
+        // Child was dropped without killing Chrome.
+        self.proc.kill_group();
+        sweep_crashpad();
+        // Clean up temp profile if we used one.
+        if let Some(temp) = &self.temp_profile {
+            let _ = std::fs::remove_dir_all(temp);
+        }
     }
 }
 

@@ -5,6 +5,14 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Ghost browser leak (issue #43):** Chrome processes survived after the tool call returned on macOS because `Ghost` had no `Drop` impl and tokio's `Child` does not kill on drop. Added `impl Drop for Ghost` that calls `kill_group()` synchronously: the safety net that fires on every code path that drops a Ghost without an explicit `kill().await` (macOS `GhostGuard::Drop`, panic, CLI exit). Also set `kill_on_drop(true)` on the tokio Child as belt-and-suspenders.
+- **Profile collision (issue #43):** concurrent donsetch processes launched Chrome against the same fixed `ghost-profile` dir, colliding on `SingletonLock` and surfacing a user-visible error dialog. Added an `flock`-based profile lock: if another process holds the lock, the caller falls back to a throwaway temp profile (no collision, no cookie warmth, the job still runs). The lock lives for the Ghost's lifetime. `SingletonLock` files are now only removed when we hold the lock.
+- **`donsetch stop` command:** kills orphaned Chrome instances using the ghost profile and cleans up stale lock files + temp profiles. Use after a crash or when Chrome from a previous session is still resident.
+
 ## [3.2.1] - 2026-08-23
 
 Hotfix: pi extension crashed with `write EPIPE` on Windows WSL when
