@@ -4,10 +4,10 @@
 
 pub fn run() {
     let profile = crate::ghost::profile_dir();
-    let pattern = format!("user-data-dir={}", profile.display());
 
     #[cfg(unix)]
     {
+        let pattern = format!("user-data-dir={}", profile.display());
         // pkill -9 -f matches the full command line. Kills every
         // Chrome process using the ghost profile, including renderers
         // and GPU processes that share the --user-data-dir argument.

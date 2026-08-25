@@ -294,12 +294,11 @@ fn find_blobs(html: &str) -> Vec<Blob> {
         let mut from = 0;
         while let Some(idx) = html[from..].find(&search) {
             let start = from + idx + search.len();
-            if let Some(raw) = extract_js_value(&html[start..]) {
-                let raw_len = raw.len();
+            if let Some((raw, consumed)) = extract_js_value(&html[start..]) {
                 if !out.iter().any(|b: &Blob| b.raw == raw) {
                     out.push(Blob { raw });
                 }
-                from = start + raw_len;
+                from = start + consumed;
             } else {
                 // Advance to the next CHAR boundary (a replacement
                 // char is 3 bytes; a naive +1 slices mid-char), and
@@ -572,7 +571,12 @@ fn find_typed_bodies<'a>(html: &'a str, ty: &str) -> Vec<&'a str> {
 
 /// Extract a balanced JS object/array starting at `s`. Handles
 /// strings, escapes, and nested brackets. Returns the JSON-slice.
-fn extract_js_value(s: &str) -> Option<String> {
+/// Returns (raw_json, consumed) where `consumed` is the byte
+/// position in `s` AFTER the closing bracket. The caller needs
+/// this to advance past the value, not into it: using the raw
+/// string's length alone misses bytes between the search match
+/// and the opening bracket, which can land mid-character.
+fn extract_js_value(s: &str) -> Option<(String, usize)> {
     let bytes = s.as_bytes();
     let mut start = None;
     for (i, &b) in bytes.iter().enumerate() {
@@ -605,7 +609,7 @@ fn extract_js_value(s: &str) -> Option<String> {
                 depth = depth.saturating_sub(1);
                 if depth == 0 && b == close {
                     let raw = &s[start..=i];
-                    return Some(raw.to_string());
+                    return Some((raw.to_string(), i + 1));
                 }
             }
             _ => {}
@@ -955,6 +959,26 @@ mod tests {
     fn global_match_inside_multibyte_no_panic() {
         let html = "x\u{FFFD}__NUXT__ = \u{FFFD}tail";
         let _ = find_blobs(html);
+    }
+
+    /// Fuzzer find (CI, 2026-08-25): `__NUXT__ = ` followed by
+    /// invalid UTF-8 (→ U+FFFD) then `c<>[]`. The `[` and `]` form
+    /// a valid JSON array, so `extract_js_value` returns "[]" (2
+    /// bytes). But `from = start + raw_len` = 37 + 2 = 39, which
+    /// is inside the U+FFFD at bytes 37..40. The fix: advance by
+    /// the consumed byte count (position after `]` in the slice),
+    /// not the raw string's length.
+    #[test]
+    fn global_match_with_gap_before_bracket_no_panic() {
+        let html = String::from_utf8_lossy(&[
+            0x03, 0x00, 0x00, 0x09, b')', b'<', b'<', b'>', b'[', b'c', b'<', b'>', b'[', b']',
+            0x09, b')', b'<', b'/', b'C', b'<', b'>', b'[', b']', b'/', 0x01, b'.', b'_', b'_',
+            b'N', b'U', b'X', b'T', b'_', b'_', b' ', b'=', b' ', 0xff, 0x56, 0xbf, 0xbf, 0xff,
+            0xff, 0xff, 0xff, 0x28, 0xc2, 0xff, 0x18, 0x8b, b'c', b'<', b'>', b'[', b']', 0x09,
+            b')', 0xbf, 0xbf, 0xbf, b'<', b'/', b'C', 0xbf, b'<',
+        ])
+        .into_owned();
+        let _ = find_blobs(&html);
     }
 
     use super::*;

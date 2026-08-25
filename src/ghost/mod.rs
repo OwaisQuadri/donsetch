@@ -322,6 +322,7 @@ impl Ghost {
                 }
                 #[cfg(not(unix))]
                 {
+                    let _ = f;
                     (profile_dir(), None)
                 }
             }
