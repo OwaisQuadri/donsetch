@@ -419,18 +419,16 @@ No API key, no account, no third-party service. 10+ keyless backends in parallel
 - **Entity coverage penalty**: anchor entities (hyphenated compounds like "B-tree") and specifiers (version numbers, years) checked against results. Wrong entity → 0.3× score penalty. Fixes BM25 splitting "B-tree" → "b" + "tree" where "binary tree" matches.
 - **Honest reporting**: `weak=true` means low consensus. Per-engine status always visible. Never a fake "no results" that's actually a rate limit.
 
-### Benchmark: keyless vs paid APIs
+### Benchmark: keyless search quality
 
-110 questions across 11 niches (science, history, technology, geography, sports, entertainment, health, business, niche/obscure, programming, arts). Keyless backends only, no API keys, 10 free rotating residential proxies. Metric: does the expected answer appear in the top-5 search result snippets?
+110 questions across 11 niches (science, history, technology, geography, sports, entertainment, health, business, niche/obscure, programming, arts). Keyless backends only, no API keys, 10 free rotating residential proxies.
 
 | | **DonSeTch keyless** | **Tavily** (published) |
 |---|---|---|
 | **Accuracy** | **95.5%** (105/110) | 93.3% |
 | **Cost** | $0 (no API keys) | paid API |
-| **Coverage** | 100% (every query returned results) | — |
-| **MRR** | 0.835 | — |
 
-8 of 11 niches scored 100%. The keyless engine is not a fallback, it's the primary path, and it outperforms paid APIs. BYOK exists for rate limits at scale, not because keyless can't compete on quality.
+8 of 11 niches scored 100%. The keyless engine is not a weak fallback, it's the primary path and it competes with paid APIs on quality. BYOK exists for rate limits at scale, not because keyless can't compete.
 
 <details><summary>Per-niche breakdown</summary>
 
@@ -447,6 +445,18 @@ No API key, no account, no third-party service. 10+ keyless backends in parallel
 | Niche & Obscure | 10 | 9 | 90% |
 | Programming & Dev | 10 | 8 | 80% |
 | Arts & Literature | 10 | 9 | 90% |
+
+</details>
+
+<details><summary>Methodology and caveats</summary>
+
+**Our metric**: answer-in-snippet. Does the expected answer text appear in the top-5 search result titles or snippets? This is a necessary condition for any LLM to answer correctly from retrieved docs, so it's a lower bound on end-to-end accuracy.
+
+**Tavily's metric**: end-to-end LLM accuracy. GPT-4.1 reads the retrieved documents, answers using only them (no parametric knowledge), then OpenAI's correctness prompt grades it CORRECT / INCORRECT / NOT_ATTEMPTED. Tavily also reports hallucination and not-attempted rates.
+
+These are different bars. Our snippet-recall test is easier: finding "Canberra" in a snippet doesn't mean an LLM would correctly answer "What is the capital of Australia?" if the snippet is on a page about cricket. A full apples-to-apples comparison would require running the same LLM grading step.
+
+Our benchmark is also smaller (110 hand-curated questions vs SimpleQA's 4,326) and uses straightforward factual queries rather than SimpleQA's deliberately hard, adversarial set. So 95.5% snippet-recall vs 93.3% LLM-graded is not a direct comparison. What it does show: the keyless engine returns the right information for the vast majority of queries, at zero cost.
 
 </details>
 
