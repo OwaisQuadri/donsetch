@@ -5,6 +5,13 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Links swallowed in nested formatting (issue #49):** `<em>`/`<strong>`/`<a>` inline rendering used `plain()`, which flattened nested children to bare text. `<em>A <strong><a>B</a></strong> C</em>` became `A B C`, dropping the bold and the link. Fixed: `a`, `strong`, and `em` now render children recursively, so nested formatting survives (`*A **[B](url)** C*`). Regression test added with all four issue cases.
+- **tier-2 ghost navigation hang on Chrome 151/152 (issue #48):** Chrome for Testing 151/152 (observed on macOS arm64) has a bug where `Page.navigate`'s CDP response never dispatches even though the URL advances and the navigation commits. DonSeTch waited on that response and hit a 20s timeout on every tier-2 fetch. Fixed: navigate now dispatches and polls `current_url()` (browser-level `Target.getTargetInfo`, routed separately and still returns the advancing URL) until the target leaves `about:blank`. Works on both healthy and buggy Chrome.
+
 ## [3.2.2] - 2026-08-25
 
 Process-leak hotfix: orphaned Chrome, profile collision, and a

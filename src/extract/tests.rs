@@ -1995,3 +1995,52 @@ fn v3_probe_invalid_regex_is_honest_not_panic() {
     );
     assert!(r.markdown.contains("invalid regex"), "{}", r.markdown);
 }
+
+/// Issue #49: links and formatting nested inside em/strong were
+/// flattened away by `plain()`. Nested inline markup must survive:
+/// `<em>A <strong><a>B</a></strong> C</em>` → `*A **[B](url)** C*`.
+#[test]
+fn v3_nested_inline_formatting_preserves_links() {
+    let html = r#"<html><body><article>
+<p>
+<em>A <strong><a href="https://example.com/b">B</a></strong> C</em>
+</p>
+<p>
+<em>D <strong>E</strong> F</em>
+</p>
+<p>
+<em>G <a href="https://example.com/h">H</a> I</em>
+</p>
+<p>
+<strong><a href="https://example.com/j">J</a></strong>
+</p>
+</article></body></html>"#;
+    let r = extract_html_opts(
+        html,
+        &ExtractOptions {
+            include_links: true,
+            ..Default::default()
+        },
+    );
+    let m = &r.markdown;
+    // Case A: em > [strong > link]. Nested bold + link survive.
+    assert!(
+        m.contains("*A **[B](https://example.com/b)** C*"),
+        "A: {}",
+        m
+    );
+    // Case D: em > strong. Bold survives inside emphasis.
+    assert!(m.contains("*D **E** F*"), "D: {}", m);
+    // Case G: em > link. Link survives inside emphasis.
+    assert!(
+        m.contains("*G [H](https://example.com/h) I*"),
+        "G: {}",
+        m
+    );
+    // Case J: strong > link.
+    assert!(
+        m.contains("**[J](https://example.com/j)**"),
+        "J: {}",
+        m
+    );
+}

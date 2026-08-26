@@ -61,7 +61,10 @@ fn render(
                 let name = c.value().name();
                 match name {
                     "a" => {
-                        let text = plain(c);
+                        // Render children recursively so nested
+                        // formatting (bold, emphasis) survives
+                        // inside the link text: `[**B**](url)`.
+                        let text = RenderInner::run(c, base, opts, depth);
                         if text.is_empty() {
                             continue;
                         }
@@ -80,15 +83,17 @@ fn render(
                         buf.push_str(&text);
                     }
                     "strong" | "b" => {
-                        let t = plain(c);
+                        let t = RenderInner::run(c, base, opts, depth);
                         if !t.is_empty() {
                             buf.push_str(&format!("**{t}**"));
+                            *total += t.len();
                         }
                     }
                     "em" | "i" => {
-                        let t = plain(c);
+                        let t = RenderInner::run(c, base, opts, depth);
                         if !t.is_empty() {
                             buf.push_str(&format!("*{t}*"));
+                            *total += t.len();
                         }
                     }
                     "code" => {
@@ -147,6 +152,29 @@ fn render(
             }
             _ => {}
         }
+    }
+}
+
+
+/// Render an element's children into a fresh markdown string,
+/// preserving nested inline formatting (links, bold, emphasis).
+/// Used where a formatted element contains other formatted
+/// elements inside it — e.g. `<em>A <strong><a>B</a></strong> C</em>`
+/// must become `*A **[B](url)** C*`, not the flattened `A B C`.
+struct RenderInner;
+
+impl RenderInner {
+    fn run(
+        c: ElementRef<'_>,
+        base: &str,
+        opts: &super::ExtractOptions,
+        depth: usize,
+    ) -> String {
+        let mut t = String::new();
+        let mut total = 0usize;
+        let mut link = 0usize;
+        render(c, base, opts, &mut t, &mut total, &mut link, depth + 1);
+        t
     }
 }
 

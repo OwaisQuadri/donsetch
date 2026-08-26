@@ -624,11 +624,42 @@ impl Ghost {
     }
 
     /// Navigate the attached page.
+    ///
+    /// Chrome for Testing 151/152 (observed on macOS arm64) has a
+    /// bug where `Page.navigate`'s CDP *response* never dispatches
+    /// even though the target URL advances and the navigation
+    /// commits normally. Waiting on that response therefore hangs
+    /// until the generic 20s CDP timeout, blocking tier-2 entirely.
+    ///
+    /// Fix: dispatch `Page.navigate` but do NOT block on its
+    /// response. Poll `current_url()` instead — it uses the
+    /// browser-level `Target.getTargetInfo`, which is routed
+    /// separately from the page session and still returns the
+    /// advancing URL. This succeeds on both healthy Chrome (fast
+    /// response) and the buggy 151/152 builds (no response at all).
     pub async fn navigate(&self, url: &str) -> Result<(), FetchError> {
-        self.cdp
+        // Fire the navigation. Tolerate a missing/errant response:
+        // the URL poll below is the real completion signal.
+        let _ = self
+            .cdp
             .call(Some(&self.session), "Page.navigate", json!({ "url": url }))
-            .await?;
-        Ok(())
+            .await;
+        // Poll the target URL until it advances off the initial
+        // blank page (about:blank is what createTarget starts at).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let cur = self.current_url().await.unwrap_or_default();
+            let advanced = !cur.is_empty() && !cur.starts_with("about:blank");
+            if advanced {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(FetchError::ghost(
+                    "navigate: target URL never advanced past about:blank",
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
     }
 
     /// Current document HTML. DOM domain only — no Runtime,
