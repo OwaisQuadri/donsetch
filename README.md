@@ -92,6 +92,14 @@ Four things no free (or paid) competitor has, plus a stack of agent-first mechan
 
 *(30-second walkthrough: search, fetch with bot-wall bypass, and crawl)*
 
+<div align="center">
+
+<video src="https://github.com/user-attachments/assets/2c2c344f-7ddd-4075-ae5b-cd8baee6d7ba" controls muted width="640"></video>
+
+</div>
+
+*(Pi agent session: live search, fetch, and crawl with DonSeTch as a native extension)*
+
 ---
 
 ## 📦 Install
