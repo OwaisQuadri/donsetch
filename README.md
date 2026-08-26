@@ -94,7 +94,7 @@ Four things no free (or paid) competitor has, plus a stack of agent-first mechan
 
 <div align="center">
 
-<video src="https://github.com/user-attachments/assets/2c2c344f-7ddd-4075-ae5b-cd8baee6d7ba" controls muted width="640"></video>
+<video src="https://github.com/user-attachments/assets/f164b31e-96ef-4294-b2dd-6777642098dc" controls muted width="640"></video>
 
 </div>
 
