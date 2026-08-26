@@ -26,6 +26,48 @@ use crate::profile::BrowserProfile;
 
 const REPO: &str = "dondai44423/donsetch";
 
+/// Independently reviewed SHA256 pins for self-update tarballs.
+///
+/// The release sidecar checksum is deliberately not trusted: it is
+/// published alongside the artifact and therefore does not provide an
+/// independent authorization decision. A new release must add its
+/// platform pins in a reviewed source change before self-update will
+/// accept it. Missing pins fail closed.
+const PINNED_UPDATE_HASHES: &[(&str, &str, &str)] = &[
+    (
+        "3.2.3",
+        "linux-x64",
+        "a98a9e7bdd32d072ce4637eb4104f539d7df7d52aa583126b1faf94dfb1e55a4",
+    ),
+    (
+        "3.2.3",
+        "linux-arm64",
+        "958c2e9cec861304ace475a8bd6e10fc4fef6e3e39625ab3fe3144f2047b3a70",
+    ),
+    (
+        "3.2.3",
+        "darwin-x64",
+        "435d80e6da9c2694d4ccec8e0827a7e85254b6edcdca38b785340307b34a64b2",
+    ),
+    (
+        "3.2.3",
+        "darwin-arm64",
+        "db789e1eeff78caf4f95f9ad3f9b1b022b35c491b49d567dbe79974339e7ee03",
+    ),
+    (
+        "3.2.3",
+        "win32-x64",
+        "699cb9ae6992c9a82f28788aa4574841394292fc74ae77eb71512e6562cfdccc",
+    ),
+];
+
+fn pinned_update_hash(version: &str, asset: &str) -> Option<&'static str> {
+    PINNED_UPDATE_HASHES
+        .iter()
+        .find(|(v, a, _)| *v == version && *a == asset)
+        .map(|(_, _, hash)| *hash)
+}
+
 pub async fn run() {
     cli::init();
     cli::print_title("DonSeTch Update");
@@ -111,7 +153,18 @@ pub async fn run() {
     let tag = format!("v{latest}");
     let base = format!("https://github.com/{REPO}/releases/download/{tag}");
     let tarball_url = format!("{base}/donsetch-{asset}.tar.gz");
-    let sha256_url = format!("{base}/donsetch-{asset}.tar.gz.sha256");
+
+    let expected = match pinned_update_hash(&latest, asset) {
+        Some(hash) => hash,
+        None => {
+            println!(
+                "  {} Self-update is unavailable for {latest}/{asset}: no reviewed SHA256 pin",
+                cli::icon_fail()
+            );
+            println!("    Build from source: cargo install --path .");
+            std::process::exit(1);
+        }
+    };
 
     let asset_label = format!("donsetch-{asset}.tar.gz");
     cli::print_kv("asset", &asset_label);
@@ -154,33 +207,14 @@ pub async fn run() {
         println!("  {} downloaded ({kb}KB)", cli::icon_pass());
     }
 
-    // ── Download + verify SHA256 ─────────────────────────────
+    // ── Verify against the reviewed source pin ────────────────
 
-    let sha256_text = match fetcher.fetch(&sha256_url).await {
-        Ok(out) if out.status == 200 => String::from_utf8_lossy(&out.body).to_string(),
-        Ok(out) => {
-            println!(
-                "  {} Could not download SHA256: HTTP {}",
-                cli::icon_fail(),
-                out.status,
-            );
-            std::process::exit(1);
-        }
-        Err(e) => {
-            println!("  {} Could not download SHA256: {e}", cli::icon_fail());
-            std::process::exit(1);
-        }
-    };
-
-    let expected = sha256_text.split_whitespace().next().unwrap_or("");
     let actual = sha256_hex(&tarball);
 
-    if expected.is_empty() || expected != actual {
+    if expected != actual {
         println!("  {} SHA256 mismatch", cli::icon_fail());
-        if !expected.is_empty() {
-            println!("    expected: {expected}");
-            println!("    actual:   {actual}");
-        }
+        println!("    expected: {expected}");
+        println!("    actual:   {actual}");
         std::process::exit(1);
     }
     println!("  {} SHA256 verified", cli::icon_pass());
@@ -433,4 +467,23 @@ fn cleanup_previous(exe: &Path) {
     // Unix temp file (half-written binary from interrupted update).
     let tmp = exe_dir.join(".donsetch.update.tmp");
     let _ = std::fs::remove_file(&tmp);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pinned_update_hash;
+
+    #[test]
+    fn reviewed_release_platform_has_a_pin() {
+        assert_eq!(
+            pinned_update_hash("3.2.3", "linux-arm64"),
+            Some("958c2e9cec861304ace475a8bd6e10fc4fef6e3e39625ab3fe3144f2047b3a70")
+        );
+    }
+
+    #[test]
+    fn unknown_release_or_platform_fails_closed() {
+        assert_eq!(pinned_update_hash("3.2.4", "linux-arm64"), None);
+        assert_eq!(pinned_update_hash("3.2.3", "win32-arm64"), None);
+    }
 }
