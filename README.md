@@ -730,6 +730,58 @@ DonSeTch is install and use. wigolo is install, download ~1.5 GB of models and b
 
 ---
 
+## 🆚 DonSeTch vs Firecrawl (live head-to-head)
+
+Both CLIs run live, head-to-head, on identical real-world tasks. Firecrawl is the paid cloud API (not the self-host OSS version). DonSeTch is free, local, keyless.
+
+### Fetch / Scrape
+
+| URL | Firecrawl (paid cloud) | DonSeTch (free local) |
+|---|---|---|
+| LinkedIn | ❌ "we do not support this site" | ✅ real job listings |
+| Reddit | ❌ "we do not support this site" | ✅ real feed content |
+| Stack Overflow (Cloudflare) | ✅ 4.7s, verbose | ✅ 7s, clean Q&A (847 tokens) |
+| Wikipedia (Transformer) | 267KB | 16KB (**16x smaller**) |
+| arXiv PDF | 32.6s, 71KB | 1.4s, 16KB (**22x faster, 4.4x smaller**) |
+
+Firecrawl explicitly refuses LinkedIn and Reddit. DonSeTch fetches both. On Wikipedia, DonSeTch returns 16x fewer tokens. On PDFs, 22x faster.
+
+### Search
+
+| | Firecrawl | DonSeTch |
+|---|---|---|
+| Speed | 1-2s | 5-7s |
+| Result style | Full scraped article content inline | Clean ranked snippets |
+| Code specificity | Good | Matched or beat (found exact GitHub issues) |
+| Academic | arXiv + NeurIPS + Wikipedia | ar5iv + arXiv + Wikipedia + NeurIPS |
+| News/mainstream | Better (NBC, MKBHD, Reddit discussions) | Niche tech blogs, less mainstream authority |
+| Token cost per query | High (full articles for 5 sites) | Low (snippets only, fetch what you need) |
+
+Search quality is close. Firecrawl is faster and leans mainstream authority. DonSeTch leans technical specificity. Firecrawl's "return full articles" model is a token liability for agents: you get 5 sites' full content when you needed one snippet.
+
+### Crawl
+
+| | Firecrawl | DonSeTch |
+|---|---|---|
+| Crawl speed (fastapi docs, topic: DI) | 47.6s | 18.7s (**2.5x faster**) |
+| Found target pages? | No | No |
+| Failure behavior | Dumped verbose unrelated content (security, path-params, testing) | Returned little, fast, with honest low quality scores (0.22-0.30) |
+| Focus filter | None (firehose by design) | `--topic` ranks and filters by relevance |
+| No-sitemap URL discovery | ✅ `map` works well | Needs `--mode content` fallback |
+
+Both missed the dependency-injection pages. The difference is how: DonSeTch failed fast, small, and honestly (quality scores admitted low relevance). Firecrawl spent 2.5x longer and dumped a pile of unrelated content. A tool that fails honestly is better than one that dumps token bloat on a miss.
+
+### Bottom line
+
+| | Search | Fetch | Crawl |
+|---|---|---|---|
+| **DonSeTch** | Competitive (close) | **Decisive win** | **Win** |
+| **Firecrawl** | Slight edge (speed, authority) | Refuses LinkedIn/Reddit; token-bloated | Slower; bloat-on-miss; better no-sitemap discovery |
+
+For agent workloads, fetch and crawl matter most. DonSeTch wins both: it reaches sites the paid tool refuses, returns 16x fewer tokens, processes PDFs 22x faster, and crawls 2.5x faster with honest failure behavior. Firecrawl's genuine strengths are search speed, mainstream source authority, and no-sitemap URL discovery.
+
+---
+
 ## ⚠️ Gotchas
 
 | Surprise | Why |
