@@ -22,7 +22,14 @@ use crate::cli;
 const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// Valid provider names (checked at CLI boundary).
-pub const PROVIDERS: &[&str] = &["tavily", "exa", "serper", "tinyfish"];
+pub const PROVIDERS: &[&str] = &[
+    "tavily",
+    "exa",
+    "serper",
+    "tinyfish",
+    "parallel",
+    "brightdata",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -464,7 +471,7 @@ pub fn render_list(cfg: &ByokConfig) {
         );
         println!(
             "  Providers:       {}",
-            cli::dim("tavily, exa, serper, tinyfish")
+            cli::dim("tavily, exa, serper, tinyfish, parallel, brightdata")
         );
         return;
     }

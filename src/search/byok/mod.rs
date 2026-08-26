@@ -1,7 +1,7 @@
 //! Bring Your Own Keys (BYOK) — provider search with key rotation.
 //!
 //! When the user configures API keys for external search providers
-//! (Tavily, Exa, Serper.dev, TinyFish), the entire local 5-engine
+//! (Tavily, Exa, Serper.dev, TinyFish, Parallel AI, Bright Data), the entire local 5-engine
 //! search system is bypassed. The provider handles everything:
 //! search, IP, rate limiting. DonSeTch just sends the query and
 //! normalizes the results.
@@ -13,7 +13,9 @@
 //! after 60s cooldown. Credit-depleted/invalid keys stay dead
 //! until the user resets them.
 
+mod brightdata;
 mod exa;
+mod parallel;
 mod serper;
 pub mod store;
 mod tavily;
@@ -103,7 +105,7 @@ impl ByokSearcher {
     /// Err("not configured") and the caller falls back to local.
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(12))
+            .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(5))
             .pool_max_idle_per_host(2)
             .build()
@@ -253,6 +255,8 @@ async fn dispatch(
         "exa" => exa::search(client, key, query, max, intent).await,
         "serper" => serper::search(client, key, query, max, intent).await,
         "tinyfish" => tinyfish::search(client, key, query, max, intent).await,
+        "parallel" => parallel::search(client, key, query, max, intent).await,
+        "brightdata" => brightdata::search(client, key, query, max, intent).await,
         _ => Err(KeyError::UnknownError(format!(
             "unknown provider: {provider}"
         ))),

@@ -492,10 +492,12 @@ The local engine is powerful, but paid providers give you higher rate limits, pr
 ```bash
 # Add keys — stack as many as you want per provider
 donsetch keys add exa sk-exa-...         # 1,500 credits
-donsetch keys add exa sk-exa-...         # another 1,500 → 3,000 total
+donsetch keys add exa sk-exa-...         # another 1,500 -> 3,000 total
 donsetch keys add tavily tvly-...
 donsetch keys add serper ...
 donsetch keys add tinyfish sk-tinyfish-...
+donsetch keys add parallel nKil3...      # Parallel AI (fast mode)
+donsetch keys add bd 576d013c...        # Bright Data SERP (bd = alias)
 
 # See what's configured (keys are masked)
 donsetch keys list
@@ -510,7 +512,7 @@ donsetch keys import ~/donsetch-keys.json
 donsetch keys clear
 ```
 
-Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**.
+Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**, **Parallel AI** (fast mode), **Bright Data** SERP (`bd` alias).
 
 ---
 

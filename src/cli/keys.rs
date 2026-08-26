@@ -9,11 +9,26 @@
 //!   donsetch keys import <path>            Import keys from a file
 //!   donsetch keys clear                     Remove all keys
 //!
-//! Providers: tavily, exa, serper, tinyfish
+//! Providers: tavily, exa, serper, tinyfish, parallel, brightdata
 
 use super::{bold, dim, green, red};
 
 use crate::search::byok::store::{ByokConfig, PROVIDERS, render_list};
+
+/// Normalize provider aliases to canonical names.
+/// `bd` -> `brightdata`
+fn normalize_alias(provider: &str) -> String {
+    match provider {
+        "bd" => "brightdata".to_string(),
+        _ => provider.to_string(),
+    }
+}
+
+/// Parse and normalize a provider argument: lowercase, then
+/// expand aliases like `bd` -> `brightdata`.
+fn parse_provider(input: &str) -> String {
+    normalize_alias(&input.to_lowercase())
+}
 
 pub fn run(args: &[String]) {
     let sub = args.get(2).map(|s| s.as_str()).unwrap_or("help");
@@ -59,7 +74,7 @@ fn cmd_add(args: &[String]) {
         }
     };
 
-    let provider = provider.to_lowercase();
+    let provider = parse_provider(provider);
 
     if !PROVIDERS.contains(&provider.as_str()) {
         eprintln!(
@@ -126,7 +141,7 @@ fn cmd_add(args: &[String]) {
 
 fn cmd_remove(args: &[String]) {
     let provider = match args.get(3) {
-        Some(p) => p.to_lowercase(),
+        Some(p) => parse_provider(p),
         None => {
             eprintln!(
                 "{} usage: donsetch keys remove <provider> [key]",
@@ -191,7 +206,7 @@ fn cmd_list() {
 
 fn cmd_default(args: &[String]) {
     let provider = match args.get(3) {
-        Some(p) => p.to_lowercase(),
+        Some(p) => parse_provider(p),
         None => {
             eprintln!(
                 "{} usage: donsetch keys default <provider|local>",
@@ -249,7 +264,7 @@ fn cmd_default(args: &[String]) {
 }
 
 fn cmd_reset(args: &[String]) {
-    let provider = args.get(3).map(|s| s.to_lowercase());
+    let provider = args.get(3).map(|s| parse_provider(s));
 
     let mut cfg = ByokConfig::load();
     if !cfg.is_configured() {
@@ -446,10 +461,13 @@ fn print_help() {
     );
     println!();
     println!("  {}", bold("Providers:"));
-    println!("    tavily    Tavily Search API (api.tavily.com)");
-    println!("    exa       Exa AI Search (api.exa.ai)");
-    println!("    serper    Serper.dev Google SERP (google.serper.dev)");
-    println!("    tinyfish  TinyFish Search (api.search.tinyfish.ai)");
+    println!("    tavily     Tavily Search API (api.tavily.com)");
+    println!("    exa        Exa AI Search (api.exa.ai)");
+    println!("    serper     Serper.dev Google SERP (google.serper.dev)");
+    println!("    tinyfish   TinyFish Search (api.search.tinyfish.ai)");
+    println!("    parallel   Parallel AI Search (api.parallel.ai) — fast mode");
+    println!("    brightdata Bright Data SERP API (api.brightdata.com)");
+    println!("    {}", dim("    aliases: bd = brightdata"));
     println!();
     println!("  {}", bold("Default:"));
     println!("    Set a provider as default → BYOK is tried first, local is fallback.");
