@@ -524,14 +524,21 @@ impl Ghost {
         // (reusing validated IPs for the connect) there is a residual
         // window. The transport layer re-validates at connect time,
         // but the browser's network stack does its own resolution.
-        cdp.call(
-            Some(&session),
-            "Fetch.enable",
-            json!({ "patterns": [{ "urlPattern": "*", "requestStage": "Request" }] }),
-        )
-        .await
-        .map_err(|e| FetchError::ghost(format!("Fetch.enable: {e}")))?;
         let fetch_guard = cdp.spawn_fetch_guard(session.clone());
+        if let Err(e) = cdp
+            .call(
+                Some(&session),
+                "Fetch.enable",
+                json!({ "patterns": [{ "urlPattern": "*", "requestStage": "Request" }] }),
+            )
+            .await
+        {
+            // The guard was started before enabling interception so no
+            // request-paused event can be missed. Stop it on setup failure
+            // so a partially initialized Ghost never leaves a task behind.
+            fetch_guard.abort();
+            return Err(FetchError::ghost(format!("Fetch.enable: {e}")));
+        }
         cdp.call(Some(&session), "Page.enable", json!({})).await?;
 
         // Stealth JS injection — runs before any page script.

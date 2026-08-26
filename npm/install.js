@@ -175,18 +175,20 @@ if (!expectedHash) {
   process.exit(1);
 }
 
-// Skip if already installed (npm cache reuse, reinstall, etc.).
-// A plausibility check first: a stale 0-byte or truncated leftover
-// (killed install, crashed download) must not shadow a fresh one.
+// Never trust an existing/cached binary without a binary-level
+// provenance check. The pinned value above authenticates the release
+// tarball, not an arbitrary file already present in this directory.
+// Remove any existing binary so every successful install comes from a
+// freshly downloaded and verified tarball. This also prevents a stale
+// or attacker-replaced binary from being accepted on reinstall.
 if (fs.existsSync(binaryPath)) {
-  let size = 0;
-  try { size = fs.statSync(binaryPath).size; } catch (_) {}
-  if (size > 1024 * 1024) {
-    console.log(`donsetch: binary already present (${plat.binary})`);
-    process.exit(0);
+  console.log(`donsetch: removing existing ${plat.binary} before verified reinstall`);
+  try {
+    fs.unlinkSync(binaryPath);
+  } catch (err) {
+    console.error(`donsetch: cannot remove existing ${binaryPath}: ${err.message}`);
+    process.exit(1);
   }
-  console.log(`donsetch: leftover ${plat.binary} is ${size} bytes — re-downloading`);
-  try { fs.unlinkSync(binaryPath); } catch (_) {}
 }
 
 fs.mkdirSync(binDir, { recursive: true });
