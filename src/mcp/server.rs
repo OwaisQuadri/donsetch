@@ -971,8 +971,8 @@ async fn resolve_fetch_url(daemon: &Arc<Daemon>, raw: &str) -> Result<String, Va
     if raw.starts_with("http://") || raw.starts_with("https://") {
         return Ok(raw.to_string());
     }
-    // v3 handles: "L12"/"s3" resolve through the persistent
-    // handle table before anything else runs.
+    // v3 handles: random L/S handles resolve through the
+    // handle table (L persisted, S in-memory) before anything else.
     if crate::handles::is_handle(raw) {
         if let Some(resolved) = daemon.handles.lock().await.resolve(raw) {
             if let Ok(parsed) = url::Url::parse(&resolved)
@@ -3056,6 +3056,10 @@ fn now_unix() -> u64 {
 /// to `L{n}` handles and stamp the count into the [meta] block.
 /// Mutates `res` in place; no-op when links aren't in the output.
 async fn apply_link_handles(daemon: &Arc<Daemon>, res: &mut Value) {
+    // When handles are disabled, links keep their hrefs.
+    if !crate::handles::handles_enabled() {
+        return;
+    }
     let Some(text) = res
         .pointer("/content/1/text")
         .and_then(Value::as_str)
@@ -3182,8 +3186,6 @@ fn finish_result(
     })
 }
 
-/// Bind the outcome's result URLs as position handles (S1..Sn)
-/// in the persistent table, then return them for rendering.
 /// v3 F2: per-result route hints from the self-improving store —
 /// domains that consistently need the browser carry the cost in
 /// the open so the agent can budget or pick a faster source.
@@ -3207,10 +3209,15 @@ async fn bind_search_handles(
     daemon: &Arc<Daemon>,
     out: &crate::search::SearchOutcome,
 ) -> Vec<String> {
+    // When handles are disabled (DONSETCH_URL_HANDLES=off), return
+    // empty vec — search results show raw URLs instead.
+    if !crate::handles::handles_enabled() {
+        return Vec::new();
+    }
     let urls: Vec<String> = out.results.iter().map(|r| r.url.clone()).collect();
     let mut ht = daemon.handles.lock().await;
     let hs = ht.set_search_results(&urls);
-    ht.flush();
+    // Search handles are in-memory only — no flush.
     hs
 }
 

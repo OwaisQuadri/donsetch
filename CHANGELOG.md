@@ -5,6 +5,23 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Parallel AI BYOK provider:** POST `https://api.parallel.ai/v1/search` with `mode: "fast"`, `x-api-key` auth, objective + search_queries input, excerpts joined to snippet. Live-tested: 7 results, ~1.1s, all on-topic.
+- **Bright Data SERP BYOK provider:** POST `https://api.brightdata.com/request` with Bearer token auth, zone parsing (`key::zone` or default `serp_api1`), `brd_json=1` for parsed Google organic results. 30s timeout to accommodate variable API latency. `bd` alias: `donsetch keys add bd ...` works in all key commands (add, remove, reset, default).
+- BYOK provider list updated in CLI help, README, and tool spec: Tavily, Exa, Serper, TinyFish, Parallel AI, Bright Data.
+
+### Security
+
+- **Unpredictable handle IDs (GHSA-g279-2v66-j8g2):** Reference handles (`S{id}`/`L{id}`) were sequential and fully predictable (`S1`-`S12`, `L1`-`L2048`), enabling cross-session information disclosure via indirect prompt injection. A page could instruct an agent to fetch handles it never received, resolving to URLs bound by a different session, project, or MCP client on the same host. Fixed: handle IDs are now random 8-char base62 tokens generated from SHA-256 of (nanosecond timestamp + PID + atomic counter + ASLR stack address). The output space is 62^8 approx 2.18x10^14, making enumeration infeasible. A page that was never given a handle cannot name one. Reported by @Mart-Bogdan.
+- **Search handles no longer persisted:** Search handles (`S{id}`) are now in-memory only and never written to `handles.json`. They die with the process. This eliminates cross-session leakage through the on-disk table. L-handles (`L{id}`) remain persisted (useful across restarts) but with unguessable random IDs.
+- **Versioned persistence format:** `handles.json` now carries a `version` field (currently 2). Old-format files (no version field) fail to deserialize and are silently discarded. Old-format sequential handles that somehow survive the format change are filtered out during load.
+- **`DONSETCH_URL_HANDLES=off` disable switch:** When set, both emission (search results show raw URLs, links keep hrefs) and resolution (`is_handle` returns false, `resolve_fetch_url` refuses handles) are disabled. The on-disk table outlives the switch but cannot be addressed while it is off.
+- **Search handle rebind correctness bug fixed:** `set_search_results` no longer overwrites positions 1..n. A new search mints new random handles, so earlier ones keep resolving to what they always meant. No more silent repointing of `S3`.
+- **LRU eviction uses monotonic counter:** Eviction ordering now uses a per-entry `seq` field (monotonic counter) instead of wall-clock seconds, which could collide for rapid inserts.
+
 ## [3.2.3] - 2026-08-26
 
 ### Fixed

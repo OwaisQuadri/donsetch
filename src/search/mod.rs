@@ -1074,8 +1074,8 @@ pub fn render_markdown(
             let snip = clip_snippet(&r.snippet, SNIPPET_CHARS);
             md.push_str(&format!("   {snip}\n"));
         }
-        // v3 handles: the position handle (S1, S2, …) replaces the
-        // raw URL — `fetch S3` is worth more than 80 tokens of URL.
+        // v3 handles: a random S-handle replaces the
+        // raw URL, saving 80+ tokens per result.
         match handles {
             Some(hs) if let Some(h) = hs.get(i) => {
                 // v3 F2: a known-walled domain carries its route
@@ -1156,7 +1156,7 @@ or add an API-key provider (`donsetch keys add`)*\n",
         ));
     }
     if handles.is_some() && !out.results.is_empty() {
-        md.push_str("*fetch S1… by handle (raw urls in structuredContent)*\n");
+        md.push_str("*fetch results by their S-handle (raw urls in structuredContent)*\n");
     }
     md
 }
