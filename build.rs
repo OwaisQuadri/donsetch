@@ -40,8 +40,11 @@ const PDFIUM_SHARED_TAG: &str = "chromium/7802";
 
 /// sha256 of the pinned tarball per platform "os-arch".
 /// Verified on download and required; builds fail before any network download if no entry exists.
-/// linux-x64 and linux-arm64 values are verified against the Sigstore/SLSA attestation for kognitos/pdfium-static chromium/7809; release sidecar checksum files alone are not authorization.
-/// entries are filled as each platform artifact is prepped for CI.
+/// Entries are release-asset digests for the exact pinned artifacts: static
+/// Linux/macOS assets from kognitos/pdfium-static chromium/7809, and shared
+/// Android/Windows assets from bblanchon/pdfium-binaries chromium/7802.
+/// They were cross-checked against each release's attestation metadata; a
+/// sidecar checksum file from the same release is not authorization.
 const KNOWN_HASHES: &[(&str, &str)] = &[
     (
         "linux-x64",
@@ -50,6 +53,30 @@ const KNOWN_HASHES: &[(&str, &str)] = &[
     (
         "linux-arm64",
         "abe1c3d5b168ec2baaafc7a8fcddfda1a09417f39199c7993fd28d34d3a7f70e",
+    ),
+    (
+        "mac-x64",
+        "c097fd17a07826bb36617dda0cd02bd7829c0f2087f33e927124df21dc5cef06",
+    ),
+    (
+        "mac-arm64",
+        "08556377b5d33b2fef7c6bfec66e01b9b23007c10533ab0404fe54538cbb2837",
+    ),
+    (
+        "win-x64",
+        "487156c28d81bd162107ca0ba85849cbfbb0127be4210a7cfec6def66802082d",
+    ),
+    (
+        "win-arm64",
+        "15d679b0baf8bb470c9fae155c0abc4ab752017b38f4cc71940314af565c53e2",
+    ),
+    (
+        "android-x64",
+        "596cbe4fd6cbb118a9f0576fa96f2c0f4476f7a85779e7f32d64888a6e4f1ddd",
+    ),
+    (
+        "android-arm64",
+        "4e510dd0757af1439107c23577fafdc854fac9c403a5a5b20f78ebf87097672c",
     ),
 ];
 
