@@ -574,20 +574,10 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value, ctx: Option<ToolCtx>) ->
         }));
     }
 
-    // SSRF guard on the seed — the fetch tool has one, the crawl
-    // tool must too (it fetches just as hard).
+    // Centralized SSRF guard on the seed.
     if !url.is_empty() {
-        match url::Url::parse(&url) {
-            Ok(u) => {
-                if let Some(host) = u.host_str()
-                    && crate::fetch::guards::is_ssrf_host(host)
-                {
-                    return tool_error(format!(
-                        "blocked: {host} is a private/loopback address — SSRF guard"
-                    ));
-                }
-            }
-            Err(_) => return tool_error(format!("invalid URL: {url}")),
+        if let Err(e) = crate::fetch::guards::validate_url_basic(&url) {
+            return tool_error(format!("{e}"));
         }
     }
 
@@ -1337,16 +1327,11 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
     // GET targets — never route them at the browser.
     let adapter_host = adapter_used.is_some();
 
-    // SSRF guard: never fetch private/loopback addresses.
-    let parsed = match url::Url::parse(&url) {
-        Ok(u) => u,
-        Err(_) => return tool_error(format!("invalid URL: {url}")),
-    };
-    if let Some(host) = parsed.host_str()
-        && crate::fetch::guards::is_ssrf_host(host)
-    {
+    // Centralized SSRF guard (sync part): scheme, credentials, localhost/private literals.
+    // DNS-resolved private addresses are checked at transport/browser layers.
+    if let Err(e) = crate::fetch::guards::validate_url_basic(&url) {
         return tool_error_structured(
-            format!("blocked: {host} is a private/loopback address — SSRF guard"),
+            format!("{e}"),
             "permanent",
             Some(json!({
                 "url": url,
@@ -2122,7 +2107,9 @@ async fn ghost_escalate(
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
             .collect();
-        let p = std::env::temp_dir().join(format!("donsetch-dom-{safe}.html"));
+        let dir = crate::paths::cache_dir().join("ghost-debug");
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join(format!("dom-{safe}.html"));
         let _ = std::fs::write(&p, &page.html);
         eprintln!(
             "[ghost_escalate] dom={}B dumped to {}",
@@ -2512,6 +2499,25 @@ async fn fetch_with_actions(
             );
         }
     };
+    // Post-action navigation guard: actions like click can cause the
+    // browser to navigate to a new URL (href, form submit). Re-check
+    // the current URL via the centralized SSRF gate (async DNS,
+    // fail-closed for browser tier).
+    if let Ok(cur) = g.current_url().await
+        && !cur.is_empty()
+        && !cur.starts_with("about:")
+        && let Err(e) = crate::fetch::guards::ensure_url_safe(&cur).await
+    {
+        return tool_error_structured(
+            format!("blocked after action navigation: {e}"),
+            "permanent",
+            Some(json!({
+                "url": cur,
+                "escalation": trace.value(),
+                "next_action": "action caused navigation to a private/loopback URL — blocked",
+            })),
+        );
+    }
     if let Some(p) = shot {
         let _ = g.screenshot(p).await;
     }

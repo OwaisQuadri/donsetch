@@ -19,7 +19,8 @@
 //
 // If vendor/pdfium/lib does not contain the library for the target,
 // we download and unpack the pinned release with curl/tar. The SHA-256
-// of the downloaded tarball is verified against a pinned map when present.
+// of the downloaded tarball is verified against a pinned map and is
+// required — builds refuse to download when no pinned hash exists.
 
 use std::env;
 use std::fs;
@@ -37,7 +38,8 @@ const PDFIUM_STATIC_TAG: &str = "chromium/7809";
 /// are Chromium 149-era PDFium builds.
 const PDFIUM_SHARED_TAG: &str = "chromium/7802";
 
-/// sha256 of the pinned tarball per platform "os-arch". Verified on download;
+/// sha256 of the pinned tarball per platform "os-arch". Verified on download and required;
+/// builds fail before any network download if no entry exists.
 /// entries are filled as each platform's artifact is prepped for CI.
 const KNOWN_HASHES: &[(&str, &str)] = &[(
     "linux-x64",
@@ -341,12 +343,32 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
         )
     };
 
+    let pinned_hash = KNOWN_HASHES
+        .iter()
+        .find(|(p, _)| *p == pair)
+        .map(|(_, h)| *h)
+        .unwrap_or_else(|| {
+            panic!(
+                "pdfium: no pinned sha256 for {pair} — refusing unverified download. \
+                Build from source with a vendored pdfium, or add an audited hash to KNOWN_HASHES in build.rs"
+            )
+        });
+
     let tgz = vendored.join(&tgz_name);
     let _ = fs::create_dir_all(vendored);
 
     eprintln!("donsetch build: fetching pdfium {pair} from {url}");
     let status = Command::new("curl")
-        .args(["-fSL", "--retry", "3", "-o"])
+        .args([
+            "-fSL",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--retry",
+            "3",
+            "-o",
+        ])
         .arg(&tgz)
         .arg(&url)
         .status()
@@ -357,23 +379,15 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
         panic!("pdfium: curl download failed for {url}");
     }
 
-    if let Some(hash) = KNOWN_HASHES
-        .iter()
-        .find(|(p, _)| *p == pair)
-        .map(|(_, h)| *h)
-    {
-        let mut f = fs::File::open(&tgz).expect("pdfium: cannot open downloaded tarball");
-        let mut buf = Vec::with_capacity(8 * 1024 * 1024);
-        f.read_to_end(&mut buf)
-            .expect("pdfium: cannot read tarball");
-        let got = sha256_hex(&buf);
-        assert_eq!(
-            got, hash,
-            "pdfium: sha256 mismatch for {pair} (expected {hash}, got {got})"
-        );
-    } else {
-        eprintln!("donsetch build: no pinned sha256 for pdfium {pair} yet (unverified download)");
-    }
+    let mut f = fs::File::open(&tgz).expect("pdfium: cannot open downloaded tarball");
+    let mut buf = Vec::with_capacity(8 * 1024 * 1024);
+    f.read_to_end(&mut buf)
+        .expect("pdfium: cannot read tarball");
+    let got = sha256_hex(&buf);
+    assert_eq!(
+        got, pinned_hash,
+        "pdfium: sha256 mismatch for {pair} (expected {pinned_hash}, got {got})"
+    );
 
     let status = Command::new("tar")
         .arg("xzf")

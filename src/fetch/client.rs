@@ -131,6 +131,12 @@ impl Fetcher {
         use_jar: bool,
         referer: Option<&str>,
     ) -> Result<FetchOutcome, FetchError> {
+        // Centralized URL safety gate (fetch tier). Every fetch target,
+        // including explicit proxy lanes, env proxies, and every
+        // redirect hop, is validated via the async DNS-aware gate.
+        // Rejects non-http(s), credentials, localhost/private literals
+        // and DNS-resolved private addresses before any network.
+        crate::fetch::guards::ensure_url_safe(url_str).await?;
         let started = Instant::now();
 
         // Fresh-window cache hit: no request at all (browser-true).
@@ -231,27 +237,26 @@ impl Fetcher {
                     };
                     let base = url::Url::parse(&current)
                         .map_err(|_| FetchError::InvalidUrl(current.clone()))?;
-                    let next = base
-                        .join(&loc)
-                        .map_err(|_| FetchError::Http(format!("bad redirect target: {loc}")))?;
-                    if !matches!(next.scheme(), "http" | "https") {
-                        // Non-web scheme (file://, ftp://, …):
-                        // returned honestly, not followed.
-                        out.elapsed = started.elapsed();
-                        out.redirects = redirects;
-                        return Ok(out);
-                    }
-                    // SSRF guard on EVERY hop: a public URL that
-                    // redirects into a private network must not
-                    // be followed (the initial-URL-only check is
-                    // trivially bypassable otherwise).
-                    if let Some(h) = next.host_str()
-                        && crate::fetch::guards::is_ssrf_host(h)
-                    {
-                        return Err(FetchError::Http(format!(
-                            "redirect to private/loopback address blocked: {h} — SSRF guard"
-                        )));
-                    }
+                    // Centralized redirect SSRF guard — validates scheme,
+                    // credentials and host, and rejects private literals.
+                    // Non-http(s) redirects are returned honestly, not followed.
+                    // Every redirect hop also passes through the async DNS-aware
+                    // gate so private DNS results fail closed even on redirects.
+                    let next = match crate::fetch::guards::validate_redirect_url(&base, &loc) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            // Non-web scheme: return honestly per original
+                            // behavior (file://, ftp:// etc. not followed).
+                            if e.to_string().contains("non-http") {
+                                out.elapsed = started.elapsed();
+                                out.redirects = redirects;
+                                return Ok(out);
+                            }
+                            return Err(e);
+                        }
+                    };
+                    // DNS-aware validation for the redirect target (fail-closed).
+                    crate::fetch::guards::ensure_url_safe(next.as_str()).await?;
                     current = next.to_string();
                 }
                 _ => {
@@ -309,6 +314,11 @@ impl Fetcher {
         use_jar: bool,
         referer: Option<&str>,
     ) -> Result<FetchOutcome, FetchError> {
+        // Centralized gate ensures credentials/host checks even for
+        // direct fetch_once calls (e.g. tests, internal callers).
+        // Includes DNS resolution — every target, including proxy
+        // lanes, is checked before any TCP connect.
+        crate::fetch::guards::ensure_url_safe(url_str).await?;
         let url = url::Url::parse(url_str).map_err(|_| FetchError::InvalidUrl(url_str.into()))?;
         let scheme = url.scheme();
         if scheme != "http" && scheme != "https" {

@@ -38,6 +38,7 @@ tar = "0.4"
 semver = "1"
 # Agent CLI: spec-driven command generation (builder API, no derive).
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions"] }
+psl = { version = "=2.1.226" }
 # Semantic reranker — cross-encoder via ONNX Runtime, shares ort with OCR.
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native", "copy-dylibs"], optional = true }
 tokenizers = { version = "0.23", default-features = false, features = ["onig"], optional = true }

@@ -14,7 +14,16 @@ DonSeTch gives AI agents web research from a single local process — fetch any 
 npm install -g donsetch
 ```
 
-Downloads the prebuilt binary for your platform from [GitHub Releases](https://github.com/dondai44423/donsetch/releases) with SHA256 verification.
+> **Prebuilt install is currently disabled — build from source is required.** The installer in `npm/install.js` verifies release tarballs only against a source-controlled `PINNED_SHA256` map. This repository currently contains no independently audited hashes, so the map is empty and the installer fails closed before any download. A checksum file (e.g. `*.sha256`) hosted alongside the tarball on the same GitHub release is **not** trusted for authorization (same origin) and is never used. Until audited hashes are pinned, `npm install -g donsetch` will not fetch a binary — build from source instead:
+>
+> ```bash
+> git clone https://github.com/dondai44423/donsetch.git
+> cd donsetch && cargo build --release
+> ```
+>
+> To enable prebuilt installs in a future version, add independently audited SHA256 entries to `PINNED_SHA256` in `npm/install.js` — no code change beyond the map is needed.
+
+When hashes are pinned, the installer will download the asset for your platform from [GitHub Releases](https://github.com/dondai44423/donsetch/releases) and verify it against the pinned hash:
 
 | Platform | Binary |
 |---|---|

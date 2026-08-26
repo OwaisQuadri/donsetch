@@ -2,12 +2,22 @@
 'use strict';
 
 // donsetch postinstall: download the prebuilt binary for this platform
-// from GitHub Releases, verify SHA256, and extract to ./binaries/.
+// from GitHub Releases, verify SHA256 against a source-controlled pinned
+// hash, and extract to ./binaries/.
 //
 // The binary is NOT bundled in the npm package — it's fetched at
 // install time from the GitHub release matching this package version.
 // This keeps the npm registry clean (no 35 MB binary tarballs) and
 // uses the same release artifacts that manual users download.
+//
+// Hardening: tarball SHA256 is verified ONLY against PINNED_SHA256 below.
+// A checksum file hosted alongside the tarball on the same GitHub release
+// is NOT trusted for authorization (same origin, no independent audit) and
+// is therefore never fetched or used. If no pinned hash exists for the
+// current platform the installer fails closed before any download and
+// instructs the user to build from source. To enable prebuilt installs for
+// a future release, add independently audited SHA256 entries to
+// PINNED_SHA256 (one per release asset).
 //
 // Supported platforms:
 //   linux-x64      Linux x86_64 (glibc)
@@ -25,6 +35,26 @@ const { execFileSync } = require('child_process');
 const REPO = 'dondai44423/donsetch';
 const VERSION = require('./package.json').version;
 const TAG = `v${VERSION}`;
+
+// ── source-controlled pinned hashes ─────────────────────────────
+// Map of platform key -> hex SHA256 of the release tarball asset.
+// This repository currently contains no independently audited npm
+// release hashes, so the map is intentionally empty. The installer
+// fails closed when the current platform has no entry (see top-level
+// check below, before any download or cached-binary reuse). To enable
+// prebuilt installs, add audited entries:
+//
+//   const PINNED_SHA256 = {
+//     'linux-x64':    '<64-hex-sha256-of-donsetch-linux-x64.tar.gz>',
+//     'linux-arm64':  '<64-hex-sha256-of-donsetch-linux-arm64.tar.gz>',
+//     'darwin-arm64': '<64-hex-sha256-of-donsetch-darwin-arm64.tar.gz>',
+//     'darwin-x64':   '<64-hex-sha256-of-donsetch-darwin-x64.tar.gz>',
+//     'win32-x64':    '<64-hex-sha256-of-donsetch-win32-x64.tar.gz>',
+//   };
+//
+// Do not invent or reuse a checksum downloaded from the GitHub release
+// itself — only add hashes that have been independently audited.
+const PINNED_SHA256 = {};
 
 // ── platform mapping ────────────────────────────────────────────
 const PLATFORMS = {
@@ -127,6 +157,24 @@ if (process.platform === 'linux') {
 const binDir = path.join(__dirname, 'binaries');
 const binaryPath = path.join(binDir, plat.binary);
 
+// Fail closed before any network download — and before accepting an
+// existing/cached binary — if no pinned hash exists for this platform. A
+// checksum file hosted alongside the tarball on the same GitHub release
+// is not trusted for authorization (same origin, no independent audit).
+const expectedHash = PINNED_SHA256[platKey];
+if (!expectedHash) {
+  console.error(`donsetch: no pinned SHA256 hash for ${platKey} (${plat.asset}) in this version of the installer.`);
+  console.error('The checksum file hosted alongside the release tarball on GitHub (e.g. *.sha256) is downloaded from the same origin as the tarball itself and is therefore not trusted for authorization.');
+  console.error('Prebuilt binary download is disabled until an independently audited hash is pinned in npm/install.js (PINNED_SHA256).');
+  console.error('');
+  console.error('Build from source instead:');
+  console.error(`  git clone https://github.com/${REPO}.git`);
+  console.error('  cd donsetch && cargo build --release');
+  console.error('');
+  console.error('See npm/README.md and https://github.com/' + REPO + '#-install for details.');
+  process.exit(1);
+}
+
 // Skip if already installed (npm cache reuse, reinstall, etc.).
 // A plausibility check first: a stale 0-byte or truncated leftover
 // (killed install, crashed download) must not shadow a fresh one.
@@ -145,7 +193,6 @@ fs.mkdirSync(binDir, { recursive: true });
 
 const baseUrl = `https://github.com/${REPO}/releases/download/${TAG}`;
 const assetUrl = `${baseUrl}/${plat.asset}`;
-const checksumUrl = `${baseUrl}/${plat.asset}.sha256`;
 
 // ── download with redirect following (max 5 hops) ───────────────
 function download(url, dest) {
@@ -191,7 +238,6 @@ function download(url, dest) {
 // ── main ────────────────────────────────────────────────────────
 async function main() {
   const tarball = path.join(binDir, plat.asset);
-  const checksumFile = path.join(binDir, 'checksum.sha256');
 
   // 0. Windows: tar ships with Windows 10 1803+; older boxes lack it.
   //    Detect BEFORE downloading so the error names the real problem.
@@ -210,35 +256,29 @@ async function main() {
   console.log(`donsetch: downloading ${plat.asset} from ${TAG}...`);
   await download(assetUrl, tarball);
 
-  // 2. Download the SHA256 checksum
+  // 2. Verify SHA256 against the pinned hash (source-controlled)
   console.log('donsetch: verifying checksum...');
-  await download(checksumUrl, checksumFile);
-
-  // 3. Verify SHA256
-  const expectedHash = fs.readFileSync(checksumFile, 'utf8').trim().split(/\s+/)[0];
   const actualHash = crypto.createHash('sha256').update(fs.readFileSync(tarball)).digest('hex');
 
   if (actualHash !== expectedHash) {
     try { fs.unlinkSync(tarball); } catch (_) {}
-    try { fs.unlinkSync(checksumFile); } catch (_) {}
     console.error(`donsetch: SHA256 mismatch!`);
-    console.error(`  expected: ${expectedHash}`);
-    console.error(`  actual:   ${actualHash}`);
+    console.error(`  expected (pinned): ${expectedHash}`);
+    console.error(`  actual:            ${actualHash}`);
     console.error('The download may have been corrupted or tampered with.');
     process.exit(1);
   }
 
-  // 4. Extract (tar is built into Linux, macOS, and Windows 10+)
+  // 3. Extract (tar is built into Linux, macOS, and Windows 10+)
   console.log('donsetch: extracting...');
   // execFileSync: no shell, no string interpolation — the install
   // path (which can contain quotes/spaces) is passed as argv.
   execFileSync('tar', ['xzf', tarball, '-C', binDir], { stdio: 'inherit' });
 
-  // 5. Cleanup
+  // 4. Cleanup
   try { fs.unlinkSync(tarball); } catch (_) {}
-  try { fs.unlinkSync(checksumFile); } catch (_) {}
 
-  // 6. Verify the binary exists after extraction (BEFORE chmod —
+  // 5. Verify the binary exists after extraction (BEFORE chmod —
   //    chmod on a missing file throws an opaque error).
   if (!fs.existsSync(binaryPath)) {
     console.error(`donsetch: expected ${plat.binary} not found after extraction`);
@@ -247,7 +287,7 @@ async function main() {
     process.exit(1);
   }
 
-  // 7. Make executable (Unix only)
+  // 6. Make executable (Unix only)
   if (process.platform !== 'win32') {
     fs.chmodSync(binaryPath, 0o755);
   }

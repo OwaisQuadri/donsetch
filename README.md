@@ -33,6 +33,8 @@ Works with **Claude Code**, **Cursor**, **OpenCode**, **Pi**, **Windsurf**, and 
 npm install -g donsetch
 ```
 
+> **Note:** npm prebuilt install is currently disabled — `npm/install.js` contains an empty `PINNED_SHA256` map with no independently audited hashes, so the installer fails closed before any download (a checksum file from the same GitHub release is not trusted). **Build from source is required** until hashes are pinned. See [Install](#-install).
+
 <div align="center">
 
 [Install](#-install) · [Two ways to use it](#-two-ways-to-use-it) · [The 3 tools](#-the-3-tools) · [Chrome TLS](#-chrome-tls-not-chrome-like) · [Solve & Bounce](#-solve-and-bounce) · [Search](#-keyless-search) · [PDF](#-pdf--ocr) · [Benchmark](#-wrb-web-research-benchmark) · [Comparison](#-comparison) · [Gotchas](#-gotchas) · [Limits](#-honest-limits)
@@ -106,15 +108,17 @@ Four things no free (or paid) competitor has, plus a stack of agent-first mechan
 
 ## 📦 Install
 
-### Option 1 — npm (recommended)
+### Option 1 — npm (currently disabled — build from source required)
 
 ```bash
 npm install -g donsetch
 ```
 
-Downloads the prebuilt binary for your platform from GitHub Releases with SHA256 verification. No build tools needed.
+> **Prebuilt install is currently disabled.** The npm installer (`npm/install.js`) verifies release tarballs only against a source-controlled `PINNED_SHA256` map. This repository currently contains no independently audited hashes, so the map is empty and the installer fails closed **before any download**, emitting an error that explains a checksum file downloaded from the same GitHub release is not trusted for authorization. Until audited hashes are pinned, `npm install -g donsetch` will not fetch a binary — **build from source is required** (see Option 4). To re-enable prebuilt installs, add independently audited SHA256 entries to `PINNED_SHA256` in `npm/install.js`; no other code change is needed.
+>
+> When re-enabled, the installer will download the prebuilt binary for your platform from GitHub Releases and verify it against the pinned hash. No build tools will be needed then.
 
-| Platform | Binary |
+| Platform | Binary (used when hashes are pinned) |
 |---|---|
 | Linux x86_64 | `donsetch-linux-x64.tar.gz` |
 | Linux arm64 | `donsetch-linux-arm64.tar.gz` |
