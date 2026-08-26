@@ -155,7 +155,6 @@ fn render(
     }
 }
 
-
 /// Render an element's children into a fresh markdown string,
 /// preserving nested inline formatting (links, bold, emphasis).
 /// Used where a formatted element contains other formatted
@@ -164,12 +163,7 @@ fn render(
 struct RenderInner;
 
 impl RenderInner {
-    fn run(
-        c: ElementRef<'_>,
-        base: &str,
-        opts: &super::ExtractOptions,
-        depth: usize,
-    ) -> String {
+    fn run(c: ElementRef<'_>, base: &str, opts: &super::ExtractOptions, depth: usize) -> String {
         let mut t = String::new();
         let mut total = 0usize;
         let mut link = 0usize;

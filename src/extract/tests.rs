@@ -2032,15 +2032,7 @@ fn v3_nested_inline_formatting_preserves_links() {
     // Case D: em > strong. Bold survives inside emphasis.
     assert!(m.contains("*D **E** F*"), "D: {}", m);
     // Case G: em > link. Link survives inside emphasis.
-    assert!(
-        m.contains("*G [H](https://example.com/h) I*"),
-        "G: {}",
-        m
-    );
+    assert!(m.contains("*G [H](https://example.com/h) I*"), "G: {}", m);
     // Case J: strong > link.
-    assert!(
-        m.contains("**[J](https://example.com/j)**"),
-        "J: {}",
-        m
-    );
+    assert!(m.contains("**[J](https://example.com/j)**"), "J: {}", m);
 }
