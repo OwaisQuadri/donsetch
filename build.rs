@@ -38,13 +38,20 @@ const PDFIUM_STATIC_TAG: &str = "chromium/7809";
 /// are Chromium 149-era PDFium builds.
 const PDFIUM_SHARED_TAG: &str = "chromium/7802";
 
-/// sha256 of the pinned tarball per platform "os-arch". Verified on download and required;
-/// builds fail before any network download if no entry exists.
-/// entries are filled as each platform's artifact is prepped for CI.
-const KNOWN_HASHES: &[(&str, &str)] = &[(
-    "linux-x64",
-    "13908bb2d40a6e017c4c5a6a7baecc6efd7b1c30392c8a79e80072d2b48b18eb",
-)];
+/// sha256 of the pinned tarball per platform "os-arch".
+/// Verified on download and required; builds fail before any network download if no entry exists.
+/// linux-x64 and linux-arm64 values are verified against the Sigstore/SLSA attestation for kognitos/pdfium-static chromium/7809; release sidecar checksum files alone are not authorization.
+/// entries are filled as each platform artifact is prepped for CI.
+const KNOWN_HASHES: &[(&str, &str)] = &[
+    (
+        "linux-x64",
+        "13908bb2d40a6e017c4c5a6a7baecc6efd7b1c30392c8a79e80072d2b48b18eb",
+    ),
+    (
+        "linux-arm64",
+        "abe1c3d5b168ec2baaafc7a8fcddfda1a09417f39199c7993fd28d34d3a7f70e",
+    ),
+];
 
 fn main() {
     // Declare the custom cfg so rustc doesn't warn about it.
