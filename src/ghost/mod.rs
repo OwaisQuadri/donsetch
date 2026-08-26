@@ -1322,6 +1322,39 @@ fn sweep_crashpad() {
 #[cfg(not(linux_like))]
 fn sweep_crashpad() {}
 
+/// Minimal base64 decode (avoids a dep for one call).
+fn b64decode(s: &[u8]) -> Vec<u8> {
+    fn val(b: u8) -> u8 {
+        match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => 0,
+        }
+    }
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let clean: Vec<u8> = s
+        .iter()
+        .copied()
+        .filter(|b| !b"=\n\r ".contains(b))
+        .collect();
+    for chunk in clean.chunks(4) {
+        if chunk.len() < 4 {
+            break;
+        }
+        let n = ((val(chunk[0]) as u32) << 18)
+            | ((val(chunk[1]) as u32) << 12)
+            | ((val(chunk[2]) as u32) << 6)
+            | (val(chunk[3]) as u32);
+        out.push((n >> 16) as u8);
+        out.push((n >> 8) as u8);
+        out.push(n as u8);
+    }
+    out
+}
+
 #[cfg(test)]
 mod sandbox_tests {
     use super::*;
@@ -1358,37 +1391,4 @@ mod sandbox_tests {
             None => unsafe { std::env::remove_var("DONGHOST_NO_SANDBOX") },
         }
     }
-}
-
-/// Minimal base64 decode (avoids a dep for one call).
-fn b64decode(s: &[u8]) -> Vec<u8> {
-    fn val(b: u8) -> u8 {
-        match b {
-            b'A'..=b'Z' => b - b'A',
-            b'a'..=b'z' => b - b'a' + 26,
-            b'0'..=b'9' => b - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => 0,
-        }
-    }
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
-    let clean: Vec<u8> = s
-        .iter()
-        .copied()
-        .filter(|b| !b"=\n\r ".contains(b))
-        .collect();
-    for chunk in clean.chunks(4) {
-        if chunk.len() < 4 {
-            break;
-        }
-        let n = ((val(chunk[0]) as u32) << 18)
-            | ((val(chunk[1]) as u32) << 12)
-            | ((val(chunk[2]) as u32) << 6)
-            | (val(chunk[3]) as u32);
-        out.push((n >> 16) as u8);
-        out.push((n >> 8) as u8);
-        out.push(n as u8);
-    }
-    out
 }

@@ -117,12 +117,12 @@ pub fn resolve_screenshot_path(input: &str) -> Result<PathBuf, String> {
 
     // Final post-create canonical check: parent must still be under root
     // (catches race where a symlink was created between checks).
-    if let Ok(canon_final) = std::fs::canonicalize(parent) {
-        if !is_below_root(&canon_final, &canon_root) {
-            return Err(format!(
-                "screenshot path parent escapes allowed root after creation: `{trimmed}`"
-            ));
-        }
+    if let Ok(canon_final) = std::fs::canonicalize(parent)
+        && !is_below_root(&canon_final, &canon_root)
+    {
+        return Err(format!(
+            "screenshot path parent escapes allowed root after creation: `{trimmed}`"
+        ));
     }
 
     // Harden: reject existing destination that is itself a symlink, or
@@ -133,14 +133,14 @@ pub fn resolve_screenshot_path(input: &str) -> Result<PathBuf, String> {
         if meta.file_type().is_symlink() {
             return Err(format!("screenshot destination is a symlink: `{trimmed}`"));
         }
-        if let Ok(canon_dest) = std::fs::canonicalize(&dest) {
-            if !is_below_root(&canon_dest, &canon_root) {
-                return Err(format!(
-                    "screenshot destination escapes allowed root: `{trimmed}` -> {} not under {}",
-                    canon_dest.display(),
-                    canon_root.display()
-                ));
-            }
+        if let Ok(canon_dest) = std::fs::canonicalize(&dest)
+            && !is_below_root(&canon_dest, &canon_root)
+        {
+            return Err(format!(
+                "screenshot destination escapes allowed root: `{trimmed}` -> {} not under {}",
+                canon_dest.display(),
+                canon_root.display()
+            ));
         }
     }
 
@@ -285,35 +285,35 @@ mod tests {
         {
             use std::os::unix::fs::symlink;
             let _ = symlink(&outside_file, &dest_link);
-            if let Ok(meta) = std::fs::symlink_metadata(&dest_link) {
-                if meta.file_type().is_symlink() {
-                    // relative input resolving to the symlink
-                    let err = resolve_screenshot_path("evil-dest-symlink.png").unwrap_err();
+            if let Ok(meta) = std::fs::symlink_metadata(&dest_link)
+                && meta.file_type().is_symlink()
+            {
+                // relative input resolving to the symlink
+                let err = resolve_screenshot_path("evil-dest-symlink.png").unwrap_err();
+                assert!(
+                    err.contains("symlink")
+                        || err.contains("outside")
+                        || err.contains("escapes")
+                        || err.contains("allowed root"),
+                    "got: {err}"
+                );
+                // absolute input resolving to the same symlink
+                let err2 = resolve_screenshot_path(dest_link.to_str().unwrap()).unwrap_err();
+                assert!(
+                    err2.contains("symlink")
+                        || err2.contains("outside")
+                        || err2.contains("escapes")
+                        || err2.contains("allowed root"),
+                    "got: {err2}"
+                );
+                // sanity: canonical destination is outside the screenshots root
+                if let Ok(canon_dest) = std::fs::canonicalize(&dest_link) {
+                    let canon_root =
+                        std::fs::canonicalize(&screenshots).unwrap_or_else(|_| screenshots.clone());
                     assert!(
-                        err.contains("symlink")
-                            || err.contains("outside")
-                            || err.contains("escapes")
-                            || err.contains("allowed root"),
-                        "got: {err}"
+                        !is_below_root(&canon_dest, &canon_root),
+                        "canon_dest {canon_dest:?} should be outside {canon_root:?}"
                     );
-                    // absolute input resolving to the same symlink
-                    let err2 = resolve_screenshot_path(dest_link.to_str().unwrap()).unwrap_err();
-                    assert!(
-                        err2.contains("symlink")
-                            || err2.contains("outside")
-                            || err2.contains("escapes")
-                            || err2.contains("allowed root"),
-                        "got: {err2}"
-                    );
-                    // sanity: canonical destination is outside the screenshots root
-                    if let Ok(canon_dest) = std::fs::canonicalize(&dest_link) {
-                        let canon_root = std::fs::canonicalize(&screenshots)
-                            .unwrap_or_else(|_| screenshots.clone());
-                        assert!(
-                            !is_below_root(&canon_dest, &canon_root),
-                            "canon_dest {canon_dest:?} should be outside {canon_root:?}"
-                        );
-                    }
                 }
             }
         }

@@ -575,10 +575,10 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value, ctx: Option<ToolCtx>) ->
     }
 
     // Centralized SSRF guard on the seed.
-    if !url.is_empty() {
-        if let Err(e) = crate::fetch::guards::validate_url_basic(&url) {
-            return tool_error(format!("{e}"));
-        }
+    if !url.is_empty()
+        && let Err(e) = crate::fetch::guards::validate_url_basic(&url)
+    {
+        return tool_error(format!("{e}"));
     }
 
     // Ghost-warm: if this host was tier-2 solved recently, the

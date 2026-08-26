@@ -271,9 +271,7 @@ impl CookieJar {
 
     /// Cookie header value for a request to `host` + `path`, if any match.
     pub fn header_for(&self, host: &str, path: &str) -> Option<String> {
-        let Some(normalized_host) = normalize_host(host) else {
-            return None;
-        };
+        let normalized_host = normalize_host(host)?;
         let now = now_secs();
         let mut pairs: Vec<&Cookie> = Vec::new();
         for c in &self.cookies {
