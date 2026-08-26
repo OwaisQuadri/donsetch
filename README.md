@@ -619,6 +619,61 @@ Every layer built in Rust. No dependency on existing OSS web tooling.
 
 ---
 
+## 🔬 WRB: Web Research Benchmark
+
+DonSeTch was benchmarked with [WRB](https://github.com/dondai44423/wrb), a tool-level benchmark that tests fetch, search, and crawl operations directly. No LLM required, pure string matching. Any web tool can run it by implementing a thin runner adapter.
+
+**48 fetch URLs across 3 difficulty tiers, 55 search queries across 11 niches, 5 crawl targets.**
+
+### Fetch
+
+| Metric | Result |
+|---|---|
+| Content retrieval | **95.8%** (46/48 URLs returned real content) |
+| Tier 1 (no anti-bot) | 100% (19/19) |
+| Tier 2 (mild protection) | 100% (16/16) |
+| Tier 3 (aggressive anti-bot) | 84.6% (11/13) |
+| Stealth score (tier-weighted) | 93.3% |
+| Speed (median) | 772ms |
+| Speed (P90) | 5,200ms |
+| Token efficiency | 1,105 tokens/page |
+| False positives | **0** (never claimed success on a bot wall) |
+
+Tier 3 covers Cloudflare, Akamai, Datadome, and PerimeterX protected sites. The 2 misses (Etsy/Cloudflare, Target/Akamai) were honest failures: empty content, no false success claim.
+
+### Search
+
+| Metric | Result |
+|---|---|
+| Precision (answer found) | **96.4%** (53/55) |
+| Recall (expected domain in top 5) | 81.8% (45/55) |
+| Coverage | 100% (every query returned results) |
+| Speed (median) | 1,356ms |
+| Token efficiency | 802 tokens/query |
+
+### Crawl
+
+| Metric | Result |
+|---|---|
+| Precision (relevant pages) | 74.3% |
+| Pages crawled | 67 across 5 targets |
+| Coverage | Being refined (known-relevant URL sets updated) |
+
+<details><summary>How WRB works</summary>
+
+WRB tests the tool layer, not the agent layer. No LLM, no reasoning, no multi-step planning. Each fetch URL has a reference probe string that must appear in the returned content. Each search query has expected domains and answer snippets. Each crawl target has known-relevant URLs.
+
+Metrics no other benchmark measures:
+- **Honesty**: does the tool claim success when it actually got a bot wall? WRB tracks false positives. DonSeTch scored 0.
+- **Tier-weighted stealth**: getting past Cloudflare counts more than getting past Wikipedia. Easy sites don't inflate the score.
+- **Token efficiency at the tool level**: context window is the bottleneck for agents. Less tokens per result = more room for reasoning.
+
+Run it yourself: `git clone https://github.com/dondai44423/wrb && python3 lib/wrb.py donsetch --verbose`
+
+</details>
+
+---
+
 ## 📊 Comparison
 
 | | **DonSeTch** | Hound | Crawl4AI | Jina Reader | Firecrawl |
