@@ -9,11 +9,11 @@ use std::net::IpAddr;
 /// True if the URL's host is a private/loopback/link-local
 /// address that must never be fetched (SSRF guard).
 ///
-/// Handles literal IPs and well-known localhost names. For
-/// DNS hostnames we can't know the IP without resolution, so
-/// we only block obvious names — the transport layer's
-/// Happy Eyeballs will resolve and connect; private IPs
-/// from DNS are an accepted risk for a client-side tool.
+/// Handles literal IPs and well-known localhost names. This
+/// is a synchronous helper that only handles literal/obvious
+/// names — hostname DNS safety is enforced by the async
+/// `ensure_url_safe` which resolves hostnames and rejects
+/// private addresses.
 pub fn is_ssrf_host(host: &str) -> bool {
     // url::Url::host_str() keeps brackets on IPv6 literals —
     // strip them so the IP parser actually sees an IP.
@@ -51,8 +51,15 @@ fn is_private_ip(ip: &IpAddr) -> bool {
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                || (v4.octets()[0] == 198 && (v4.octets()[1] == 18 || v4.octets()[1] == 19)) // 198.18.0.0/15 benchmarking
+                || (v4.octets()[0] >= 240) // 240.0.0.0/4 reserved
+                || (v4.octets()[0] == 0) // 0.0.0.0/8 (software)
                 // Carrier-grade NAT: 100.64.0.0/10
                 || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 0x40)
+                // 192.88.99.0/24 (6to4 relay anycast) — deprecated/reserved
+                || (v4.octets()[0] == 192 && v4.octets()[1] == 88 && v4.octets()[2] == 99)
         }
         IpAddr::V6(v6) => {
             // IPv4-mapped (::ffff:a.b.c.d) is the v4 address —
@@ -60,14 +67,153 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return is_private_ip(&IpAddr::V4(v4));
             }
+            // IPv4-compat ::a.b.c.d (deprecated) also maps.
+            if let Some(v4) = v6.to_ipv4() {
+                // to_ipv4 returns Some for ::ffff: and :: forms;
+                // if we already handled mapped, this catches compat.
+                // Only treat as v4 if the v6 is in ::/96 compat range.
+                let segs = v6.segments();
+                if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0 && segs[4] == 0 {
+                    return is_private_ip(&IpAddr::V4(v4));
+                }
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
+                || v6.is_multicast()
                 // Link-local: fe80::/10
                 || (v6.segments()[0] & 0xffc0) == 0xfe80
                 // Unique local: fc00::/7
                 || (v6.segments()[0] & 0xfe00) == 0xfc00
+                // Documentation: 2001:db8::/32
+                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
+                // Benchmarking / reserved etc.: treat 0100::/64? Use generic reserved check via multicast+unspecified already.
+                // Discard prefix 100::/64 is also reserved.
+                || (v6.segments()[0] == 0x0100)
         }
     }
+}
+
+/// Centralized URL safety check (synchronous part).
+///
+/// Validates:
+/// - scheme is http or https only
+/// - no credentials in URL (username/password)
+/// - host present and not SSRF (literal IP ranges, localhost names)
+/// - does NOT do DNS resolution (use `ensure_url_safe` for that)
+///
+/// Returns the parsed Url on success, or a FetchError that the
+/// caller should surface directly. This is the single sync gate
+/// used by both fetch and browser tiers.
+pub fn validate_url_basic(url_str: &str) -> Result<url::Url, crate::error::FetchError> {
+    let url = url::Url::parse(url_str)
+        .map_err(|_| crate::error::FetchError::InvalidUrl(url_str.into()))?;
+    let scheme = url.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(crate::error::FetchError::Http(format!(
+            "blocked: scheme {scheme} not allowed — only http/https"
+        )));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(crate::error::FetchError::Http(
+            "blocked: URL contains credentials — SSRF guard".into(),
+        ));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| crate::error::FetchError::InvalidUrl(url_str.into()))?;
+    if is_ssrf_host(host) {
+        return Err(crate::error::FetchError::Http(format!(
+            "blocked: {host} is a private/loopback address — SSRF guard"
+        )));
+    }
+    // Also check host_str for bracketed IPv6 that Url keeps brackets on? is_ssrf_host handles it.
+    Ok(url)
+}
+
+/// Async URL safety check that includes DNS resolution.
+///
+/// Does everything `validate_url_basic` does, plus:
+/// - resolves the hostname via tokio::net::lookup_host
+/// - rejects if ANY resolved address is SSRF (private/loopback/etc.)
+/// - **fail-closed** on DNS resolution failure/timeout for
+///   network/browser navigation (the `ensure_url_safe` path).
+///   The synchronous `validate_url_basic` is the explicitly
+///   justified offline-only path (no DNS, no network) and is used
+///   by the fetch tier's initial literal check and by callers
+///   that deliberately defer DNS to the transport layer
+///   (`transport::tcp::happy_connect` re-validates at connect).
+///
+/// # DNS rebinding / TOCTOU limitation
+///
+/// This is a point-in-time check. DNS can change between this
+/// validation and the actual TCP connect (DNS rebinding / TOCTOU).
+/// The transport layer (`transport::tcp::happy_connect`) re-validates
+/// resolved addresses at connect time and filters private IPs, so
+/// an attacker that returns public at validation and private at
+/// connect is still blocked at connect. However, without full
+/// DNS pinning (reusing the validated IPs for the connect) there
+/// is a residual window between the two resolutions. Full pinning
+/// is not implemented; this is documented as a residual limitation.
+/// Redirects are re-validated per hop via `validate_redirect_url`
+/// (sync) and `ensure_url_safe` (async) where applicable.
+pub async fn ensure_url_safe(url_str: &str) -> Result<url::Url, crate::error::FetchError> {
+    let url = validate_url_basic(url_str)?;
+    let host: String = url.host_str().unwrap_or("").to_owned();
+    // Literal IP already blocked by validate_url_basic; only hostnames need DNS.
+    // Fail closed on resolution errors for browser/network navigation.
+    let port = url.port_or_known_default().unwrap_or(443);
+    let lookup = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::net::lookup_host((host.as_str(), port)),
+    )
+    .await;
+    match lookup {
+        Ok(Ok(addrs)) => {
+            let mut any = false;
+            for addr in addrs {
+                any = true;
+                if is_ssrf_ip(&addr.ip()) {
+                    return Err(crate::error::FetchError::Http(format!(
+                        "blocked: {host} resolves to private/loopback address {} — SSRF guard",
+                        addr.ip()
+                    )));
+                }
+            }
+            if !any {
+                return Err(crate::error::FetchError::Http(format!(
+                    "blocked: {host} DNS returned no addresses — fail-closed SSRF guard"
+                )));
+            }
+            Ok(url)
+        }
+        Ok(Err(e)) => Err(crate::error::FetchError::Http(format!(
+            "blocked: DNS resolution failed for {host}: {e} — fail-closed SSRF guard"
+        ))),
+        Err(_) => Err(crate::error::FetchError::Http(format!(
+            "blocked: DNS resolution timeout for {host} — fail-closed SSRF guard"
+        ))),
+    }
+}
+
+/// Validate a redirect target URL string relative to a base URL.
+/// Rejects non-http(s) schemes and SSRF hosts. Used per redirect hop.
+pub fn validate_redirect_url(
+    base: &url::Url,
+    location: &str,
+) -> Result<url::Url, crate::error::FetchError> {
+    let next = base
+        .join(location)
+        .map_err(|_| crate::error::FetchError::Http(format!("bad redirect target: {location}")))?;
+    if !matches!(next.scheme(), "http" | "https") {
+        return Err(crate::error::FetchError::Http(format!(
+            "blocked redirect to non-http(s) scheme: {}",
+            next.scheme()
+        )));
+    }
+    // Apply centralized validation to the joined URL so missing hosts
+    // and credentials are rejected consistently with direct fetches.
+    validate_url_basic(next.as_str())?;
+    Ok(next)
 }
 
 /// Header values must never carry CR/LF/NUL: a value smuggled
@@ -110,52 +256,40 @@ pub fn is_binary_content_type(ct: &str) -> bool {
             && !ct.contains("pdf")
 }
 
-/// True if the body is a PDF (magic bytes or content-type).
-/// PDFs are binary but are handled by the DonSheet engine, NOT
-/// rejected by the binary guard.
 pub fn is_pdf(body: &[u8], content_type: &str) -> bool {
     (body.len() >= 5 && body.starts_with(b"%PDF-")) || content_type.to_lowercase().contains("pdf")
 }
 
-/// True if the body starts with known binary magic bytes.
-/// Catches cases where the content-type is missing or wrong.
 pub fn is_binary_body(body: &[u8]) -> bool {
     if body.is_empty() {
         return false;
     }
-    // PDFs contain null bytes (binary streams, xref tables) but
-    // are NOT binary — the DonSheet engine handles them. Skip the
-    // null-byte heuristic entirely for PDFs.
     if body.starts_with(b"%PDF-") {
         return false;
     }
-    // Known binary magic bytes (common file signatures).
     const MAGIC: &[&[u8]] = &[
-        b"\x89PNG",          // PNG
-        b"\xff\xd8\xff",     // JPEG
-        b"GIF8",             // GIF
-        b"BM",               // BMP (2-byte)
-        b"\x1f\x8b",         // gzip
-        b"PK\x03\x04",       // ZIP / DOCX / XLSX
-        b"\x7fELF",          // ELF binary
-        b"\x00\x00\x01\x00", // ICO
-        b"\x00\x00\x02\x00", // CUR
-        b"RIFF",             // WAV/AVI
-        b"\x00asm",          // WASM
+        b"\x89PNG",
+        b"\xff\xd8\xff",
+        b"GIF8",
+        b"BM",
+        b"\x1f\x8b",
+        b"PK\x03\x04",
+        b"\x7fELF",
+        b"\x00\x00\x01\x00",
+        b"\x00\x00\x02\x00",
+        b"RIFF",
+        b"\x00asm",
     ];
     for m in MAGIC {
         if body.starts_with(m) {
             return true;
         }
     }
-    // Null bytes in the first 1024 bytes = almost certainly binary.
     let scan = &body[..body.len().min(1024)];
     let nulls = scan.iter().filter(|&&b| b == 0).count();
     nulls > 3 || (nulls > 0 && nulls as f64 / scan.len() as f64 > 0.01)
 }
 
-/// Combine both checks: is this content binary we should reject?
-/// PDFs are never binary — they're routed to the DonSheet engine.
 pub fn is_binary(body: &[u8], content_type: &str) -> bool {
     if is_pdf(body, content_type) {
         return false;
@@ -210,8 +344,6 @@ mod tests {
 
     #[test]
     fn ssrf_blocks_ipv4_mapped_v6() {
-        // url::Url::host_str() keeps brackets; the guard must see
-        // through them and treat mapped addresses as their v4 self.
         assert!(is_ssrf_host("[::ffff:127.0.0.1]"));
         assert!(is_ssrf_host("[::ffff:169.254.169.254]"));
         assert!(is_ssrf_host("[::ffff:10.0.0.1]"));
@@ -280,9 +412,8 @@ mod tests {
 
     #[test]
     fn pdf_not_binary_by_magic() {
-        // A PDF with null bytes in first 1024 bytes (binary xref stream).
         let mut pdf = b"%PDF-1.4\n".to_vec();
-        pdf.extend_from_slice(&[0x00; 200]); // null bytes — would trigger old heuristic
+        pdf.extend_from_slice(&[0x00; 200]);
         pdf.extend_from_slice(b"\n%%EOF\n");
         assert!(
             !is_binary_body(&pdf),
@@ -294,7 +425,6 @@ mod tests {
 
     #[test]
     fn pdf_not_binary_by_content_type() {
-        // Even if body has null bytes, content-type=application/pdf wins.
         let body = b"\x00\x00\x00\x00\x00\x00\x00\x00";
         assert!(!is_binary(body, "application/pdf"));
     }
@@ -305,5 +435,98 @@ mod tests {
         assert!(is_pdf(b"%PDF-1.4", "application/octet-stream"));
         assert!(is_pdf(b"not a pdf", "application/pdf"));
         assert!(!is_pdf(b"<html>", "text/html"));
+    }
+
+    // New centralized URL validation tests (task 2 regressions)
+    #[test]
+    fn validate_url_rejects_credentials() {
+        assert!(validate_url_basic("https://user:pass@example.com/").is_err());
+        assert!(validate_url_basic("https://user@example.com/").is_err());
+        assert!(validate_url_basic("https://example.com/").is_ok());
+    }
+
+    #[test]
+    fn validate_url_rejects_non_http() {
+        assert!(validate_url_basic("file:///etc/passwd").is_err());
+        assert!(validate_url_basic("ftp://example.com/file").is_err());
+        assert!(validate_url_basic("javascript:alert(1)").is_err());
+        assert!(validate_url_basic("data:text/html,hi").is_err());
+        assert!(validate_url_basic("http://example.com/").is_ok());
+        assert!(validate_url_basic("https://example.com/").is_ok());
+    }
+
+    #[test]
+    fn validate_url_blocks_localhost() {
+        assert!(validate_url_basic("http://localhost/").is_err());
+        assert!(validate_url_basic("http://127.0.0.1/").is_err());
+        assert!(validate_url_basic("http://[::1]/").is_err());
+        assert!(validate_url_basic("http://10.0.0.1/").is_err());
+        assert!(validate_url_basic("http://192.168.1.1/").is_err());
+    }
+
+    #[test]
+    fn validate_url_blocks_ipv4_mapped() {
+        assert!(validate_url_basic("http://[::ffff:127.0.0.1]/").is_err());
+        assert!(validate_url_basic("http://[::ffff:10.0.0.1]/").is_err());
+    }
+
+    #[test]
+    fn validate_url_blocks_multicast_and_reserved() {
+        assert!(is_ssrf_host("224.0.0.1"));
+        assert!(is_ssrf_host("239.255.255.250"));
+        assert!(is_ssrf_host("ff02::1"));
+        assert!(is_ssrf_host("192.0.2.1"));
+        assert!(is_ssrf_host("198.51.100.1"));
+        assert!(is_ssrf_host("203.0.113.1"));
+        assert!(validate_url_basic("http://224.0.0.1/").is_err());
+        assert!(validate_url_basic("http://192.0.2.1/").is_err());
+    }
+
+    #[test]
+    fn validate_url_allows_public() {
+        assert!(validate_url_basic("https://example.com/").is_ok());
+        assert!(validate_url_basic("https://93.184.216.34/").is_ok());
+        assert!(validate_url_basic("https://8.8.8.8/path?q=1").is_ok());
+    }
+
+    #[test]
+    fn validate_redirect_blocks_ssrf() {
+        let base = url::Url::parse("https://example.com/").unwrap();
+        assert!(validate_redirect_url(&base, "http://127.0.0.1/evil").is_err());
+        assert!(validate_redirect_url(&base, "http://10.0.0.1/").is_err());
+        assert!(validate_redirect_url(&base, "file:///etc/passwd").is_err());
+        assert!(validate_redirect_url(&base, "https://example.com/other").is_ok());
+        assert!(validate_redirect_url(&base, "/relative").is_ok());
+    }
+
+    #[tokio::test]
+    async fn ensure_url_safe_blocks_literal() {
+        assert!(ensure_url_safe("http://127.0.0.1/").await.is_err());
+        assert!(ensure_url_safe("http://[::1]/").await.is_err());
+        // Public literal IPs require no DNS and must pass.
+        assert!(ensure_url_safe("https://93.184.216.34/").await.is_ok());
+        assert!(ensure_url_safe("https://8.8.8.8/").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn ensure_url_safe_rejects_credentials() {
+        assert!(
+            ensure_url_safe("https://user:pass@example.com/")
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_url_safe_fail_closed_on_dns_error() {
+        // Non-existent hostname must fail closed, not silently allow.
+        // This proves we do not swallow DNS errors for browser tier.
+        let res = ensure_url_safe("https://this-host-does-not-exist-12345.invalid/").await;
+        assert!(res.is_err(), "non-resolvable host must fail closed, got Ok");
+        let msg = res.unwrap_err().to_string().to_lowercase();
+        assert!(
+            msg.contains("dns") || msg.contains("fail-closed") || msg.contains("blocked"),
+            "error must mention DNS/fail-closed, got: {msg}"
+        );
     }
 }

@@ -59,12 +59,51 @@ pub struct Ghost {
     /// Temp profile dir if we couldn't get the shared profile's
     /// lock. Cleaned up in Drop. None = using the shared profile.
     temp_profile: Option<PathBuf>,
+    /// CDP Fetch request guard: intercepts every browser request
+    /// (including those triggered by browser actions) and enforces
+    /// `fetch::guards::ensure_url_safe` before it hits the network.
+    /// Aborted in Drop so it cannot leak after Chrome is reaped.
+    fetch_guard: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Persistent profile dir: aged state passes challenges
 /// easier, and clearance cookies survive daemon restarts.
 pub fn profile_dir() -> PathBuf {
     crate::paths::cache_dir().join("ghost-profile")
+}
+
+/// Default Chrome launch args (without sandbox flags).
+/// Sandbox is enabled by default (Chrome's own sandbox).
+/// The `--no-sandbox` flags are ONLY added when
+/// `DONGHOST_NO_SANDBOX=1` is explicitly set.
+pub fn default_chrome_args(
+    dir: &std::path::Path,
+    profile: &crate::profile::BrowserProfile,
+) -> Vec<String> {
+    vec![
+        "--remote-debugging-port=0".into(),
+        format!("--user-data-dir={}", dir.display()),
+        format!("--user-agent={}", profile.user_agent),
+        "--window-size=1920,1080".into(),
+        "--window-position=-32000,-32000".into(),
+        "--lang=en-US".into(),
+        "--no-first-run".into(),
+        "--no-default-browser-check".into(),
+        "--disable-background-networking".into(),
+        "--disable-component-update".into(),
+        "--disable-sync".into(),
+        "--disable-translate".into(),
+        "--mute-audio".into(),
+        "--disk-cache-size=1".into(),
+        "--disable-gpu-shader-disk-cache".into(),
+        "--disable-features=SiteEngagementService".into(),
+    ]
+}
+
+/// Whether sandbox is disabled via explicit opt-in.
+/// Used for testing that default launch is safe.
+pub fn sandbox_opt_in_enabled() -> bool {
+    std::env::var_os("DONGHOST_NO_SANDBOX").is_some_and(|v| v == "1")
 }
 
 /// Locate a Chrome-family binary. Env override first, then
@@ -345,31 +384,18 @@ impl Ghost {
             }
         }
         let mut cmd = Command::new(bin);
-        let mut chrome_args: Vec<String> = vec![
-            "--remote-debugging-port=0".into(),
-            format!("--user-data-dir={}", dir.display()),
-            format!("--user-agent={}", profile.user_agent),
-            "--window-size=1920,1080".into(),
-            "--window-position=-32000,-32000".into(),
-            "--lang=en-US".into(),
-            "--no-first-run".into(),
-            "--no-default-browser-check".into(),
-            "--disable-background-networking".into(),
-            "--disable-component-update".into(),
-            "--disable-sync".into(),
-            "--no-sandbox".into(),
-            "--disable-setuid-sandbox".into(),
-            "--disable-translate".into(),
-            "--mute-audio".into(),
-            // ── Disk cache suppression ──
-            // Chrome's disk cache grows unboundedly (1GB+ in days).
-            // We don't need it — tier 1 has its own HTTP cache, and
-            // ghost only renders a few pages per domain. Disabling
-            // keeps the profile dir tiny (~10MB instead of 1GB+).
-            "--disk-cache-size=1".into(),
-            "--disable-gpu-shader-disk-cache".into(),
-            "--disable-features=SiteEngagementService".into(),
-        ];
+        let mut chrome_args: Vec<String> = default_chrome_args(&dir, profile);
+        // Opt-in escape hatch for environments where sandbox is
+        // unavailable (e.g. containers without user-namespace support
+        // or AppArmor restrictions). Never enabled by default —
+        // requires explicit env var and prints a loud warning.
+        if std::env::var_os("DONGHOST_NO_SANDBOX").is_some_and(|v| v == "1") {
+            eprintln!(
+                "[ghost] WARNING: DONGHOST_NO_SANDBOX=1 — launching Chrome with --no-sandbox and --disable-setuid-sandbox. This disables the Chromium sandbox and is UNSAFE. Only use in isolated containers."
+            );
+            chrome_args.push("--no-sandbox".into());
+            chrome_args.push("--disable-setuid-sandbox".into());
+        }
         // ── HTTP proxy (env var) ──
         // If HTTP_PROXY/HTTPS_PROXY/ALL_PROXY is set, route the
         // Ghost browser through the same proxy as tier 1. Chrome
@@ -482,6 +508,37 @@ impl Ghost {
             .and_then(Value::as_str)
             .ok_or_else(|| FetchError::ghost("no sessionId"))?
             .to_string();
+        // Focused browser network SSRF guard: intercept every request
+        // at the CDP Fetch layer before it hits the network. This
+        // prevents browser actions (clicks, form submits, JS
+        // navigations) from causing a private navigation/request
+        // before the post-check could run. The explicit preflight
+        // (`ensure_url_safe` before `Page.navigate`) and
+        // redirect/post-action checks are retained as defence-in-depth;
+        // the Fetch guard is the in-browser enforcement.
+        //
+        // DNS rebinding residual limitation: this is a point-in-time
+        // check via `ensure_url_safe` (DNS resolution at request-paused
+        // time). DNS can change between validation and the actual
+        // connect (TOCTOU / DNS rebinding). Without full DNS pinning
+        // (reusing validated IPs for the connect) there is a residual
+        // window. The transport layer re-validates at connect time,
+        // but the browser's network stack does its own resolution.
+        let fetch_guard = cdp.spawn_fetch_guard(session.clone());
+        if let Err(e) = cdp
+            .call(
+                Some(&session),
+                "Fetch.enable",
+                json!({ "patterns": [{ "urlPattern": "*", "requestStage": "Request" }] }),
+            )
+            .await
+        {
+            // The guard was started before enabling interception so no
+            // request-paused event can be missed. Stop it on setup failure
+            // so a partially initialized Ghost never leaves a task behind.
+            fetch_guard.abort();
+            return Err(FetchError::ghost(format!("Fetch.enable: {e}")));
+        }
         cdp.call(Some(&session), "Page.enable", json!({})).await?;
 
         // Stealth JS injection — runs before any page script.
@@ -570,6 +627,7 @@ impl Ghost {
             last_used: Instant::now(),
             profile_lock,
             temp_profile,
+            fetch_guard: Some(fetch_guard),
         })
     }
 
@@ -638,6 +696,12 @@ impl Ghost {
     /// advancing URL. This succeeds on both healthy Chrome (fast
     /// response) and the buggy 151/152 builds (no response at all).
     pub async fn navigate(&self, url: &str) -> Result<(), FetchError> {
+        // Centralized SSRF guard for browser tier: validates scheme,
+        // credentials, literal IP ranges and (async) DNS resolution.
+        // This is the sole gate for all Ghost navigations — solve,
+        // render, ghost_fetch and actions all flow through here, so
+        // tier=2 cannot bypass it.
+        crate::fetch::guards::ensure_url_safe(url).await?;
         // Fire the navigation. Tolerate a missing/errant response:
         // the URL poll below is the real completion signal.
         let _ = self
@@ -651,6 +715,15 @@ impl Ghost {
             let cur = self.current_url().await.unwrap_or_default();
             let advanced = !cur.is_empty() && !cur.starts_with("about:blank");
             if advanced {
+                // Re-check redirect target: Chrome follows redirects
+                // automatically; a public URL that redirects to a
+                // private/loopback address must be blocked even if the
+                // initial URL was safe. This mirrors fetch's per-hop
+                // redirect guard. DNS rebinding residual applies here
+                // as well (see guards::ensure_url_safe docs).
+                if cur != url {
+                    crate::fetch::guards::ensure_url_safe(&cur).await?;
+                }
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
@@ -734,7 +807,12 @@ impl Ghost {
     }
 
     /// PNG screenshot → path (D16 byproduct).
+    /// Destination is validated through the centralized
+    /// `paths::resolve_screenshot_path` helper BEFORE any CDP capture,
+    /// so a traversal/outside path never triggers a browser capture.
     pub async fn screenshot(&self, path: &str) -> Result<(), FetchError> {
+        let dest = crate::paths::resolve_screenshot_path(path)
+            .map_err(|e| FetchError::ghost(format!("screenshot path rejected: {e}")))?;
         let data = self
             .cdp
             .call(
@@ -749,7 +827,7 @@ impl Ghost {
             .to_string();
         // base64 decode (no new dep: manual).
         let bytes = b64decode(data.as_bytes());
-        std::fs::write(path, bytes).map_err(|e| FetchError::ghost(format!("screenshot: {e}")))
+        std::fs::write(&dest, bytes).map_err(|e| FetchError::ghost(format!("screenshot: {e}")))
     }
 
     /// One trusted click with a human-ish pre-move path.
@@ -1094,6 +1172,12 @@ impl Ghost {
 
 impl Drop for Ghost {
     fn drop(&mut self) {
+        // Abort the Fetch request guard so it cannot leak after
+        // Chrome is reaped. The JoinHandle is cancellable; abort
+        // is safe even if the task already completed.
+        if let Some(handle) = self.fetch_guard.take() {
+            handle.abort();
+        }
         // Safety net: kill_group sends SIGKILL to the whole
         // browser tree (process group on Unix, Job Object on
         // Windows). If kill().await was already called (reaper,
@@ -1269,4 +1353,42 @@ fn b64decode(s: &[u8]) -> Vec<u8> {
         out.push(n as u8);
     }
     out
+}
+
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+    use crate::profile::BrowserProfile;
+
+    #[test]
+    fn default_args_do_not_contain_no_sandbox() {
+        let dir = std::path::PathBuf::from("/tmp/test-profile");
+        let profile = BrowserProfile::host_default();
+        let args = default_chrome_args(&dir, &profile);
+        assert!(
+            !args.iter().any(|a| a == "--no-sandbox"),
+            "default args must not contain --no-sandbox"
+        );
+        assert!(
+            !args.iter().any(|a| a == "--disable-setuid-sandbox"),
+            "default args must not contain --disable-setuid-sandbox"
+        );
+    }
+
+    #[test]
+    fn sandbox_opt_in_requires_explicit_env() {
+        // Ensure default is safe without env var.
+        // Save and restore to avoid flakiness.
+        let prev = std::env::var_os("DONGHOST_NO_SANDBOX");
+        unsafe { std::env::remove_var("DONGHOST_NO_SANDBOX") };
+        assert!(!sandbox_opt_in_enabled());
+        unsafe { std::env::set_var("DONGHOST_NO_SANDBOX", "1") };
+        assert!(sandbox_opt_in_enabled());
+        unsafe { std::env::set_var("DONGHOST_NO_SANDBOX", "0") };
+        assert!(!sandbox_opt_in_enabled());
+        match prev {
+            Some(v) => unsafe { std::env::set_var("DONGHOST_NO_SANDBOX", v) },
+            None => unsafe { std::env::remove_var("DONGHOST_NO_SANDBOX") },
+        }
+    }
 }

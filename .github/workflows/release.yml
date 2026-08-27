@@ -122,6 +122,12 @@ jobs:
           key: release-${{ matrix.target }}
 
       - name: Build
+        env:
+          # x86_64: target the baseline ISA (SSE2, no AVX) so the
+          # binary runs on QEMU-emulated x86_64 and older CPUs.
+          # GitHub Actions runners have AVX2/AVX-512; without this
+          # the binary SIGILLs on QEMU/KVM (issue #51).
+          RUSTFLAGS: ${{ contains(matrix.target, 'x86_64') && '-C target-cpu=x86-64' || '' }}
         run: cargo build --release --locked ${{ matrix.features }} --target ${{ matrix.target }}
         timeout-minutes: 30
 

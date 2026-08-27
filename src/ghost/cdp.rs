@@ -22,14 +22,25 @@ use crate::error::FetchError;
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 pub struct Cdp {
-    write: Mutex<futures_util::stream::SplitSink<Ws, Message>>,
+    write: Arc<Mutex<futures_util::stream::SplitSink<Ws, Message>>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
     /// Event stream (targetInfoChanged = title/url
     /// changes — challenge progression without Runtime).
     /// Consumed by the daemon's smarter wait loop.
     #[allow(dead_code)]
     events: broadcast::Sender<Value>,
-    next_id: AtomicU64,
+    next_id: Arc<AtomicU64>,
+}
+
+impl Clone for Cdp {
+    fn clone(&self) -> Self {
+        Self {
+            write: Arc::clone(&self.write),
+            pending: Arc::clone(&self.pending),
+            events: self.events.clone(),
+            next_id: Arc::clone(&self.next_id),
+        }
+    }
 }
 
 impl Cdp {
@@ -71,10 +82,10 @@ impl Cdp {
             }
         });
         Ok(Self {
-            write: Mutex::new(write),
+            write: Arc::new(Mutex::new(write)),
             pending,
             events: events_tx,
-            next_id: AtomicU64::new(1),
+            next_id: Arc::new(AtomicU64::new(1)),
         })
     }
 
@@ -116,5 +127,98 @@ impl Cdp {
     #[allow(dead_code)] // daemon wait loop (MCP milestone)
     pub fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
+    }
+
+    /// Spawn a cancellable request-guard task for one page session.
+    ///
+    /// Subscribes to CDP events, filters `Fetch.requestPaused` events
+    /// for the given `session`, reads `params.requestId` and
+    /// `params.request.url`, calls `fetch::guards::ensure_url_safe`
+    /// on every paused URL, then issues `Fetch.continueRequest` for
+    /// safe URLs or `Fetch.failRequest` with `errorReason`
+    /// `BlockedByClient` for unsafe, non-http, or DNS-failed URLs.
+    ///
+    /// Does not block the demux reader; each paused request is
+    /// handled in its own spawned task so DNS resolution cannot stall
+    /// the event loop.
+    ///
+    /// # DNS rebinding residual limitation
+    ///
+    /// This is a point-in-time check. DNS can change between
+    /// validation and the actual network stack's resolution (DNS
+    /// rebinding / TOCTOU). Without full DNS pinning (reusing the
+    /// validated IPs for the connect), there is a residual window.
+    /// The explicit preflight (`ensure_url_safe` before `Page.navigate`)
+    /// and redirect/post-action checks are retained as defence-in-depth
+    /// alongside this in-browser Fetch guard.
+    pub fn spawn_fetch_guard(&self, session: String) -> tokio::task::JoinHandle<()> {
+        let cdp = self.clone();
+        let mut events = self.subscribe();
+        tokio::spawn(async move {
+            while let Ok(event) = events.recv().await {
+                let method = event.get("method").and_then(Value::as_str).unwrap_or("");
+                if method != "Fetch.requestPaused" {
+                    continue;
+                }
+                // Filter for the single session we are guarding.
+                // With `flatten: true`, the sessionId is top-level.
+                if let Some(sid) = event.get("sessionId").and_then(Value::as_str) {
+                    if sid != session {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+                let params = event.get("params");
+                let request_id = params
+                    .and_then(|p| p.get("requestId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let url = params
+                    .and_then(|p| p.get("request"))
+                    .and_then(|r| r.get("url"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                if request_id.is_empty() {
+                    continue;
+                }
+                // Do not block the demux reader / this loop: spawn per-request handling.
+                let cdp2 = cdp.clone();
+                let session2 = session.clone();
+                tokio::spawn(async move {
+                    // Fail-closed on DNS failure / non-http / private IP.
+                    let safe = if url.is_empty() {
+                        false
+                    } else {
+                        crate::fetch::guards::ensure_url_safe(&url).await.is_ok()
+                    };
+                    if safe {
+                        let _ = cdp2
+                            .call(
+                                Some(&session2),
+                                "Fetch.continueRequest",
+                                json!({ "requestId": request_id }),
+                            )
+                            .await;
+                    } else {
+                        let _ = cdp2
+                            .call(
+                                Some(&session2),
+                                "Fetch.failRequest",
+                                json!({ "requestId": request_id, "errorReason": "BlockedByClient" }),
+                            )
+                            .await;
+                    }
+                });
+            }
+        })
+    }
+
+    /// Alias for `spawn_fetch_guard` — covers alternative naming
+    /// expectations (request-guard vs fetch-guard).
+    pub fn spawn_request_guard(&self, session: String) -> tokio::task::JoinHandle<()> {
+        self.spawn_fetch_guard(session)
     }
 }

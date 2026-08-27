@@ -217,7 +217,7 @@ async fn ghost_cmd(args: &[String]) {
         "shot" => {
             let url = args.get(1).expect("usage: ghost shot <url> [path]");
             let path = args.get(2).cloned().unwrap_or_else(|| {
-                std::env::temp_dir()
+                crate::paths::screenshots_dir()
                     .join("ghost.png")
                     .to_string_lossy()
                     .into_owned()
