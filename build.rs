@@ -661,19 +661,26 @@ fn build_shared_from_archive(archive: &Path, output: &Path, _shared_name: &str) 
     );
 
     let status = if os == "windows" {
-        // MSVC: link.exe to create a DLL from the static lib.
-        // The static lib contains all ONNX code; /DLL exports
-        // all symbols marked __declspec(dllexport).
-        Command::new("cmd")
-            .args(["/C", "link", "/DLL", "/NOLOGO", "/MACHINE:X64"])
+        // MSVC: use cc crate to find link.exe (GNU coreutils `link`
+        // shadows MSVC link.exe in PATH on GitHub Actions runners).
+        let target = env::var("TARGET").unwrap_or_default();
+        let link_exe =
+            cc::windows_registry::find_tool(&target, "link.exe").map(|t| t.path().to_path_buf());
+        let link_path = link_exe
+            .as_deref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "link".to_string());
+        let mut cmd = Command::new(&link_path);
+        cmd.args(["/DLL", "/NOLOGO", "/MACHINE:X64"])
             .arg(format!("/OUT:{}", output.display()))
             .arg(archive)
-            .arg("Advapi32.lib")
-            .arg("User32.lib")
-            .status()
+            .args(["Advapi32.lib", "User32.lib"]);
+        cmd.status()
     } else if os == "macos" {
         // macOS: dynamiclib from static archive.
         // -force_load includes all objects (like --whole-archive).
+        // Foundation framework needed for CoreML EP (NSLog, NSFileManager,
+        // NSString, NSTemporaryDirectory, etc.).
         Command::new("cc")
             .args(["-dynamiclib", "-o"])
             .arg(output)
@@ -681,6 +688,7 @@ fn build_shared_from_archive(archive: &Path, output: &Path, _shared_name: &str) 
             .arg(archive)
             .args(["-lc++", "-lpthread", "-ldl", "-lm"])
             .args(["-framework", "CoreFoundation"])
+            .args(["-framework", "Foundation"])
             .status()
     } else {
         // Linux: shared object from static archive.
