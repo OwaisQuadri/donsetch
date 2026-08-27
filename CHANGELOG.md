@@ -5,7 +5,9 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.2.4] - 2026-08-26
+
+The security and hardening release: unpredictable handle IDs (GHSA-g279-2v66-j8g2), centralized SSRF guard with DNS resolution, CDP Fetch interception, cookie PSL validation, Chrome sandbox opt-in, screenshot path validation, PDFium fail-closed hashes, QEMU x86-64 SIGILL fix, strict LLM provider schema compatibility, musl detection fix, bounded CDP waits for Debian 12, plus Parallel AI and Bright Data SERP as BYOK providers.
 
 ### Added
 
