@@ -617,9 +617,7 @@ fn check_onnx() -> CheckResult {
         if found || cache {
             CheckResult::Pass("AVX detected, shared library present".into())
         } else {
-            CheckResult::Warn(
-                "AVX detected but shared library missing — reinstall donsetch".into(),
-            )
+            CheckResult::Warn("AVX detected but shared library missing — reinstall donsetch".into())
         }
     }
 }

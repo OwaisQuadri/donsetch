@@ -14,10 +14,9 @@
 //!
 //! The binary in `main.rs` is a thin shell over this library.
 
-pub mod cpu;
-pub mod onnx;
 pub mod adapters;
 pub mod cli;
+pub mod cpu;
 pub mod crawl;
 pub mod detect;
 pub mod dev;
@@ -28,6 +27,7 @@ pub mod ghost;
 pub mod handles;
 pub mod mcp;
 pub mod memory;
+pub mod onnx;
 pub mod pages;
 pub mod paths;
 pub mod pdf;

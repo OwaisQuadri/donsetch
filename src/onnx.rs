@@ -66,16 +66,22 @@ fn load_and_init() -> Result<(), String> {
     }
 
     // 2. Find the shared library.
-    let lib_path = find_shared_lib()
-        .ok_or_else(|| "ONNX Runtime shared library not found. \
-            OCR and rerank are disabled.".to_string())?;
+    let lib_path = find_shared_lib().ok_or_else(|| {
+        "ONNX Runtime shared library not found. \
+            OCR and rerank are disabled."
+            .to_string()
+    })?;
 
     // 3. dlopen and init.
     //    ort::init_from loads the .so/.dylib/.dll via libloading.
     //    ort::init() initializes the ONNX environment using the
     //    dlopen'd library.
-    let builder = ort::init_from(&lib_path)
-        .map_err(|e| format!("Failed to load ONNX Runtime from {}: {e}", lib_path.display()))?;
+    let builder = ort::init_from(&lib_path).map_err(|e| {
+        format!(
+            "Failed to load ONNX Runtime from {}: {e}",
+            lib_path.display()
+        )
+    })?;
 
     builder.commit();
 

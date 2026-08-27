@@ -275,8 +275,8 @@ fn main() {
     // from the prebuilt static archive at build time, and dlopen it
     // at runtime after an AVX check. Non-AVX CPUs get a working binary
     // (minus OCR/rerank) instead of SIGILL.
-    let has_onnx = env::var_os("CARGO_FEATURE_OCR").is_some()
-        || env::var_os("CARGO_FEATURE_RERANK").is_some();
+    let has_onnx =
+        env::var_os("CARGO_FEATURE_OCR").is_some() || env::var_os("CARGO_FEATURE_RERANK").is_some();
     if has_onnx {
         if let Some(info) = onnx_target_info(&os, &arch) {
             build_onnx_shared_lib(info, &manifest);
@@ -500,7 +500,12 @@ fn onnx_target_info(os: &str, arch: &str) -> Option<OnnxTarget> {
         ),
         _ => return None,
     };
-    Some(OnnxTarget { url, sha256, archive_name, shared_name })
+    Some(OnnxTarget {
+        url,
+        sha256,
+        archive_name,
+        shared_name,
+    })
 }
 
 /// Download the ONNX tarball, decompress (custom LZMA2), extract the
@@ -516,7 +521,10 @@ fn build_onnx_shared_lib(info: OnnxTarget, manifest: &Path) {
     // If the shared library already exists, skip the download+build.
     // The vendored dir is cleaned on `cargo clean`.
     if shared_path.exists() {
-        eprintln!("donsetch build: ONNX shared lib already present at {}", shared_path.display());
+        eprintln!(
+            "donsetch build: ONNX shared lib already present at {}",
+            shared_path.display()
+        );
         copy_onnx_shared_lib(&shared_path);
         return;
     }
@@ -526,7 +534,16 @@ fn build_onnx_shared_lib(info: OnnxTarget, manifest: &Path) {
     if !archive_path.exists() {
         eprintln!("donsetch build: fetching ONNX Runtime from {}", info.url);
         let status = Command::new("curl")
-            .args(["-fSL", "--proto", "=https", "--proto-redir", "=https", "--retry", "3", "-o"])
+            .args([
+                "-fSL",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--retry",
+                "3",
+                "-o",
+            ])
             .arg(&tarball)
             .arg(info.url)
             .status()
@@ -542,7 +559,8 @@ fn build_onnx_shared_lib(info: OnnxTarget, manifest: &Path) {
         let got = sha256_hex(&buf);
         assert_eq!(
             got, info.sha256,
-            "ONNX: sha256 mismatch (expected {}, got {})", info.sha256, got
+            "ONNX: sha256 mismatch (expected {}, got {})",
+            info.sha256, got
         );
 
         // 3. Decompress custom LZMA2 format (pyke uses lzma-rust2, not standard xz).
@@ -606,10 +624,7 @@ fn extract_tar_entry(data: &[u8], name: &str) -> Option<Vec<u8>> {
             break;
         }
         // File name: bytes 0-99, null-terminated.
-        let entry_name = header
-            .split(|&b| b == 0)
-            .next()
-            .unwrap_or(&[]);
+        let entry_name = header.split(|&b| b == 0).next().unwrap_or(&[]);
         let entry_name = String::from_utf8_lossy(entry_name);
         // File size: bytes 124-135, octal string.
         let size_str = header[124..136]
