@@ -665,11 +665,12 @@ fn build_shared_from_archive(archive: &Path, output: &Path, _shared_name: &str) 
         // shadows MSVC link.exe in PATH on GitHub Actions runners).
         // The cc crate also provides the MSVC environment (LIB, INCLUDE,
         // PATH) needed to find system libraries like Advapi32.lib.
+        // /FORCE:MULTIPLE: ONNX archive has duplicate protobuf symbols.
         let target = env::var("TARGET").unwrap_or_default();
         let tool = cc::windows_registry::find_tool(&target, "link.exe")
             .expect("ONNX: MSVC link.exe not found");
         let mut cmd = Command::new(tool.path());
-        cmd.args(["/DLL", "/NOLOGO", "/MACHINE:X64"])
+        cmd.args(["/DLL", "/NOLOGO", "/MACHINE:X64", "/FORCE:MULTIPLE"])
             .arg(format!("/OUT:{}", output.display()))
             .arg(archive)
             .args(["Advapi32.lib", "User32.lib"]);
@@ -680,22 +681,44 @@ fn build_shared_from_archive(archive: &Path, output: &Path, _shared_name: &str) 
         }
         cmd.status()
     } else if os == "macos" {
-        // macOS: dynamiclib from static archive.
-        // -force_load includes all objects (like --whole-archive).
-        // -multiply_defined suppress: ONNX archive has duplicate protobuf
-        // symbols (common in C++ protobuf projects). GNU ld uses
-        // --allow-multiple-definition; macOS ld uses -multiply_defined suppress.
-        // Foundation framework: CoreML EP (NSLog, NSFileManager, NSString, etc.).
-        Command::new("cc")
-            .args(["-dynamiclib", "-o"])
-            .arg(output)
-            .arg("-Wl,-force_load")
+        // macOS: extract archive to temp dir, deduplicate by name
+        // (ar x overwrites same-name members), then link unique
+        // objects into a dylib. This avoids ld64's lack of
+        // --allow-multiple-definition equivalent for duplicate
+        // protobuf symbols in the ONNX archive.
+        // Foundation framework: CoreML EP (NSLog, NSFileManager, etc.).
+        let tmp = std::env::temp_dir().join("onnx-extract-macos");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("ONNX: cannot create temp dir");
+        let ar_status = Command::new("ar")
+            .arg("x")
             .arg(archive)
+            .current_dir(&tmp)
+            .status()
+            .expect("ONNX: cannot run ar");
+        if !ar_status.success() {
+            panic!("ONNX: ar extraction failed");
+        }
+        // Collect all .o files (duplicates already deduplicated by ar x).
+        let mut objects: Vec<PathBuf> = fs::read_dir(&tmp)
+            .expect("ONNX: cannot read temp dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "o"))
+            .collect();
+        objects.sort();
+        eprintln!(
+            "donsetch build: linking {} unique objects into dylib",
+            objects.len()
+        );
+        let mut cmd = Command::new("cc");
+        cmd.args(["-dynamiclib", "-o"])
+            .arg(output)
+            .args(&objects)
             .args(["-lc++", "-lpthread", "-ldl", "-lm"])
             .args(["-framework", "CoreFoundation"])
-            .args(["-framework", "Foundation"])
-            .arg("-Wl,-multiply_defined,suppress")
-            .status()
+            .args(["-framework", "Foundation"]);
+        cmd.status()
     } else {
         // Linux: shared object from static archive.
         // --whole-archive includes all objects.
