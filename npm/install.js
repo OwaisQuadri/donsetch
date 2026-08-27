@@ -74,6 +74,7 @@ if (process.platform === 'linux') {
     // skip musl check
   } else {
     let isMusl = false;
+    let detected = false;
     try {
       // Read the ELF interpreter of /proc/self/exe (this Node process).
       // The .interp section starts at offset 0x18 in the ELF header
@@ -98,16 +99,21 @@ if (process.platform === 'linux') {
           const p_filesz = ph.readBigUInt64LE(0x20);
           const interp = Buffer.alloc(Number(p_filesz));
           fs.readSync(fd, interp, 0, Number(p_filesz), p_offset);
-          fs.closeSync(fd);
           const loaderPath = interp.toString('ascii').replace(/\0/g, '').trim();
           isMusl = loaderPath.includes('ld-musl');
+          detected = true;
           break;
         }
       }
-      if (!isMusl) fs.closeSync(fd);
+      fs.closeSync(fd);
     } catch (_) {
       // /proc/self/exe not readable (some containers). Fall back to
       // the old existence check, but only as a last resort.
+    }
+    // Only fall back to the existence check if we could not read
+    // the ELF interpreter at all. A successful read that found glibc
+    // (isMusl=false, detected=true) must NOT fall back.
+    if (!detected) {
       isMusl = fs.existsSync('/lib/ld-musl-x86_64.so.1')
         || fs.existsSync('/lib/ld-musl-aarch64.so.1');
     }

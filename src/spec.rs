@@ -462,8 +462,13 @@ pub fn mcp_schema(tool: &ToolSpec) -> Value {
         let ty = match p.kind {
             ParamKind::Str | ParamKind::Enum(_) => "string",
             ParamKind::StrOrList => {
-                schema.insert("type".into(), json!(["string", "array"]));
-                schema.insert("items".into(), json!({ "type": "string" }));
+                schema.insert(
+                    "anyOf".into(),
+                    json!([
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } }
+                    ]),
+                );
                 schema.insert("description".into(), json!(p.help));
                 props.insert(p.name.into(), Value::Object(schema));
                 if p.required {
