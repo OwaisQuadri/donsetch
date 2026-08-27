@@ -131,7 +131,7 @@ fn shared_lib_name() -> &'static str {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "ocr", feature = "rerank")))]
 mod tests {
     use super::*;
 

@@ -12,6 +12,7 @@
 //! after this check confirms AVX support.
 
 use std::path::PathBuf;
+#[cfg(target_arch = "x86_64")]
 use std::sync::OnceLock;
 
 /// Returns true if the CPU supports AVX (or is non-x86, which
@@ -54,10 +55,12 @@ pub fn has_avx() -> bool {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 fn cache_path() -> PathBuf {
     crate::paths::cache_dir().join("avx.json")
 }
 
+#[cfg(target_arch = "x86_64")]
 fn read_cache() -> Option<bool> {
     let data = std::fs::read_to_string(cache_path()).ok()?;
     // Simple JSON-ish parse: look for "avx":true
@@ -68,6 +71,7 @@ fn read_cache() -> Option<bool> {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 fn write_cache(avx: bool) {
     let path = cache_path();
     if let Some(parent) = path.parent() {
@@ -86,6 +90,7 @@ mod tests {
         let _ = has_avx();
     }
 
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn cache_roundtrip() {
         // write_cache + read_cache should round-trip true.
