@@ -1,6 +1,6 @@
 [package]
 name = "donsetch"
-version = "3.2.4"
+version = "3.2.5"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Web fetch, search and crawl for AI agents. Custom stealthy HTTP fetch tier on BoringSSL."
@@ -40,7 +40,7 @@ semver = "1"
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions"] }
 psl = { version = "=2.1.226" }
 # Semantic reranker — cross-encoder via ONNX Runtime, shares ort with OCR.
-ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native", "copy-dylibs"], optional = true }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "api-24"], optional = true }
 tokenizers = { version = "0.23", default-features = false, features = ["onig"], optional = true }
 ndarray = { version = "0.17", optional = true }
 
@@ -62,6 +62,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 [build-dependencies]
 sha2 = "0.11"
+lzma-rust2 = "0.11"
 
 [profile.release]
 lto = "fat"

@@ -192,6 +192,10 @@ mod imp {
             RecKind::Deva => &ENGINE_DEVA,
         };
         cell.get_or_init(|| {
+            // Gate: ensure ONNX Runtime is loaded (AVX check + dlopen).
+            // If the CPU lacks AVX or the .so is missing, return an error;
+            // OCR falls back to the glyph stream.
+            crate::onnx::ensure_loaded()?;
             let (det, rec, dict) = ensure_models(kind)?;
             // Run ONNX engine init in a separate thread with a timeout.
             // ONNX Runtime's C++ global constructors can deadlock on

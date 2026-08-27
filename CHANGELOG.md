@@ -5,6 +5,28 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.5] - 2026-08-28
+
+The AVX fix release. ONNX Runtime is now dynamically loaded at runtime instead of statically linked, fixing SIGILL crashes on non-AVX CPUs (pre-2011 Intel, QEMU default, Docker VMs without AVX passthrough).
+
+### Fixed
+
+- **SIGILL on non-AVX CPUs (issue #57):** ONNX Runtime's prebuilt static archive contained unguarded AVX instructions (`vxorps xmm0,xmm0,xmm0`) in C++ global constructors that ran before `main()`. Statically linking it caused SIGILL at process start on any CPU without AVX. Fixed by switching ONNX from static linking (`download-binaries`) to dynamic loading (`load-dynamic`). The base binary is now SSE2-safe (0 ONNX-linked AVX instructions). A shared library (`libonnxruntime.so`/`.dylib`/`.dll`) is built from the prebuilt static archive at compile time and dlopen'd at runtime after an AVX check. Non-AVX CPUs get a working binary (minus OCR/rerank) instead of a crash. Verified on QEMU qemu64 (SSE2-only, no AVX): `--version`, `doctor`, `fetch` all pass. On AVX hosts: OCR and rerank work via dlopen'd ONNX.
+
+### Added
+
+- **AVX detection with disk cache:** `src/cpu.rs` checks AVX support via CPUID with persistent caching. AVX=yes is cached permanently (never re-checked). AVX=no is re-checked each run (in case of CPU upgrade). Cache file: `~/.cache/donsetch/avx.json`.
+- **ONNX runtime init:** `src/onnx.rs` manages dlopen loading of the ONNX shared library. `ensure_loaded()` is called before any OCR/rerank operation. On non-AVX CPUs, returns an error and OCR/rerank falls back gracefully (glyph stream for PDFs, RRF+BM25 for search).
+- **Doctor ONNX check:** `donsetch doctor` now reports ONNX Runtime status: AVX detected + shared library present, or CPU lacks AVX with a warning.
+- **QEMU non-AVX CI verification:** The release workflow now installs QEMU and runs `donsetch --version` under `qemu-x86_64 -cpu qemu64` (SSE2-only) to verify the binary doesn't SIGILL on non-AVX CPUs. This catches regressions where AVX instructions leak into the base binary.
+- **ONNX shared library in release tarball:** Release tarballs for linux-x64, darwin-arm64, and win32-x64 now include the ONNX shared library alongside the binary.
+
+### Changed
+
+- **ort crate features:** Changed from `download-binaries` + `copy-dylibs` to `load-dynamic` + `api-24`. ONNX is no longer statically linked. The `ort-sys` build script returns early (`disable-linking`), and donsetch's `build.rs` downloads and builds the shared library instead.
+- **build.rs:** Added ONNX tarball download (pyke CDN), SHA256 verification, custom LZMA2 decompression (`lzma-rust2`), tar extraction, and shared library building (`cc -shared -z noexecstack` on Linux, `cc -dynamiclib` on macOS, `link /DLL` on Windows).
+- **OCR/rerank gate:** `src/pdf/ocr.rs` and `src/search/rerank.rs` now call `crate::onnx::ensure_loaded()` before initializing ONNX engines. If ONNX is unavailable (no AVX or missing shared lib), OCR falls back to the glyph stream and rerank falls back to RRF+BM25.
+
 ## [3.2.4] - 2026-08-26
 
 The security and hardening release: unpredictable handle IDs (GHSA-g279-2v66-j8g2), centralized SSRF guard with DNS resolution, CDP Fetch interception, cookie PSL validation, Chrome sandbox opt-in, screenshot path validation, PDFium fail-closed hashes, QEMU x86-64 SIGILL fix, strict LLM provider schema compatibility, musl detection fix, bounded CDP waits for Debian 12, plus Parallel AI and Bright Data SERP as BYOK providers.

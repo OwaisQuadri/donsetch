@@ -123,10 +123,12 @@ jobs:
 
       - name: Build
         env:
-          # x86_64: target the baseline ISA (SSE2, no AVX) so the
-          # binary runs on QEMU-emulated x86_64 and older CPUs.
+          # x86_64: target the baseline ISA (SSE2, no AVX) so Rust
+          # code runs on QEMU-emulated x86_64 and older CPUs.
+          # ONNX Runtime AVX is handled separately via dynamic loading
+          # (ort load-dynamic + build-time .so build + runtime AVX gate).
           # GitHub Actions runners have AVX2/AVX-512; without this
-          # the binary SIGILLs on QEMU/KVM (issue #51).
+          # Rust would emit AVX instructions that crash on non-AVX CPUs.
           RUSTFLAGS: ${{ contains(matrix.target, 'x86_64') && '-C target-cpu=x86-64' || '' }}
         run: cargo build --release --locked ${{ matrix.features }} --target ${{ matrix.target }}
         timeout-minutes: 30
@@ -165,6 +167,28 @@ jobs:
             exit 1
           fi
 
+      # ── QEMU non-AVX verification (Linux x64 only) ──────────
+      #
+      # The binary must run on non-AVX CPUs without SIGILL. QEMU's
+      # qemu64 CPU model has SSE2 only (no AVX). If the binary crashes
+      # here, the ONNX dynamic loading fix is broken. This catches
+      # regressions where AVX instructions leak into the base binary.
+      - name: Verify no SIGILL on non-AVX CPU (QEMU)
+        if: matrix.name == 'linux-x64'
+        shell: bash
+        run: |
+          sudo apt-get install -y --no-install-recommends qemu-user >/dev/null 2>&1 || true
+          cd target/${{ matrix.target }}/release
+          # Clear AVX cache so the CPUID check is actually performed.
+          rm -f ~/.cache/donsetch/avx.json 2>/dev/null || true
+          output=$(qemu-x86_64 -cpu qemu64 ./donsetch --version 2>&1 || true)
+          if [ -z "$output" ]; then
+            echo "ERROR: binary crashed (SIGILL) on non-AVX CPU (QEMU qemu64)"
+            exit 1
+          fi
+          echo "OK: binary runs on non-AVX CPU (QEMU qemu64)"
+          echo "$output" | head -1
+
       # ── Package ──────────────────────────────────────────────
       # All platforms: tar.gz. Windows includes pdfium.dll alongside
       # donsetch.exe. Using tar.gz (not zip) for all platforms means
@@ -176,7 +200,20 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf $GITHUB_WORKSPACE/donsetch-${{ matrix.name }}.tar.gz donsetch
+          # Include ONNX shared lib if present (built by build.rs for ocr/rerank targets).
+          # The .so/.dylib is dlopen'd at runtime after an AVX check.
+          ONNX_LIB=""
+          for ext in so dylib; do
+            if [ -f "libonnxruntime.$ext" ]; then
+              ONNX_LIB="libonnxruntime.$ext"
+              break
+            fi
+          done
+          if [ -n "$ONNX_LIB" ]; then
+            tar czf $GITHUB_WORKSPACE/donsetch-${{ matrix.name }}.tar.gz donsetch "$ONNX_LIB"
+          else
+            tar czf $GITHUB_WORKSPACE/donsetch-${{ matrix.name }}.tar.gz donsetch
+          fi
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
@@ -187,7 +224,11 @@ jobs:
             echo ERROR: pdfium.dll not found - build.rs copy failed
             exit 1
           )
-          tar czf %GITHUB_WORKSPACE%\donsetch-${{ matrix.name }}.tar.gz donsetch.exe pdfium.dll
+          if exist onnxruntime.dll (
+            tar czf %GITHUB_WORKSPACE%\donsetch-${{ matrix.name }}.tar.gz donsetch.exe pdfium.dll onnxruntime.dll
+          ) else (
+            tar czf %GITHUB_WORKSPACE%\donsetch-${{ matrix.name }}.tar.gz donsetch.exe pdfium.dll
+          )
 
       # ── Checksums ────────────────────────────────────────────
       # sha256sum format: "<hash>  <filename>" — compatible with

@@ -111,6 +111,14 @@ mod inner {
     /// If it fires, reranking is disabled and results fall back to
     /// RRF+BM25.
     fn init() -> Option<Reranker> {
+        // Gate: ensure ONNX Runtime is loaded (AVX check + dlopen).
+        // If the CPU lacks AVX or the .so is missing, return None;
+        // reranking falls back to RRF+BM25.
+        if let Err(e) = crate::onnx::ensure_loaded() {
+            eprintln!("[rerank] {e}");
+            return None;
+        }
+
         let (model_path, tok_path) = match ensure_files() {
             Ok(p) => p,
             Err(e) => {

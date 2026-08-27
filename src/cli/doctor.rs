@@ -114,7 +114,10 @@ pub async fn run() {
     // 12. Rerank model.
     report!("Rerank model", check_rerank_model());
 
-    // 13. Ghost state.
+    // 13. ONNX Runtime / AVX.
+    report!("ONNX Runtime", check_onnx());
+
+    // 14. Ghost state.
     report!("Ghost state", check_ghost_state());
 
     // ── Summary ──────────────────────────────────────────────
@@ -575,6 +578,48 @@ fn check_ocr_models() -> CheckResult {
             CheckResult::Pass(format!("{models} model files cached"))
         } else {
             CheckResult::Warn("not cached (downloads on first use)".into())
+        }
+    }
+}
+
+fn check_onnx() -> CheckResult {
+    #[cfg(not(any(feature = "ocr", feature = "rerank")))]
+    {
+        CheckResult::Warn("not compiled (build with --features ocr,rerank to enable)".into())
+    }
+    #[cfg(any(feature = "ocr", feature = "rerank"))]
+    {
+        // Check AVX support (disk-cached).
+        let has_avx = crate::cpu::has_avx();
+        if !has_avx {
+            return CheckResult::Warn(
+                "CPU lacks AVX — OCR and rerank disabled (all other features work)".into(),
+            );
+        }
+        // Check shared library presence.
+        let lib_name = if cfg!(target_os = "linux") {
+            "libonnxruntime.so"
+        } else if cfg!(target_os = "macos") {
+            "libonnxruntime.dylib"
+        } else if cfg!(target_os = "windows") {
+            "onnxruntime.dll"
+        } else {
+            "libonnxruntime.so"
+        };
+        let found = if let Ok(exe) = std::env::current_exe()
+            && let Some(parent) = exe.parent()
+        {
+            parent.join(lib_name).exists()
+        } else {
+            false
+        };
+        let cache = paths::cache_dir().join("onnx").join(lib_name).exists();
+        if found || cache {
+            CheckResult::Pass("AVX detected, shared library present".into())
+        } else {
+            CheckResult::Warn(
+                "AVX detected but shared library missing — reinstall donsetch".into(),
+            )
         }
     }
 }

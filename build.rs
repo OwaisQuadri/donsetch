@@ -254,21 +254,36 @@ fn main() {
         }
     }
 
-    // ── aarch64 + ONNX warning ────────────────────────────────
+    // ── aarch64 + ONNX note ──────────────────────────────────
     //
-    // ONNX Runtime (via `ort`/`oar-ocr`) is statically linked. Its C++
-    // global constructors (protobuf InitProtobufDefaultsSlow) run before
-    // main() and can deadlock on aarch64 Linux. If the user explicitly
-    // enables OCR/rerank on aarch64, warn them.
-    if (os == "linux" || os == "android") && arch == "aarch64" {
-        let has_onnx = env::var_os("CARGO_FEATURE_OCR").is_some()
-            || env::var_os("CARGO_FEATURE_RERANK").is_some();
-        if has_onnx {
+    // ONNX Runtime is now dynamically loaded (ort load-dynamic).
+    // The C++ global constructor deadlock that affected aarch64
+    // with static linking no longer occurs at process start.
+    // ONNX is dlopen'd at runtime only when OCR/rerank is used.
+    // The aarch64 ONNX prebuilt is not available from pyke, so
+    // aarch64 builds simply lack OCR/rerank (reported at runtime).
+
+    // ── ONNX Runtime shared library (dynamic loading) ────────
+    //
+    // ONNX Runtime's prebuilt static archive contains unguarded
+    // AVX instructions in C++ global constructors. Statically linking
+    // it causes SIGILL at process start on non-AVX CPUs (pre-2011
+    // Intel, QEMU default, Docker VMs without AVX passthrough).
+    //
+    // With ort's `load-dynamic` feature, ONNX is NOT statically
+    // linked. Instead, we build a shared library (.so/.dylib/.dll)
+    // from the prebuilt static archive at build time, and dlopen it
+    // at runtime after an AVX check. Non-AVX CPUs get a working binary
+    // (minus OCR/rerank) instead of SIGILL.
+    let has_onnx = env::var_os("CARGO_FEATURE_OCR").is_some()
+        || env::var_os("CARGO_FEATURE_RERANK").is_some();
+    if has_onnx {
+        if let Some(info) = onnx_target_info(&os, &arch) {
+            build_onnx_shared_lib(info, &manifest);
+        } else {
             eprintln!(
-                "warning: donsetch: OCR/rerank features are enabled on aarch64 \
-                 Linux. ONNX Runtime's C++ global constructors may deadlock \
-                 at startup on this platform. If the binary hangs, build \
-                 without these features: cargo build --release"
+                "donsetch build: OCR/rerank features enabled but no ONNX prebuilt \
+                 available for {os}-{arch}. OCR/rerank will be disabled at runtime."
             );
         }
     }
@@ -446,6 +461,231 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
         if old.exists() && !new.exists() {
             let _ = fs::rename(&old, &new);
         }
+    }
+}
+
+/// Pinned ONNX Runtime tarball info per platform.
+/// Source: pyke CDN (cdn.pyke.io), ort-sys 2.0.0-rc.12.
+/// Hashes verified from the ort-sys dist.txt.
+struct OnnxTarget {
+    url: &'static str,
+    sha256: &'static str,
+    /// Static archive filename inside the tarball.
+    archive_name: &'static str,
+    /// Shared library filename to produce.
+    shared_name: &'static str,
+}
+
+/// Return ONNX target info if a prebuilt is available for this platform.
+/// Returns None for platforms without OCR/rerank prebuilts (aarch64, etc.).
+fn onnx_target_info(os: &str, arch: &str) -> Option<OnnxTarget> {
+    let (url, sha256, archive_name, shared_name) = match (os, arch) {
+        ("linux", "x86_64") => (
+            "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-unknown-linux-gnu.tar.lzma2",
+            "acc1cba79c337594ead1d88ca72516147aa60054c84217b53399a31caa5ba671",
+            "libonnxruntime.a",
+            "libonnxruntime.so",
+        ),
+        ("macos", "aarch64") => (
+            "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/aarch64-apple-darwin.tar.lzma2",
+            "612739f75438dc0a075461e1fb454226b4a1eb175e60a7271ba966bbbb972cd4",
+            "libonnxruntime.a",
+            "libonnxruntime.dylib",
+        ),
+        ("windows", "x86_64") => (
+            "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-pc-windows-msvc.tar.lzma2",
+            "b685bfc8d336e0ba95c066a7a982c03aa6dedd528a492eb99ca4ccb7f3af9e7a",
+            "onnxruntime.lib",
+            "onnxruntime.dll",
+        ),
+        _ => return None,
+    };
+    Some(OnnxTarget { url, sha256, archive_name, shared_name })
+}
+
+/// Download the ONNX tarball, decompress (custom LZMA2), extract the
+/// static archive, build a shared library from it, and copy to the
+/// output directory. This replaces ort-sys's static linking with a
+/// runtime dlopen approach to avoid SIGILL on non-AVX CPUs.
+fn build_onnx_shared_lib(info: OnnxTarget, manifest: &Path) {
+    let vendored = manifest.join("vendor").join("onnx");
+    let _ = fs::create_dir_all(&vendored);
+    let archive_path = vendored.join(info.archive_name);
+    let shared_path = vendored.join(info.shared_name);
+
+    // If the shared library already exists, skip the download+build.
+    // The vendored dir is cleaned on `cargo clean`.
+    if shared_path.exists() {
+        eprintln!("donsetch build: ONNX shared lib already present at {}", shared_path.display());
+        copy_onnx_shared_lib(&shared_path);
+        return;
+    }
+
+    // 1. Download the tarball.
+    let tarball = vendored.join("onnx.tar.lzma2");
+    if !archive_path.exists() {
+        eprintln!("donsetch build: fetching ONNX Runtime from {}", info.url);
+        let status = Command::new("curl")
+            .args(["-fSL", "--proto", "=https", "--proto-redir", "=https", "--retry", "3", "-o"])
+            .arg(&tarball)
+            .arg(info.url)
+            .status()
+            .unwrap_or_else(|e| panic!("ONNX: failed to spawn curl ({e})"));
+        if !status.success() {
+            panic!("ONNX: curl download failed for {}", info.url);
+        }
+
+        // 2. Verify SHA-256.
+        let mut f = fs::File::open(&tarball).expect("ONNX: cannot open tarball");
+        let mut buf = Vec::with_capacity(8 * 1024 * 1024);
+        f.read_to_end(&mut buf).expect("ONNX: cannot read tarball");
+        let got = sha256_hex(&buf);
+        assert_eq!(
+            got, info.sha256,
+            "ONNX: sha256 mismatch (expected {}, got {})", info.sha256, got
+        );
+
+        // 3. Decompress custom LZMA2 format (pyke uses lzma-rust2, not standard xz).
+        let decompressed = lzma2_decompress(&buf);
+
+        // 4. Parse tar to extract the static archive.
+        let entry = extract_tar_entry(&decompressed, info.archive_name)
+            .unwrap_or_else(|| panic!("ONNX: {} not found in tarball", info.archive_name));
+        fs::write(&archive_path, &entry).expect("ONNX: cannot write archive");
+        let _ = fs::remove_file(&tarball);
+    }
+
+    // 5. Build the shared library from the static archive.
+    build_shared_from_archive(&archive_path, &shared_path, info.shared_name);
+
+    // 6. Copy to output directories.
+    copy_onnx_shared_lib(&shared_path);
+}
+
+/// Copy the ONNX shared library to all locations where the binary
+/// and tests can find it at runtime.
+fn copy_onnx_shared_lib(shared_path: &Path) {
+    let out_dir = env::var("OUT_DIR").expect("no OUT_DIR");
+    let out_path = PathBuf::from(&out_dir);
+    let profile_dir = out_path
+        .ancestors()
+        .nth(3)
+        .expect("cannot find profile dir from OUT_DIR");
+    let dest_name = shared_path.file_name().unwrap();
+    for dest in [
+        profile_dir.join(dest_name),
+        profile_dir.join("deps").join(dest_name),
+        profile_dir.join("examples").join(dest_name),
+        out_path.join(dest_name),
+    ] {
+        if !dest.exists() {
+            let _ = fs::copy(shared_path, &dest);
+        }
+    }
+}
+
+/// Decompress pyke's custom LZMA2 format using lzma-rust2.
+fn lzma2_decompress(data: &[u8]) -> Vec<u8> {
+    use std::io::Read;
+    let mut reader = lzma_rust2::LZMA2Reader::new(data, 1 << 26, None);
+    let mut out = Vec::with_capacity(90 * 1024 * 1024);
+    reader
+        .read_to_end(&mut out)
+        .expect("ONNX: LZMA2 decompression failed");
+    out
+}
+
+/// Simple tar parser: find and extract a single file by name.
+/// Tar format: 512-byte header blocks, file data padded to 512-byte boundaries.
+fn extract_tar_entry(data: &[u8], name: &str) -> Option<Vec<u8>> {
+    let mut pos = 0;
+    while pos + 512 <= data.len() {
+        let header = &data[pos..pos + 512];
+        // End-of-archive: two zero blocks.
+        if header.iter().all(|&b| b == 0) {
+            break;
+        }
+        // File name: bytes 0-99, null-terminated.
+        let entry_name = header
+            .split(|&b| b == 0)
+            .next()
+            .unwrap_or(&[]);
+        let entry_name = String::from_utf8_lossy(entry_name);
+        // File size: bytes 124-135, octal string.
+        let size_str = header[124..136]
+            .split(|&b| b == 0 || b == b' ')
+            .next()
+            .unwrap_or(&[]);
+        let size_str = std::str::from_utf8(size_str).unwrap_or("");
+        let size = usize::from_str_radix(size_str.trim(), 8).unwrap_or(0);
+        // Data starts at pos + 512.
+        let data_start = pos + 512;
+        let data_end = data_start + size;
+        if data_end > data.len() {
+            break;
+        }
+        if entry_name == name {
+            return Some(data[data_start..data_end].to_vec());
+        }
+        // Next entry: data padded to 512-byte boundary.
+        let padded = (size + 511) & !511;
+        pos = data_start + padded;
+    }
+    None
+}
+
+/// Build a shared library from a static archive using the system linker.
+/// Linux: cc -shared -z noexecstack -Wl,--whole-archive ... -Wl,--no-whole-archive -lstdc++ ...
+/// macOS: cc -dynamiclib -Wl,-force_load ... -lc++ ...
+/// Windows: link /DLL /OUT:... ... (MSVC)
+fn build_shared_from_archive(archive: &Path, output: &Path, _shared_name: &str) {
+    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    eprintln!(
+        "donsetch build: building ONNX shared lib from {}",
+        archive.display()
+    );
+
+    let status = if os == "windows" {
+        // MSVC: link.exe to create a DLL from the static lib.
+        // The static lib contains all ONNX code; /DLL exports
+        // all symbols marked __declspec(dllexport).
+        Command::new("cmd")
+            .args(["/C", "link", "/DLL", "/NOLOGO", "/MACHINE:X64"])
+            .arg(format!("/OUT:{}", output.display()))
+            .arg(archive)
+            .arg("Advapi32.lib")
+            .arg("User32.lib")
+            .status()
+    } else if os == "macos" {
+        // macOS: dynamiclib from static archive.
+        // -force_load includes all objects (like --whole-archive).
+        Command::new("cc")
+            .args(["-dynamiclib", "-o"])
+            .arg(output)
+            .arg("-Wl,-force_load")
+            .arg(archive)
+            .args(["-lc++", "-lpthread", "-ldl", "-lm"])
+            .args(["-framework", "CoreFoundation"])
+            .status()
+    } else {
+        // Linux: shared object from static archive.
+        // --whole-archive includes all objects.
+        // --allow-multiple-definition handles duplicate symbols in the archive.
+        // -z noexecstack clears the executable stack flag (ONNX has assembly
+        // objects without .note.GNU-stack, which defaults to execstack on Linux).
+        Command::new("cc")
+            .args(["-shared", "-z", "noexecstack", "-o"])
+            .arg(output)
+            .arg("-Wl,--whole-archive,--allow-multiple-definition")
+            .arg(archive)
+            .arg("-Wl,--no-whole-archive")
+            .args(["-lstdc++", "-lpthread", "-ldl", "-lm"])
+            .status()
+    };
+
+    let status = status.unwrap_or_else(|e| panic!("ONNX: failed to spawn linker ({e})"));
+    if !status.success() {
+        panic!("ONNX: shared library build failed");
     }
 }
 
