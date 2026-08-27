@@ -1,5 +1,7 @@
 * @dondai44423
 
-# Auto-request review on search + CI changes.
+# Auto-request review from co-maintainer.
 /src/search/ @Mart-Bogdan
-/.github/workflows/ @Mart-Bogdan
+/src/ghost/ @Mart-Bogdan
+/src/fetch/ @Mart-Bogdan
+/.github/ @Mart-Bogdan
