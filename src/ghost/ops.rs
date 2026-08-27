@@ -639,7 +639,7 @@ pub async fn selftest(ghost: &mut Ghost) -> Result<String, FetchError> {
     std::fs::write(&page, include_str!("selftest.html"))
         .map_err(|e| FetchError::ghost(format!("selftest: {e}")))?;
     let url = format!("file://{}", page.display());
-    ghost.navigate(&url).await?;
+    ghost.navigate_raw(&url, false).await?;
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(10) {
         tokio::time::sleep(Duration::from_millis(300)).await;

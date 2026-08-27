@@ -206,8 +206,12 @@ impl Cdp {
                 let session2 = session.clone();
                 tokio::spawn(async move {
                     // Fail-closed on DNS failure / non-http / private IP.
+                    // file: and data: URLs are safe (no network
+                    // request) and needed for the selftest.
                     let safe = if url.is_empty() {
                         false
+                    } else if url.starts_with("file:") || url.starts_with("data:") {
+                        true
                     } else {
                         crate::fetch::guards::ensure_url_safe(&url).await.is_ok()
                     };

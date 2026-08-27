@@ -724,10 +724,19 @@ impl Ghost {
     pub async fn navigate(&self, url: &str) -> Result<(), FetchError> {
         // Centralized SSRF guard for browser tier: validates scheme,
         // credentials, literal IP ranges and (async) DNS resolution.
-        // This is the sole gate for all Ghost navigations — solve,
+        // This is the sole gate for all Ghost navigations - solve,
         // render, ghost_fetch and actions all flow through here, so
         // tier=2 cannot bypass it.
-        crate::fetch::guards::ensure_url_safe(url).await?;
+        self.navigate_raw(url, true).await
+    }
+
+    /// Navigate without the SSRF guard. Internal use only
+    /// (selftest loads a local file:// URL). The CDP Fetch guard
+    /// is still active as defense-in-depth.
+    pub async fn navigate_raw(&self, url: &str, check_redirects: bool) -> Result<(), FetchError> {
+        if check_redirects {
+            crate::fetch::guards::ensure_url_safe(url).await?;
+        };
         // Dispatch navigation and absorb the settle window.
         //
         // Debian 12 chromium 151 (observed in testing): session-
@@ -766,7 +775,7 @@ impl Ghost {
                 // initial URL was safe. This mirrors fetch's per-hop
                 // redirect guard. DNS rebinding residual applies here
                 // as well (see guards::ensure_url_safe docs).
-                if cur != url {
+                if cur != url && check_redirects {
                     crate::fetch::guards::ensure_url_safe(&cur).await?;
                 }
                 return Ok(());
