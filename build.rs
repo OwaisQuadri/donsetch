@@ -663,24 +663,29 @@ fn build_shared_from_archive(archive: &Path, output: &Path, _shared_name: &str) 
     let status = if os == "windows" {
         // MSVC: use cc crate to find link.exe (GNU coreutils `link`
         // shadows MSVC link.exe in PATH on GitHub Actions runners).
+        // The cc crate also provides the MSVC environment (LIB, INCLUDE,
+        // PATH) needed to find system libraries like Advapi32.lib.
         let target = env::var("TARGET").unwrap_or_default();
-        let link_exe =
-            cc::windows_registry::find_tool(&target, "link.exe").map(|t| t.path().to_path_buf());
-        let link_path = link_exe
-            .as_deref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "link".to_string());
-        let mut cmd = Command::new(&link_path);
+        let tool = cc::windows_registry::find_tool(&target, "link.exe")
+            .expect("ONNX: MSVC link.exe not found");
+        let mut cmd = Command::new(tool.path());
         cmd.args(["/DLL", "/NOLOGO", "/MACHINE:X64"])
             .arg(format!("/OUT:{}", output.display()))
             .arg(archive)
             .args(["Advapi32.lib", "User32.lib"]);
+        // Set MSVC environment (LIB, INCLUDE, etc.) so link.exe
+        // can find system libraries.
+        for (key, value) in tool.env() {
+            cmd.env(key, value);
+        }
         cmd.status()
     } else if os == "macos" {
         // macOS: dynamiclib from static archive.
         // -force_load includes all objects (like --whole-archive).
-        // Foundation framework needed for CoreML EP (NSLog, NSFileManager,
-        // NSString, NSTemporaryDirectory, etc.).
+        // -multiply_defined suppress: ONNX archive has duplicate protobuf
+        // symbols (common in C++ protobuf projects). GNU ld uses
+        // --allow-multiple-definition; macOS ld uses -multiply_defined suppress.
+        // Foundation framework: CoreML EP (NSLog, NSFileManager, NSString, etc.).
         Command::new("cc")
             .args(["-dynamiclib", "-o"])
             .arg(output)
@@ -689,6 +694,7 @@ fn build_shared_from_archive(archive: &Path, output: &Path, _shared_name: &str) 
             .args(["-lc++", "-lpthread", "-ldl", "-lm"])
             .args(["-framework", "CoreFoundation"])
             .args(["-framework", "Foundation"])
+            .arg("-Wl,-multiply_defined,suppress")
             .status()
     } else {
         // Linux: shared object from static archive.

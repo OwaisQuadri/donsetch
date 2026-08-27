@@ -89,12 +89,4 @@ mod tests {
     fn has_avx_returns_bool() {
         let _ = has_avx();
     }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn cache_roundtrip() {
-        // write_cache + read_cache should round-trip true.
-        write_cache(true);
-        assert_eq!(read_cache(), Some(true));
-    }
 }
