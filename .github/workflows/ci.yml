@@ -138,13 +138,6 @@ jobs:
         with:
           key: ${{ matrix.target }}-v3
 
-      - name: Build test targets
-        # Use --no-run so the compiled test binaries match exactly
-        # what cargo test will use (same flags, same fingerprints).
-        # This prevents cargo test from recompiling.
-        run: cargo test ${{ matrix.features }} --target ${{ matrix.target }} ${{ matrix.test-mode }} --no-run --no-fail-fast
-        timeout-minutes: 35
-
       - name: Test
         # Windows: --lib only (integration test linking takes 20+ min
         # with the axum dependency tree on MSVC). Lib tests (689) cover
