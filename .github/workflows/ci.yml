@@ -135,8 +135,8 @@ jobs:
         timeout-minutes: 35
 
       - name: Test
-        run: cargo test ${{ matrix.features }} --target ${{ matrix.target }} -- ${{ matrix.test-skip }}
-        timeout-minutes: 10
+        run: cargo test ${{ matrix.features }} --target ${{ matrix.target }} --no-fail-fast -- ${{ matrix.test-skip }}
+        timeout-minutes: 20
 
       # Two platforms, because ~32 cfg sites are Windows-exclusive
       # (all of ghost/proc.rs) and Linux clippy never compiles them.
