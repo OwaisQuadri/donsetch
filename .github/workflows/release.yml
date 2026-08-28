@@ -43,7 +43,7 @@ jobs:
           - name: linux-x64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            features: --features ocr,rerank
+            features: --features ocr,rerank,http
           - name: linux-arm64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
@@ -51,7 +51,7 @@ jobs:
           - name: darwin-arm64
             os: macos-latest
             target: aarch64-apple-darwin
-            features: --features ocr,rerank
+            features: --features ocr,rerank,http
           - name: darwin-x64
             os: macos-15-intel
             target: x86_64-apple-darwin
@@ -61,7 +61,7 @@ jobs:
           - name: win32-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            features: --features ocr,rerank
+            features: --features ocr,rerank,http
 
     steps:
       - uses: actions/checkout@v7

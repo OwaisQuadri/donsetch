@@ -41,7 +41,10 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            features: --features ocr,rerank
+            # http feature tested on Linux only: axum adds 20+ min
+            # compile time on Windows MSVC. macOS/Windows CI skip it.
+            # Release builds ship with http enabled on all platforms.
+            features: --features ocr,rerank,http
             test-skip: ''
             test-mode: ''
           - name: linux-aarch64
