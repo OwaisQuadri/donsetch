@@ -69,6 +69,14 @@ services:
   # transport differs. See README → "HTTP transport" for the env vars.
   donsetch-http:
     profiles: ["http"]
+    # Own build block so `--profile http up -d donsetch-http` works on
+    # machines that haven't built the image yet (otherwise compose tries
+    # to pull donsetch-mcp from Docker Hub and fails).
+    build:
+      context: .
+      # Uncomment to include Chrome for tier 2 browser escalation:
+      # args:
+      #   INSTALL_CHROME: "true"
     image: donsetch-mcp:latest
     container_name: donsetch-http
     environment:
@@ -94,6 +102,12 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    # Crash recovery: the binary is panic=abort in release and the HTTP
+    # transport has no in-process supervisor (that's stdio
+    # `--supervised`) — one panicking request aborts the process, so
+    # Docker restarts the container. `unless-stopped` keeps a manual
+    # `docker compose stop` stopped.
+    restart: unless-stopped
     stop_grace_period: 45s
     init: true
     volumes:

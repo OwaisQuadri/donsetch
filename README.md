@@ -251,7 +251,11 @@ docker compose run --rm donsetch
 stdio service above is unchanged), and MCP clients connect to
 `http://localhost:8765/mcp`. The port is published on `127.0.0.1` by
 default — set `DONSETCH_HTTP_TOKEN` before exposing it further (see
-the HTTP transport env vars in the MCP section).
+the HTTP transport env vars in the MCP section). The service carries
+`restart: unless-stopped`: the binary is `panic = "abort"` in release
+and the HTTP transport has no in-process supervisor (that's stdio
+`--supervised`), so Docker is the crash recovery — a panicking request
+restarts the container instead of leaving it down.
 
 **Docker Compose options.** The bundled `docker-compose.yml`:
 
@@ -261,7 +265,7 @@ the HTTP transport env vars in the MCP section).
 - A 45-second stop grace period so in-flight tier-2 fetches finish on
   `docker compose stop`.
 - An opt-in `http` profile running the same image as a long-lived
-  HTTP server (see above).
+  HTTP server with `restart: unless-stopped` (see above).
 
 **Architecture notes.** Multi-stage build (`rust:slim` →
 `debian:trixie-slim`, kept on the same glibc generation — ort-sys's

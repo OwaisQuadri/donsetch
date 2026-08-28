@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **HTTP transport in the Docker image.** The image now builds `--features ocr,rerank,http` (matching the linux-x64/macOS-arm64/Windows-x64 release binaries), `EXPOSE`s 8765, and the bundled compose file gains an opt-in `http` profile: `docker compose --profile http up -d donsetch-http` serves MCP at `http://localhost:8765/mcp` with a listener-based healthcheck. The port is published on `127.0.0.1` by default so an unset `DONSETCH_HTTP_TOKEN` never exposes unauthenticated MCP to the LAN. The stdio service is unchanged.
+- **HTTP transport in the Docker image.** The image now builds `--features ocr,rerank,http` (matching the linux-x64/macOS-arm64/Windows-x64 release binaries), `EXPOSE`s 8765, and the bundled compose file gains an opt-in `http` profile: `docker compose --profile http up -d donsetch-http` serves MCP at `http://localhost:8765/mcp` with a listener-based healthcheck. The profiled service carries its own `build:` block (it builds the image if it isn't there yet) and `restart: unless-stopped` (Docker-level crash recovery — the HTTP transport has no in-process supervisor). The port is published on `127.0.0.1` by default so an unset `DONSETCH_HTTP_TOKEN` never exposes unauthenticated MCP to the LAN. The stdio service is unchanged.
 
 ## [3.4.0] - 2026-08-28
 
