@@ -611,7 +611,7 @@ Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**, **Para
 
 > If you plan to use Bright Data's proxy or web data products, please
 > grab them through this link: https://get.brightdata.com/ivqwoicrrlbr
-> (no extra cost to you), and it supports the author (Dondai) and DonSeTch development.
+> (no extra cost to you),and it helps me keep this project going.
 
 ---
 
