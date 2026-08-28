@@ -246,6 +246,13 @@ and resource limits):
 docker compose run --rm donsetch
 ```
 
+**HTTP transport.** The image also serves the HTTP transport:
+`docker compose --profile http up -d donsetch-http` starts it (the
+stdio service above is unchanged), and MCP clients connect to
+`http://localhost:8765/mcp`. The port is published on `127.0.0.1` by
+default — set `DONSETCH_HTTP_TOKEN` before exposing it further (see
+the HTTP transport env vars in the MCP section).
+
 **Docker Compose options.** The bundled `docker-compose.yml`:
 
 - A cache volume persisting fetch/search state across restarts.
@@ -253,11 +260,15 @@ docker compose run --rm donsetch
   crawls) and an init process to reap zombies.
 - A 45-second stop grace period so in-flight tier-2 fetches finish on
   `docker compose stop`.
+- An opt-in `http` profile running the same image as a long-lived
+  HTTP server (see above).
 
 **Architecture notes.** Multi-stage build (`rust:slim` →
 `debian:trixie-slim`, kept on the same glibc generation — ort-sys's
-prebuilt ONNX Runtime needs glibc 2.38+ symbols on both sides), all
-features enabled, PDFium acquired at build time by the repo's own
+prebuilt ONNX Runtime needs glibc 2.38+ symbols on both sides), built
+with `--features ocr,rerank,http` (the same feature set as the
+linux-x64, macOS-arm64, and Windows-x64 release binaries), PDFium
+acquired at build time by the repo's own
 `build.rs` (sha256-verified), Go installed per-target-arch for
 BoringSSL's build system (amd64 and arm64). Single ~36MB binary in a
 minimal runtime image — no Python, no Playwright.
