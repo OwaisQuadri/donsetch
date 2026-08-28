@@ -43,12 +43,23 @@ semver = "1"
 # Agent CLI: spec-driven command generation (builder API, no derive).
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context", "suggestions"] }
 psl = { version = "=2.1.226" }
-# Semantic reranker — cross-encoder via ONNX Runtime, shares ort with OCR.
-ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "api-24"], optional = true }
+# OCR/rerank support deps. `ort` itself goes ONLY in the per-target sections
+# below, never here: Cargo unions features across matching target sections, so
+# a shared entry leaks `load-dynamic` onto Windows/macOS and silently strips
+# ONNX from those builds (the 3.3.0 bug — full story in src/onnx.rs).
 tokenizers = { version = "0.23", default-features = false, features = ["onig"], optional = true }
 ndarray = { version = "0.17", optional = true }
 num_cpus = { version = "1.17", optional = true }
 
+# Linux: dlopen'd at runtime behind an AVX gate — the prebuilt static archive
+# runs unguarded AVX in global constructors and SIGILLs pre-`main` on non-AVX
+# CPUs (#57). The .so is built at compile time and shipped beside the binary.
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dynamic", "ndarray", "api-24"], optional = true }
+
+# macOS / Windows: statically linked. No AVX hazard worth the dlopen dance,
+# and the MSVC linker cannot build a DLL from the archive (duplicate protobuf
+# symbols), so dynamic loading is not an option here anyway.
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native", "copy-dylibs", "api-24"], optional = true }
 

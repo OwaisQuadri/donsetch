@@ -5,6 +5,17 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **OCR and rerank silently dead on Windows and macOS arm64 since 3.3.0:** 3.3.0 intended to confine `ort`'s `load-dynamic` to Linux and keep macOS/Windows on static linking, but declared `ort` in the shared `[dependencies]` table *and* in a `cfg(not(target_os = "linux"))` table. Cargo unions features across every target section whose cfg matches rather than choosing one, so `load-dynamic` reached macOS and Windows too, where it wins over static linking. It also implies `ort-sys/disable-linking`, whose build script returns before downloading anything and before `copy-dylibs` runs — so the binaries shipped with ONNX Runtime neither linked in nor present beside them, and no build-time error. Nothing failed loudly at runtime either: OCR reported scanned pages as `no text layer and OCR did not recover them` instead of reading them, and search dropped to RRF+BM25 after a 30s reranker init timeout, memoized for the process lifetime. Visible in the shipped artifacts — `donsetch-win32-x64`'s binary fell from 35.6MB to 16.3MB and `donsetch-darwin-arm64` from 14.2MB to 8.3MB, the missing ~19MB and ~6MB being the ONNX static archive. Fixed by declaring `ort` only in two mutually exclusive target sections, never in the shared one. Linux keeps `load-dynamic` and its AVX gate unchanged. Verified on Windows 11 and Windows 10 22H2: OCR restored to 98% mean confidence on the issue #26 PDF, reranker initializes, cold-start search back to ~3s.
+
+### Changed
+
+- **`src/onnx.rs` module docs rewritten:** a per-target map and the rule that `ort` must stay in per-target tables now lead; below them, reference sections on how ONNX is acquired and linked on each platform, a postmortem of how the 3.3.0 feature leak stayed silent, and why Windows links `DirectML.dll` without ever calling it.
+- **README gotchas:** documented that Windows needs `DirectML.dll` present at startup (in-box since Windows 10 1903, version irrelevant, `0xC0000135` and no output when missing — and never harvest a copy from another machine's `System32`, which fails just as silently with `0xC0000142`), and that OCR/rerank models are downloaded on first use rather than bundled, with their cache locations and how to pre-seed an offline machine.
+
 ## [3.4.0] - 2026-08-28
 
 ### Added
