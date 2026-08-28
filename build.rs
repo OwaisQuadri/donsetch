@@ -594,7 +594,7 @@ fn copy_onnx_shared_lib(shared_path: &Path) {
 /// Decompress pyke's custom LZMA2 format using lzma-rust2.
 fn lzma2_decompress(data: &[u8]) -> Vec<u8> {
     use std::io::Read;
-    let mut reader = lzma_rust2::LZMA2Reader::new(data, 1 << 26, None);
+    let mut reader = lzma_rust2::Lzma2Reader::new(data, 1 << 26, None);
     let mut out = Vec::with_capacity(90 * 1024 * 1024);
     reader
         .read_to_end(&mut out)

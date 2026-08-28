@@ -317,6 +317,15 @@ Or use `npx` without global install:
 
 Works with Claude Code, Cursor, OpenCode, Pi, Windsurf, and any client that speaks MCP. Three tools: `web_fetch`, `web_search`, `web_crawl`.
 
+**Streamable HTTP transport.** DonSeTch also speaks the MCP streamable-HTTP protocol for remote clients. Start with `--http`:
+
+```bash
+donsetch mcp --http --bind 0.0.0.0:8765
+donsetch mcp --http --bind 0.0.0.0:8765 --token "secret"   # require bearer auth
+```
+
+Or set `DONSETCH_TRANSPORT=http` and `DONSETCH_HTTP_BIND` / `DONSETCH_HTTP_TOKEN` env vars. Endpoints: `POST /mcp` (JSON-RPC), `GET /mcp` (SSE stream), `DELETE /mcp` (end session), `GET /health`. Per-request timeout via `DONSETCH_HTTP_TIMEOUT_SECS` (default 300). CORS disabled by default; set `DONSETCH_HTTP_CORS=*` to allow a specific origin.
+
 ### CLI (for humans and scripts)
 
 ```bash
