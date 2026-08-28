@@ -5,6 +5,18 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-08-28
+
+### Added
+
+- **Tier 3 bypass fetch (Bright Data Web Unlocker):** when ghost hits a hard wall it cannot solve (interactive captcha, DataDome, Cloudflare challenge), `fetch` hands the URL to Bright Data's Web Unlocker API, which solves the wall server-side and returns rendered HTML into the normal extraction pipeline. Strictly opt-in for advanced users: `donsetch keys add unlocker <key>[::zone]` (alias `wu`). No key = behavior identical to previous releases. Only successful unlocks are billed. Guardrails: daily cap (`DONSETCH_BYPASS_MAX_DAILY`, default 50), hard timeout (`DONSETCH_BYPASS_TIMEOUT_SECS`, default 90), explicit off switch (`DONSETCH_BYPASS=0`), optional JS render (`DONSETCH_BYPASS_RENDER=1`). 12 unit tests.
+- **Solve-cache:** every successful unlock is stored locally keyed by URL hash (sliding TTL, default 6h via `DONSETCH_BYPASS_CACHE_TTL_SECS`). Fetching the same page twice inside the TTL costs nothing: the second fetch is served from cache (`tier 3-cached`) and does not consume the daily cap. Hot URLs stay alive, cold ones expire, oldest-entry pruning caps the cache at 200 entries (`DONSETCH_BYPASS_CACHE_MAX_ENTRIES`). Parallel fetches of the same URL coalesce into a single paid call via an in-flight gate. Cache off via `DONSETCH_BYPASS_CACHE=0`.
+- **Doctor check #15:** reports whether an unlocker key is configured.
+
+### Fixed
+
+- Bypass HTTP client no longer negotiates gzip/deflate: Bright Data returns JSON-wrapped HTML and reqwest auto-decompression failed on large responses (756KB pages), truncating the body.
+
 ## [3.3.0] - 2026-08-28
 
 ### Added

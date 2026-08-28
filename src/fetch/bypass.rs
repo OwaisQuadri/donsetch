@@ -19,11 +19,17 @@
 //!   DONSETCH_BYPASS_RENDER=1               force JS render via unlocker browser
 //!   DONSETCH_UNLOCKER_ZONE=<zone>           default zone when key has no ::zone
 //!   DONSETCH_BYPASS_ENDPOINT=<url>          test hook: override API endpoint
+//!   DONSETCH_BYPASS_CACHE_TTL_SECS=<n>      solve-cache TTL (default 21600, 0 disables)
+//!   DONSETCH_BYPASS_CACHE_MAX_ENTRIES=<n>   solve-cache size cap (default 200)
+//!   DONSETCH_BYPASS_CACHE=0                disable the solve-cache
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::search::byok::store::{ByokConfig, KeyState};
 
@@ -37,6 +43,8 @@ pub struct BypassConfig {
     pub timeout: Duration,
     pub render: bool,
     pub endpoint: String,
+    pub cache_ttl: Duration,
+    pub cache_max: u32,
 }
 
 impl Default for BypassConfig {
@@ -47,6 +55,8 @@ impl Default for BypassConfig {
             timeout: Duration::from_secs(90),
             render: false,
             endpoint: PROD_ENDPOINT.to_string(),
+            cache_ttl: Duration::from_secs(21_600),
+            cache_max: 200,
         }
     }
 }
@@ -86,6 +96,19 @@ impl BypassConfig {
             && !e.trim().is_empty()
         {
             cfg.endpoint = e.trim().to_string();
+        }
+        if env_bool_off("DONSETCH_BYPASS_CACHE") {
+            cfg.cache_ttl = Duration::ZERO;
+        }
+        if let Ok(n) = std::env::var("DONSETCH_BYPASS_CACHE_TTL_SECS")
+            && let Ok(n) = n.trim().parse::<u64>()
+        {
+            cfg.cache_ttl = Duration::from_secs(n.clamp(0, 31_536_000));
+        }
+        if let Ok(n) = std::env::var("DONSETCH_BYPASS_CACHE_MAX_ENTRIES")
+            && let Ok(n) = n.trim().parse::<u32>()
+        {
+            cfg.cache_max = n.clamp(1, 100_000);
         }
         cfg
     }
@@ -150,10 +173,13 @@ pub fn check_and_bump_daily(path: &Path, max: u32) -> bool {
 }
 
 /// Outcome of a successful unlock request.
+#[derive(Debug, Clone)]
 pub struct BypassOutcome {
     pub status: u16,
     pub content_type: String,
     pub body: Vec<u8>,
+    /// True when served from the local solve-cache (no API spend).
+    pub cached: bool,
 }
 
 /// Failure classified for key-state feedback and call-site messaging.
@@ -270,14 +296,162 @@ pub fn apply_key_state(provider: &str, key: &str, fail: &BypassFail) {
     cfg.save();
 }
 
-/// Perform one unlock request. Pure network + IO; the MCP layer
-/// composes the value (extraction, envelopes) from the outcome.
+// ── Solve-cache: never pay twice for the same page ───────────
+//
+// A successful unlock is stored under `bypass-cache/<sha256(url)>.json`.
+// Repeated fetches of the same URL are served from cache for the TTL
+// window at zero API cost. Sliding TTL: every hit rewrites the
+// timestamp, so hot URLs stay alive and cold ones expire. Oldest-entry
+// pruning caps disk growth. In-flight locking coalesces parallel
+// requests for the same URL into one paid call.
+
+fn now_ts() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn cache_key(url: &str) -> String {
+    let digest = Sha256::digest(url.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub fn bypass_cache_dir(cache_dir: &Path) -> PathBuf {
+    cache_dir.join("bypass-cache")
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CacheEntry {
+    v: u32,
+    url: String,
+    ts: u64,
+    status: u16,
+    content_type: String,
+    body: String,
+}
+
+fn cache_get(cache_dir: &Path, url: &str, ttl_secs: u64) -> Option<BypassOutcome> {
+    if ttl_secs == 0 {
+        return None;
+    }
+    let path = bypass_cache_dir(cache_dir).join(format!("{}.json", cache_key(url)));
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let entry: CacheEntry = serde_json::from_str(&raw).ok()?;
+    if entry.v != 1 || entry.url != url {
+        return None;
+    }
+    if now_ts().saturating_sub(entry.ts) > ttl_secs {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    }
+    Some(BypassOutcome {
+        status: entry.status,
+        content_type: entry.content_type,
+        body: entry.body.into_bytes(),
+        cached: true,
+    })
+}
+
+/// Refresh the timestamp on a hit (sliding TTL: hot entries survive).
+fn cache_touch(cache_dir: &Path, url: &str) {
+    let path = bypass_cache_dir(cache_dir).join(format!("{}.json", cache_key(url)));
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(mut entry) = serde_json::from_str::<CacheEntry>(&raw) else {
+        return;
+    };
+    entry.ts = now_ts();
+    if let Ok(json) = serde_json::to_string(&entry) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+fn cache_put(cache_dir: &Path, url: &str, outcome: &BypassOutcome, max_entries: u32) {
+    let dir = bypass_cache_dir(cache_dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let key = cache_key(url);
+    let entry = CacheEntry {
+        v: 1,
+        url: url.to_string(),
+        ts: now_ts(),
+        status: outcome.status,
+        content_type: outcome.content_type.clone(),
+        body: String::from_utf8_lossy(&outcome.body).to_string(),
+    };
+    let path = dir.join(format!("{key}.json"));
+    let tmp = dir.join(format!("{key}.tmp"));
+    if std::fs::write(&tmp, serde_json::to_string(&entry).unwrap_or_default()).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+    cache_prune(&dir, max_entries);
+}
+
+/// Oldest-first eviction until the entry count is within max.
+fn cache_prune(dir: &Path, max_entries: u32) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut metas: Vec<(u64, PathBuf)> = Vec::new();
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let ts = std::fs::read_to_string(&p)
+            .ok()
+            .and_then(|s| serde_json::from_str::<CacheEntry>(&s).ok())
+            .map(|c| c.ts)
+            .unwrap_or(0);
+        metas.push((ts, p));
+    }
+    if metas.len() <= max_entries as usize {
+        return;
+    }
+    metas.sort_by_key(|(ts, _)| *ts);
+    let drop = metas.len() - max_entries as usize;
+    for (_, p) in metas.iter().take(drop) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// One gate per URL: parallel fetches of the same URL share one
+/// paid unlock.
+fn in_flight_lock(url: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static MAP: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let map = MAP.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
+    guard
+        .entry(cache_key(url))
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+/// Perform one unlock request. Cache-first: a fresh solve-cache hit
+/// costs nothing and does not consume the daily cap. Parallel
+/// requests for the same URL coalesce into one paid call. Pure
+/// network + IO; the MCP layer composes the value (extraction,
+/// envelopes) from the outcome.
 pub async fn unlock(
     key: &str,
     url: &str,
     cfg: &BypassConfig,
     cache_dir: &Path,
 ) -> Result<BypassOutcome, BypassFail> {
+    let ttl = cfg.cache_ttl.as_secs();
+    if let Some(outcome) = cache_get(cache_dir, url, ttl) {
+        cache_touch(cache_dir, url);
+        return Ok(outcome);
+    }
+    let gate = in_flight_lock(url);
+    let _guard = gate.lock().await;
+    if let Some(outcome) = cache_get(cache_dir, url, ttl) {
+        cache_touch(cache_dir, url);
+        return Ok(outcome);
+    }
     let count_path = bypass_count_path(cache_dir);
     if !check_and_bump_daily(&count_path, cfg.max_daily) {
         return Err(BypassFail::Target(
@@ -312,11 +486,17 @@ pub async fn unlock(
         .bytes()
         .await
         .map_err(|e| BypassFail::Target(format!("bypass response truncated ({e})")))?;
-    parse_response(api_status, &bytes).map(|(status, content_type, body)| BypassOutcome {
-        status,
-        content_type,
-        body,
-    })
+    let outcome =
+        parse_response(api_status, &bytes).map(|(status, content_type, body)| BypassOutcome {
+            status,
+            content_type,
+            body,
+            cached: false,
+        })?;
+    if ttl > 0 {
+        cache_put(cache_dir, url, &outcome, cfg.cache_max);
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -409,5 +589,66 @@ mod tests {
             }],
         };
         assert_eq!(active_unlocker_key(&cfg), Some("good".to_string()));
+    }
+
+    #[test]
+    fn cache_roundtrip_hit_ttl_and_miss() {
+        let dir =
+            std::env::temp_dir().join(format!("donsetch-bypass-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let url = "https://example.com/x";
+        let outcome = BypassOutcome {
+            status: 200,
+            content_type: "text/html".into(),
+            body: b"<html>solved</html>".to_vec(),
+            cached: false,
+        };
+        cache_put(&dir, url, &outcome, 10);
+        let got = cache_get(&dir, url, 3600).unwrap();
+        assert_eq!(got.body, outcome.body);
+        assert_eq!(got.status, 200);
+        assert!(got.cached);
+        // ttl 0 = cache disabled, never hits
+        assert!(cache_get(&dir, url, 0).is_none());
+        // different URL misses
+        assert!(cache_get(&dir, "https://example.com/y", 3600).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_prune_evicts_oldest() {
+        let dir =
+            std::env::temp_dir().join(format!("donsetch-bypass-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for i in 0..4 {
+            let url = format!("https://example.com/p{i}");
+            let outcome = BypassOutcome {
+                status: 200,
+                content_type: "text/html".into(),
+                body: format!("body{i}").into_bytes(),
+                cached: false,
+            };
+            cache_put(&dir, &url, &outcome, 2);
+        }
+        let dir2 = bypass_cache_dir(&dir);
+        let n = std::fs::read_dir(&dir2)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                let p = e.path();
+                p.extension().and_then(|x| x.to_str()) == Some("json")
+            })
+            .count();
+        assert_eq!(n, 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inflight_lock_shares_gate_per_url() {
+        let a = in_flight_lock("https://example.com/z");
+        let b = in_flight_lock("https://example.com/z");
+        let c = in_flight_lock("https://example.com/w");
+        assert!(Arc::ptr_eq(&a, &b));
+        assert!(!Arc::ptr_eq(&a, &c));
     }
 }

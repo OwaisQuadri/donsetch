@@ -2064,15 +2064,21 @@ async fn try_bypass(
         "bypass",
         "unlocker",
         &format!(
-            "ok status={} body={}KB",
+            "{} status={} body={}KB",
+            if outcome.cached { "cache hit" } else { "ok" },
             outcome.status,
             outcome.body.len() / 1024
         ),
         t0.elapsed().as_millis(),
     );
+    let tier = if outcome.cached {
+        "3-cached"
+    } else {
+        "3-bypass"
+    };
     let mut res = finish_result(
         &ex,
-        "3-bypass",
+        tier,
         outcome.status,
         "ContentOk",
         url,
@@ -2080,7 +2086,11 @@ async fn try_bypass(
         t0.elapsed().as_millis(),
     );
     if let Some(sc) = res.pointer_mut("/structuredContent") {
-        sc["bypass"] = json!({"provider": "brightdata", "tier": "unlocker"});
+        sc["bypass"] = json!({
+            "provider": "brightdata",
+            "tier": if outcome.cached { "cache" } else { "unlocker" },
+            "cache": outcome.cached,
+        });
     }
     apply_link_handles(daemon, &mut res).await;
     Some(res)

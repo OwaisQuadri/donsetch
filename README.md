@@ -626,7 +626,13 @@ Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**, **Para
 
 `fetch` tries plain HTTP first (~100-300ms). If the site serves a bot wall or a JS shell, it auto-escalates to the ghost browser, solves the challenge, bounces cookies back to tier 1, and re-fetches at full speed.
 
-**Tier 3 bypass** (opt-in): when ghost itself hits a hard wall (interactive captcha, DataDome, Cloudflare challenge), `fetch` falls back to Bright Data Web Unlocker API if a key is configured (`donsetch keys add unlocker <key>[::zone]`). The unlocker solves the wall server-side and returns rendered HTML into the normal extraction pipeline. No key = identical behavior to today. Env: `DONSETCH_BYPASS=0` disables; `DONSETCH_BYPASS_MAX_DAILY=<n>` caps spend (default 50).
+**Tier 3 bypass** (opt-in upgrade): when ghost itself hits a hard wall (interactive captcha, DataDome, Cloudflare challenge), `fetch` falls back to Bright Data Web Unlocker API if a key is configured (`donsetch keys add unlocker <key>[::zone]`). The unlocker solves the wall server-side and returns rendered HTML into the normal extraction pipeline. Advanced users only: DonSeTch works the same without it, and a key only costs you when the unlocker actually succeeds.
+
+**Solve-cache**: every successful unlock is cached locally (repository keyed by URL hash, sliding 6h TTL). Fetch the same page again within the TTL and the content is served from cache at zero API cost. Hot URLs stay alive, cold ones expire, oldest-entry pruning caps disk growth (200 entries). Parallel fetches of the same URL share one paid call.
+
+Env: `DONSETCH_BYPASS=0` disables; `DONSETCH_BYPASS_MAX_DAILY=<n>` caps spend per day (default 50); `DONSETCH_BYPASS_TIMEOUT_SECS` (default 90); `DONSETCH_BYPASS_RENDER=1` forces JS rendering; `DONSETCH_BYPASS_CACHE_TTL_SECS` (default 21600); `DONSETCH_BYPASS_CACHE_MAX_ENTRIES` (default 200); `DONSETCH_BYPASS_CACHE=0` turns the cache off.
+
+Planning to use Bright Data? Grab it through this referral link (no extra cost to you, it helps me keep this project going): https://get.brightdata.com/ivqwoicrrlbr
 
 - **DonSift extraction engine**: HTML bytes in, agent-native markdown out. Block model: typed blocks (Heading/Para/List/Table/Code/Quote/Media) with heading breadcrumbs.
 - **`focus`** — BM25-relevant blocks only. Cuts context 80%+ on long pages. 12-language BM25: CJK character unigrams + bigrams, stopword lists, light stemming, accent folding.
