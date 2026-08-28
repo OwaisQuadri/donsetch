@@ -42,6 +42,21 @@ async fn main() {
                 }
                 return;
             }
+            // Without the `http` cargo feature the checks above compile
+            // out, so a requested HTTP transport would silently fall
+            // through to stdio — fail loudly instead. (The linux-arm64
+            // and macOS-x64 prebuilt binaries are core-only.)
+            #[cfg(not(feature = "http"))]
+            if args.iter().any(|a| a == "--http")
+                || std::env::var("DONSETCH_TRANSPORT").as_deref() == Ok("http")
+            {
+                eprintln!(
+                    "mcp: HTTP transport requested (--http / DONSETCH_TRANSPORT=http), but this \
+                     binary was built without the `http` cargo feature. Rebuild with \
+                     --features http, or use a prebuilt binary that includes it."
+                );
+                std::process::exit(1);
+            }
             let _ = std::env::var("DONSETCH_TRANSPORT");
             if args.iter().any(|a| a == "--supervised") {
                 // v3 crash-only design: `--supervised` spawns a child

@@ -5,6 +5,12 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Loud failure for `--http` without the feature.** In a binary built without the `http` cargo feature (the linux-arm64 and macOS-x64 prebuilts, and any plain `cargo build`), `donsetch mcp --http` and `DONSETCH_TRANSPORT=http` silently fell through to stdio — a client configured for HTTP would hang waiting on a listener that never came up. Both paths now exit immediately with an error naming the missing cargo feature and how to get a binary that includes it.
+
 ## [3.4.0] - 2026-08-28
 
 ### Added
