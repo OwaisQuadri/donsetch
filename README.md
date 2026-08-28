@@ -593,6 +593,7 @@ donsetch keys add serper ...
 donsetch keys add tinyfish sk-tinyfish-...
 donsetch keys add parallel nKil3...      # Parallel AI (fast mode)
 donsetch keys add bd 576d013c...        # Bright Data SERP (bd = alias)
+donsetch keys add unlocker <key>[::zone]   # Bright Data Web Unlocker (anti-bot bypass fetch)
 
 # See what's configured (keys are masked)
 donsetch keys list
@@ -624,6 +625,8 @@ Providers: **TinyFish** (free tier), **Tavily**, **Serper.dev**, **Exa**, **Para
 ## 🌐 Fetch
 
 `fetch` tries plain HTTP first (~100-300ms). If the site serves a bot wall or a JS shell, it auto-escalates to the ghost browser, solves the challenge, bounces cookies back to tier 1, and re-fetches at full speed.
+
+**Tier 3 bypass** (opt-in): when ghost itself hits a hard wall (interactive captcha, DataDome, Cloudflare challenge), `fetch` falls back to Bright Data Web Unlocker API if a key is configured (`donsetch keys add unlocker <key>[::zone]`). The unlocker solves the wall server-side and returns rendered HTML into the normal extraction pipeline. No key = identical behavior to today. Env: `DONSETCH_BYPASS=0` disables; `DONSETCH_BYPASS_MAX_DAILY=<n>` caps spend (default 50).
 
 - **DonSift extraction engine**: HTML bytes in, agent-native markdown out. Block model: typed blocks (Heading/Para/List/Table/Code/Quote/Media) with heading breadcrumbs.
 - **`focus`** — BM25-relevant blocks only. Cuts context 80%+ on long pages. 12-language BM25: CJK character unigrams + bigrams, stopword lists, light stemming, accent folding.

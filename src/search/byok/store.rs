@@ -29,6 +29,7 @@ pub const PROVIDERS: &[&str] = &[
     "tinyfish",
     "parallel",
     "brightdata",
+    "unlocker",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

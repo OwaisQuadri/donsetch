@@ -1523,6 +1523,15 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
                     return res;
                 }
                 let kind = verdict_kind(v, o.status);
+                // v3.4: bypass fetch for hard walls (Challenge/Blocked).
+                // Fires on tier != "1" (respect explicit no-escalation).
+                // Skip AuthWall/Paywall/SoftNotFound (credentials/money/dead).
+                if tier != "1"
+                    && matches!(v, Verdict::Challenge(_) | Verdict::Blocked)
+                    && let Some(v3) = try_bypass(daemon, &url, &opts, &mut trace).await
+                {
+                    return v3;
+                }
                 return tool_error_structured(
                     verdict_error(v, o.status, &o.url),
                     kind,
@@ -1774,6 +1783,13 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
                 if is_warm {
                     daemon.state.lock().await.record_warm_stale(&host);
                 }
+                // v3.4: ghost hit a hard wall (kind == "walled"),
+                // try bypass unlocker before giving up.
+                if kind == "walled"
+                    && let Some(v3) = try_bypass(daemon, &url, &opts, &mut trace).await
+                {
+                    return v3;
+                }
                 return tool_error_structured(
                     msg,
                     kind,
@@ -1992,6 +2008,84 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
 /// failure, never a success. This is the loop the design always
 /// promised: escalate, render, hand cookies back to tier 1.
 ///
+/// Anti-bot bypass fetch (v3.4): when ghost fails on a hard wall,
+/// hand the URL to Bright Data Web Unlocker API. Opt-in via
+/// `donsetch keys add unlocker <key>`. No key = inert, returns None.
+/// Only fires on wall verdicts (Challenge/Blocked) and ghost "walled"
+/// failures. Respects tier=1 (explicit no-escalation).
+async fn try_bypass(
+    daemon: &Arc<Daemon>,
+    url: &str,
+    opts: &ExtractOptions,
+    trace: &mut Trace,
+) -> Option<Value> {
+    let cfg = crate::fetch::bypass::BypassConfig::from_env();
+    if !cfg.enabled {
+        return None;
+    }
+    let byok = crate::search::byok::store::ByokConfig::load();
+    let key = crate::fetch::bypass::active_unlocker_key(&byok)?;
+    let cache_dir = crate::paths::cache_dir();
+    let t0 = std::time::Instant::now();
+    let outcome = match crate::fetch::bypass::unlock(&key, url, &cfg, &cache_dir).await {
+        Ok(o) => o,
+        Err(e) => {
+            crate::fetch::bypass::apply_key_state("unlocker", &key, &e);
+            let msg = match &e {
+                crate::fetch::bypass::BypassFail::Api(s, _) => format!("bypass API error {s}"),
+                crate::fetch::bypass::BypassFail::Target(m) => m.clone(),
+            };
+            trace.step("bypass", "unlocker", &msg, t0.elapsed().as_millis());
+            return None;
+        }
+    };
+    if crate::fetch::guards::is_binary(&outcome.body, &outcome.content_type) {
+        trace.step(
+            "bypass",
+            "unlocker",
+            "binary content",
+            t0.elapsed().as_millis(),
+        );
+        return None;
+    }
+    let ex = match extract::extract(&outcome.body, &outcome.content_type, url, opts) {
+        Ok(e) => e,
+        Err(e) => {
+            trace.step(
+                "bypass",
+                "extract",
+                &format!("{e}"),
+                t0.elapsed().as_millis(),
+            );
+            return None;
+        }
+    };
+    trace.step(
+        "bypass",
+        "unlocker",
+        &format!(
+            "ok status={} body={}KB",
+            outcome.status,
+            outcome.body.len() / 1024
+        ),
+        t0.elapsed().as_millis(),
+    );
+    let mut res = finish_result(
+        &ex,
+        "3-bypass",
+        outcome.status,
+        "ContentOk",
+        url,
+        trace,
+        t0.elapsed().as_millis(),
+    );
+    if let Some(sc) = res.pointer_mut("/structuredContent") {
+        sc["bypass"] = json!({"provider": "brightdata", "tier": "unlocker"});
+    }
+    apply_link_handles(daemon, &mut res).await;
+    Some(res)
+}
+
 /// `learn` = this escalation was WALL-DRIVEN (challenge seen, warm
 /// cookies bought a shell, or the profile routed skip-to-solve).
 /// A wall-driven success records the solve so the next fetch can

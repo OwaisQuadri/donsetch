@@ -120,6 +120,9 @@ pub async fn run() {
     // 14. Ghost state.
     report!("Ghost state", check_ghost_state());
 
+    // 15. Bypass unlocker key.
+    report!("Bypass unlocker", check_bypass());
+
     // ── Summary ──────────────────────────────────────────────
 
     println!();
@@ -630,6 +633,19 @@ fn check_ghost_state() -> CheckResult {
     let domains = state.profiles.len();
     let renders = state.renders.len();
     CheckResult::Pass(format!("{domains} domains, {renders} renders cached"))
+}
+
+fn check_bypass() -> CheckResult {
+    let cfg = crate::search::byok::store::ByokConfig::load();
+    let has = crate::fetch::bypass::active_unlocker_key(&cfg).is_some();
+    if has {
+        CheckResult::Pass("unlocker key configured".to_string())
+    } else {
+        CheckResult::Warn(
+            "not configured (optional, opt-in: donsetch keys add unlocker <key>[::zone])"
+                .to_string(),
+        )
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────

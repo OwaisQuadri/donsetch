@@ -9,7 +9,7 @@
 //!   donsetch keys import <path>            Import keys from a file
 //!   donsetch keys clear                     Remove all keys
 //!
-//! Providers: tavily, exa, serper, tinyfish, parallel, brightdata
+//! Providers: tavily, exa, serper, tinyfish, parallel, brightdata, unlocker
 
 use super::{bold, dim, green, red};
 
@@ -20,6 +20,7 @@ use crate::search::byok::store::{ByokConfig, PROVIDERS, render_list};
 fn normalize_alias(provider: &str) -> String {
     match provider {
         "bd" => "brightdata".to_string(),
+        "wu" | "brightdata-unlocker" => "unlocker".to_string(),
         _ => provider.to_string(),
     }
 }
