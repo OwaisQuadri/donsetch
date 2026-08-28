@@ -287,6 +287,8 @@ pub async fn unlock(
     let (token, zone) = parse_key(key, DEFAULT_ZONE);
     let client = reqwest::Client::builder()
         .timeout(cfg.timeout)
+        .no_gzip()
+        .no_deflate()
         .build()
         .map_err(|e| BypassFail::Target(format!("bypass client init failed ({e})")))?;
     let mut payload = serde_json::json!({
