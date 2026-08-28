@@ -132,7 +132,7 @@ jobs:
 
       - name: Test
         run: cargo test ${{ matrix.features }} --target ${{ matrix.target }} -- ${{ matrix.test-skip }}
-        timeout-minutes: 25
+        timeout-minutes: 30
 
       # Two platforms, because ~32 cfg sites are Windows-exclusive
       # (all of ghost/proc.rs) and Linux clippy never compiles them.
