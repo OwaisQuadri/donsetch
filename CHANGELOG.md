@@ -5,6 +5,12 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Docs: HTTP transport interface.** The README documented flags and env vars that do not exist (`--bind`, `--token`, `DONSETCH_HTTP_BIND`, `DONSETCH_HTTP_CORS=*`). Replaced with the real interface (`--host`/`--port`, `DONSETCH_HTTP_HOST`/`_PORT`/`_TOKEN`/`_TIMEOUT_SECS`, `DONSETCH_HTTP_CORS=1`), a build-requirement note (`http` is an optional cargo feature; the linux-arm64/macOS-x64 prebuilts are core-only), corrected feature-flag notes, and a Gotchas row for `--http` silently falling back to stdio in a build without the feature.
+
 ## [3.4.0] - 2026-08-28
 
 ### Added
