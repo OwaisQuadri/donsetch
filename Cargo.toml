@@ -22,9 +22,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio-tungstenite = "0.30"
 futures-util = "0.3"
-# HTTP server for MCP HTTP transport (axum, SSE)
-axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json"] }
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+# HTTP server for MCP HTTP transport (axum, SSE). Optional: gates
+# the --http flag. Adds significant compile time (axum + tower-http).
+axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json"], optional = true }
+tower-http = { version = "0.5", features = ["cors", "trace"], optional = true }
 libc = "0.2"
 dirs = "6"
 unicode-bidi = "0.3"
@@ -60,6 +61,7 @@ ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "
 default = []
 ocr = ["dep:oar-ocr", "dep:image", "reqwest/blocking"]
 rerank = ["dep:ort", "dep:tokenizers", "dep:ndarray", "dep:num_cpus", "reqwest/blocking"]
+http = ["dep:axum", "dep:tower-http"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_Foundation", "Win32_System_Console", "Win32_System_Registry"] }

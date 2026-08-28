@@ -23,7 +23,9 @@ async fn main() {
             // DONSETCH_TRANSPORT env (stdio|http) for launchers that
             // can't pass flags, then stdio. Host/port: flags, then
             // env, then defaults.
+            #[cfg(feature = "http")]
             let env_http = std::env::var("DONSETCH_TRANSPORT").as_deref() == Ok("http");
+            #[cfg(feature = "http")]
             if args.iter().any(|a| a == "--http") || env_http {
                 let host = get_arg_value(&args, "--host")
                     .or_else(|| std::env::var("DONSETCH_HTTP_HOST").ok())
@@ -38,7 +40,10 @@ async fn main() {
                     eprintln!("mcp HTTP server: {e}");
                     std::process::exit(1);
                 }
-            } else if args.iter().any(|a| a == "--supervised") {
+                return;
+            }
+            let _ = std::env::var("DONSETCH_TRANSPORT");
+            if args.iter().any(|a| a == "--supervised") {
                 // v3 crash-only design: `--supervised` spawns a child
                 // daemon and proxies stdio; a panic-abort (release runs
                 // panic=abort — one dead request would otherwise kill
@@ -201,6 +206,7 @@ async fn route_help(cmd: &str) {
 
 /// Helper function to extract argument value from args.
 /// Returns None if the argument is not present or has no value.
+#[cfg(feature = "http")]
 fn get_arg_value(args: &[String], flag: &str) -> Option<String> {
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {

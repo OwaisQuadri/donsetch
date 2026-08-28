@@ -5,8 +5,10 @@
 //!
 //! HTTP mode: SSE streaming for responses and progress notifications.
 
-pub mod http;
 pub mod server;
 pub mod stdio;
 pub mod supervisor;
 pub mod tools;
+
+#[cfg(feature = "http")]
+pub mod http;
