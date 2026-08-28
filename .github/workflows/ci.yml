@@ -72,12 +72,12 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            features: --features ocr,rerank
+            # Core only: ocr,rerank pull in ONNX Runtime (305MB static
+            # archive) that takes 20+ min to link on MSVC. Those features
+            # are tested on Linux + macOS ARM64 instead.
+            features: ''
             test-skip: ''
-            # Lib tests only: integration test linking takes 20+ min
-            # with the axum dependency tree on MSVC. Lib tests (689)
-            # cover all the same code paths.
-            test-mode: --lib
+            test-mode: ''
 
     steps:
       - uses: actions/checkout@v7
