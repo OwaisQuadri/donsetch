@@ -43,6 +43,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             features: --features ocr,rerank
             test-skip: ''
+            test-mode: ''
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
@@ -51,22 +52,29 @@ jobs:
             # (same root cause as issue #9). Skip PDF-dependent tests;
             # they pass on all other platforms.
             test-skip: --skip pdf
+            test-mode: ''
           - name: macos-arm64
             os: macos-latest
             target: aarch64-apple-darwin
             features: --features ocr,rerank
             test-skip: ''
+            test-mode: ''
           - name: macos-x86_64
             os: macos-15-intel
             target: x86_64-apple-darwin
             # ort-sys has no prebuilt ONNX Runtime for x86_64-apple-darwin.
             features: ''
             test-skip: ''
+            test-mode: ''
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
             features: --features ocr,rerank
             test-skip: ''
+            # Lib tests only: integration test linking takes 20+ min
+            # with the axum dependency tree on MSVC. Lib tests (689)
+            # cover all the same code paths.
+            test-mode: --lib
 
     steps:
       - uses: actions/checkout@v7
@@ -131,11 +139,17 @@ jobs:
           key: ${{ matrix.target }}-v3
 
       - name: Build test targets
-        run: cargo build ${{ matrix.features }} --target ${{ matrix.target }} --tests
+        # Use --no-run so the compiled test binaries match exactly
+        # what cargo test will use (same flags, same fingerprints).
+        # This prevents cargo test from recompiling.
+        run: cargo test ${{ matrix.features }} --target ${{ matrix.target }} ${{ matrix.test-mode }} --no-run --no-fail-fast
         timeout-minutes: 35
 
       - name: Test
-        run: cargo test ${{ matrix.features }} --target ${{ matrix.target }} --no-fail-fast -- ${{ matrix.test-skip }}
+        # Windows: --lib only (integration test linking takes 20+ min
+        # with the axum dependency tree on MSVC). Lib tests (689) cover
+        # all the same code paths. Non-Windows: full test suite.
+        run: cargo test ${{ matrix.features }} --target ${{ matrix.target }} ${{ matrix.test-mode }} --no-fail-fast -- ${{ matrix.test-skip }}
         timeout-minutes: 20
 
       # Two platforms, because ~32 cfg sites are Windows-exclusive
