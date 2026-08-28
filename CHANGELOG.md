@@ -9,7 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Docker image and compose service:** multi-stage build (`rust:slim` builder → `debian:trixie-slim` runtime on the same glibc generation, arch-aware Go install for BoringSSL) with all features enabled, `--locked` to `Cargo.lock`, non-root runtime user, optional `INSTALL_CHROME=true` build arg for tier 2 escalation. `docker-compose.yml` runs stdio out of the box with a persistent cache volume, 2GB memory ceiling, init for zombie reaping, and a 45s stop grace period.
+- **MCP streamable HTTP transport:** `donsetch mcp --http` starts an HTTP server alongside the default stdio transport. Endpoints: `POST /mcp` (JSON-RPC), `GET /mcp` (SSE stream), `DELETE /mcp` (end session), `GET /health`. Session management with 16-char random IDs, 30min idle GC, 1024 max sessions. Optional bearer auth via `DONSETCH_HTTP_TOKEN` (constant-time comparison). CORS off by default, enable with `DONSETCH_HTTP_CORS`. Per-request timeout via `DONSETCH_HTTP_TIMEOUT_SECS` (default 300). 8 new tests. (PR #58, @imonlinux)
+- **Docker image and compose service:** multi-stage build (`rust:slim` builder to `debian:trixie-slim` runtime on the same glibc generation, arch-aware Go install for BoringSSL) with all features enabled, `--locked` to `Cargo.lock`, non-root runtime user, optional `INSTALL_CHROME=true` build arg for tier 2 escalation. `docker-compose.yml` runs stdio out of the box with a persistent cache volume, 2GB memory ceiling, init for zombie reaping, and a 45s stop grace period. (PR #59, @imonlinux)
+- **Container-aware reranker threads:** on Linux, the ONNX intra-op thread pool is automatically clamped when cgroup v1/v2 quota or CPU affinity exposes less effective parallelism than the host's physical core count. `DONSEEK_RERANK_THREADS` env var for explicit cross-platform override. Unconstrained hosts preserve ONNX native default. 6 new tests. (PR #60, @Bnbig)
+
+### Fixed
+
+- **`<br>` tags flattened to spaces (issue #61):** `<br>` elements in HTML were converted to spaces instead of line breaks in the markdown output. Fixed using a NUL sentinel that survives the whitespace collapse pass, then replaced with newlines. 3 new tests.
+- **AVX dynamic loading simplified to Linux-only:** macOS and Windows now use static linking (`ort download-binaries`) since building shared libraries from the static archive had unsolvable duplicate symbol issues on macOS (ld64 lacks `--allow-multiple-definition`) and Windows (MSVC linker complications). Linux x86_64 continues to use dynamic loading (dlopen after AVX check) to avoid SIGILL on non-AVX CPUs. The `cc` build-dependency was removed.
+
+### Changed
+
+- **lzma-rust2 0.11 to 0.15:** API rename `LZMA2Reader` to `Lzma2Reader`.
+- **actions/upload-artifact v4 to v7** in CI workflows.
+- **CODEOWNERS:** @Mart-Bogdan expanded to `src/ghost/`, `src/fetch/`, `.github/`.
 
 ## [3.2.5] - 2026-08-28
 

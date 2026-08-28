@@ -18,9 +18,9 @@
 //! with dynamic loading because the MSVC linker can't build a DLL
 //! from the static archive with duplicate protobuf symbols.
 
-#[cfg(any(feature = "ocr", feature = "rerank"))]
-use std::path::PathBuf;
 #[cfg(all(target_os = "linux", any(feature = "ocr", feature = "rerank")))]
+use std::path::PathBuf;
+#[cfg(any(feature = "ocr", feature = "rerank"))]
 use std::sync::OnceLock;
 
 /// Error returned when the CPU lacks AVX support (Linux only).
