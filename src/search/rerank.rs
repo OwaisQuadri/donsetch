@@ -190,28 +190,44 @@ mod inner {
 
     /// Downloads a file via reqwest blocking, verifying sha256.
     fn download(url: &str, dest: &Path, expected: &str) -> Result<(), String> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .map_err(|e| format!("client build: {e}"))?;
-        let resp = client
-            .get(url)
-            .send()
-            .map_err(|e| format!("download {url}: {e}"))?
-            .error_for_status()
-            .map_err(|e| format!("download {url}: {e}"))?;
-        let body = resp.bytes().map_err(|e| format!("read {url}: {e}"))?;
-        let got = Sha256::digest(&body)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
-        if got != expected {
-            return Err(format!(
-                "sha256 mismatch for {url}: expected {expected}, got {got}"
-            ));
+        fn inner(url: &str, dest: &Path, expected: &str) -> Result<(), String> {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .map_err(|e| format!("client build: {e}"))?;
+            let resp = client
+                .get(url)
+                .send()
+                .map_err(|e| format!("download {url}: {e}"))?
+                .error_for_status()
+                .map_err(|e| format!("download {url}: {e}"))?;
+            let body = resp.bytes().map_err(|e| format!("read {url}: {e}"))?;
+            let got = Sha256::digest(&body)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            if got != expected {
+                return Err(format!(
+                    "sha256 mismatch for {url}: expected {expected}, got {got}"
+                ));
+            }
+            std::fs::write(dest, &body).map_err(|e| format!("write {dest:?}: {e}"))?;
+            Ok(())
         }
-        std::fs::write(dest, &body).map_err(|e| format!("write {dest:?}: {e}"))?;
-        Ok(())
+
+        // Dedicated plain thread: `reqwest::blocking` panics when used on
+        // a tokio runtime thread — and `panic = "abort"` turns that into a
+        // process abort — and first-use downloads are triggered from the
+        // async search path.
+        let url = url.to_string();
+        let dest = dest.to_path_buf();
+        let expected = expected.to_string();
+        std::thread::Builder::new()
+            .name("rerank-download".into())
+            .spawn(move || inner(&url, &dest, &expected))
+            .map_err(|e| format!("download thread spawn: {e}"))?
+            .join()
+            .map_err(|_| "download thread panicked".to_string())?
     }
 
     /// Ensures model + tokenizer files are on disk, returns their paths.

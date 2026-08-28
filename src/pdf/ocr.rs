@@ -127,46 +127,65 @@ mod imp {
     /// Download `m` (atomic tmp+rename) and verify the pinned sha256.
     /// Fails closed on mismatch — a poisoned model is worse than no OCR.
     fn fetch_model(m: &Model, dir: &std::path::Path) -> Result<PathBuf, String> {
-        let dst = dir.join(m.name);
-        if dst.exists() {
-            if let Ok(h) = sha256_file(&dst)
-                && h == m.sha256
-            {
-                return Ok(dst);
+        fn inner(m: &Model, dir: &std::path::Path) -> Result<PathBuf, String> {
+            let dst = dir.join(m.name);
+            if dst.exists() {
+                if let Ok(h) = sha256_file(&dst)
+                    && h == m.sha256
+                {
+                    return Ok(dst);
+                }
+                let _ = std::fs::remove_file(&dst);
             }
-            let _ = std::fs::remove_file(&dst);
+            let tmp = dst.with_extension("tmp");
+            let url = format!("{BASE}/{}", m.name);
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(600))
+                .user_agent("donsetch/0.1 (+https://github.com/dondai44423/donsetch)")
+                .build()
+                .map_err(|e| e.to_string())?;
+            let mut r = client
+                .get(&url)
+                .send()
+                .map_err(|e| format!("model download failed: {e}"))?;
+            if !r.status().is_success() {
+                return Err(format!("model download failed: HTTP {}", r.status()));
+            }
+            let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+            std::io::copy(&mut r, &mut f).map_err(|e| e.to_string())?;
+            let sz = std::fs::metadata(&tmp).map(|m2| m2.len()).unwrap_or(0);
+            if sz < m.min_bytes {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(format!("model {} truncated at {} bytes", m.name, sz));
+            }
+            let h = sha256_file(&tmp)?;
+            if h != m.sha256 {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(format!(
+                    "model {} failed sha256 verification (got {}, pinned {})",
+                    m.name, h, m.sha256
+                ));
+            }
+            std::fs::rename(&tmp, &dst).map_err(|e| e.to_string())?;
+            Ok(dst)
         }
-        let tmp = dst.with_extension("tmp");
-        let url = format!("{BASE}/{}", m.name);
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
-            .user_agent("donsetch/0.1 (+https://github.com/dondai44423/donsetch)")
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut r = client
-            .get(&url)
-            .send()
-            .map_err(|e| format!("model download failed: {e}"))?;
-        if !r.status().is_success() {
-            return Err(format!("model download failed: HTTP {}", r.status()));
-        }
-        let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-        std::io::copy(&mut r, &mut f).map_err(|e| e.to_string())?;
-        let sz = std::fs::metadata(&tmp).map(|m2| m2.len()).unwrap_or(0);
-        if sz < m.min_bytes {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(format!("model {} truncated at {} bytes", m.name, sz));
-        }
-        let h = sha256_file(&tmp)?;
-        if h != m.sha256 {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(format!(
-                "model {} failed sha256 verification (got {}, pinned {})",
-                m.name, h, m.sha256
-            ));
-        }
-        std::fs::rename(&tmp, &dst).map_err(|e| e.to_string())?;
-        Ok(dst)
+
+        // Dedicated plain thread: `reqwest::blocking` panics when used on
+        // a tokio runtime thread — and `panic = "abort"` turns that into a
+        // process abort — and first-use downloads are triggered from async
+        // fetch paths.
+        let m = Model {
+            name: m.name,
+            sha256: m.sha256,
+            min_bytes: m.min_bytes,
+        };
+        let dir = dir.to_path_buf();
+        std::thread::Builder::new()
+            .name("ocr-model-download".into())
+            .spawn(move || inner(&m, &dir))
+            .map_err(|e| format!("download thread spawn: {e}"))?
+            .join()
+            .map_err(|_| "download thread panicked".to_string())?
     }
 
     fn ensure_models(kind: &RecKind) -> Result<(PathBuf, PathBuf, PathBuf), String> {
