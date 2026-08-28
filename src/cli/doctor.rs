@@ -589,35 +589,38 @@ fn check_onnx() -> CheckResult {
     }
     #[cfg(any(feature = "ocr", feature = "rerank"))]
     {
-        // Check AVX support (disk-cached).
-        let has_avx = crate::cpu::has_avx();
-        if !has_avx {
-            return CheckResult::Warn(
-                "CPU lacks AVX — OCR and rerank disabled (all other features work)".into(),
-            );
-        }
-        // Check shared library presence.
-        let lib_name = if cfg!(target_os = "linux") {
-            "libonnxruntime.so"
-        } else if cfg!(target_os = "macos") {
-            "libonnxruntime.dylib"
-        } else if cfg!(target_os = "windows") {
-            "onnxruntime.dll"
-        } else {
-            "libonnxruntime.so"
-        };
-        let found = if let Ok(exe) = std::env::current_exe()
-            && let Some(parent) = exe.parent()
+        // On macOS/Windows, ONNX is statically linked (no shared lib).
+        // On Linux, ONNX is dynamically loaded after an AVX check.
+        #[cfg(not(target_os = "linux"))]
         {
-            parent.join(lib_name).exists()
-        } else {
-            false
-        };
-        let cache = paths::cache_dir().join("onnx").join(lib_name).exists();
-        if found || cache {
-            CheckResult::Pass("AVX detected, shared library present".into())
-        } else {
-            CheckResult::Warn("AVX detected but shared library missing — reinstall donsetch".into())
+            CheckResult::Pass("static link, compiled in".into())
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // Check AVX support (disk-cached).
+            let has_avx = crate::cpu::has_avx();
+            if !has_avx {
+                return CheckResult::Warn(
+                    "CPU lacks AVX — OCR and rerank disabled (all other features work)".into(),
+                );
+            }
+            // Check shared library presence.
+            let lib_name = "libonnxruntime.so";
+            let found = if let Ok(exe) = std::env::current_exe()
+                && let Some(parent) = exe.parent()
+            {
+                parent.join(lib_name).exists()
+            } else {
+                false
+            };
+            let cache = paths::cache_dir().join("onnx").join(lib_name).exists();
+            if found || cache {
+                CheckResult::Pass("AVX detected, shared library present".into())
+            } else {
+                CheckResult::Warn(
+                    "AVX detected but shared library missing — reinstall donsetch".into(),
+                )
+            }
         }
     }
 }

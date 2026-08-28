@@ -279,12 +279,12 @@ fn main() {
         env::var_os("CARGO_FEATURE_OCR").is_some() || env::var_os("CARGO_FEATURE_RERANK").is_some();
     if has_onnx {
         if let Some(info) = onnx_target_info(&os, &arch) {
+            // Linux x86_64: build shared lib for dynamic loading.
             build_onnx_shared_lib(info, &manifest);
         } else {
-            eprintln!(
-                "donsetch build: OCR/rerank features enabled but no ONNX prebuilt \
-                 available for {os}-{arch}. OCR/rerank will be disabled at runtime."
-            );
+            // macOS/Windows: ort crate uses download-binaries (static
+            // linking). No shared library build needed.
+            eprintln!("donsetch build: OCR/rerank enabled, ort static link for {os}-{arch}");
         }
     }
 
@@ -477,7 +477,8 @@ struct OnnxTarget {
 }
 
 /// Return ONNX target info if a prebuilt is available for this platform.
-/// Returns None for platforms without OCR/rerank prebuilts (aarch64, etc.).
+/// Only Linux x86_64 uses dynamic loading. macOS/Windows use static
+/// linking (no shared library build needed).
 fn onnx_target_info(os: &str, arch: &str) -> Option<OnnxTarget> {
     let (url, sha256, archive_name, shared_name) = match (os, arch) {
         ("linux", "x86_64") => (
@@ -485,18 +486,6 @@ fn onnx_target_info(os: &str, arch: &str) -> Option<OnnxTarget> {
             "acc1cba79c337594ead1d88ca72516147aa60054c84217b53399a31caa5ba671",
             "libonnxruntime.a",
             "libonnxruntime.so",
-        ),
-        ("macos", "aarch64") => (
-            "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/aarch64-apple-darwin.tar.lzma2",
-            "612739f75438dc0a075461e1fb454226b4a1eb175e60a7271ba966bbbb972cd4",
-            "libonnxruntime.a",
-            "libonnxruntime.dylib",
-        ),
-        ("windows", "x86_64") => (
-            "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-pc-windows-msvc.tar.lzma2",
-            "b685bfc8d336e0ba95c066a7a982c03aa6dedd528a492eb99ca4ccb7f3af9e7a",
-            "onnxruntime.lib",
-            "onnxruntime.dll",
         ),
         _ => return None,
     };
@@ -650,92 +639,25 @@ fn extract_tar_entry(data: &[u8], name: &str) -> Option<Vec<u8>> {
 }
 
 /// Build a shared library from a static archive using the system linker.
-/// Linux: cc -shared -z noexecstack -Wl,--whole-archive ... -Wl,--no-whole-archive -lstdc++ ...
-/// macOS: cc -dynamiclib -Wl,-force_load ... -lc++ ...
-/// Windows: link /DLL /OUT:... ... (MSVC)
+/// Only called on Linux x86_64 (see onnx_target_info).
+/// Uses --whole-archive + --allow-multiple-definition to handle
+/// duplicate protobuf symbols in the ONNX archive, and -z noexecstack
+/// to clear the executable stack flag (ONNX assembly objects lack
+/// .note.GNU-stack, which defaults to execstack on Linux).
 fn build_shared_from_archive(archive: &Path, output: &Path, _shared_name: &str) {
-    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     eprintln!(
         "donsetch build: building ONNX shared lib from {}",
         archive.display()
     );
-
-    let status = if os == "windows" {
-        // MSVC: use cc crate to find link.exe (GNU coreutils `link`
-        // shadows MSVC link.exe in PATH on GitHub Actions runners).
-        // The cc crate also provides the MSVC environment (LIB, INCLUDE,
-        // PATH) needed to find system libraries like Advapi32.lib.
-        // /FORCE:MULTIPLE: ONNX archive has duplicate protobuf symbols.
-        let target = env::var("TARGET").unwrap_or_default();
-        let tool = cc::windows_registry::find_tool(&target, "link.exe")
-            .expect("ONNX: MSVC link.exe not found");
-        let mut cmd = Command::new(tool.path());
-        cmd.args(["/DLL", "/NOLOGO", "/MACHINE:X64", "/FORCE:MULTIPLE"])
-            .arg(format!("/OUT:{}", output.display()))
-            .arg(archive)
-            .args(["Advapi32.lib", "User32.lib"]);
-        // Set MSVC environment (LIB, INCLUDE, etc.) so link.exe
-        // can find system libraries.
-        for (key, value) in tool.env() {
-            cmd.env(key, value);
-        }
-        cmd.status()
-    } else if os == "macos" {
-        // macOS: extract archive to temp dir, deduplicate by name
-        // (ar x overwrites same-name members), then link unique
-        // objects into a dylib. This avoids ld64's lack of
-        // --allow-multiple-definition equivalent for duplicate
-        // protobuf symbols in the ONNX archive.
-        // Foundation framework: CoreML EP (NSLog, NSFileManager, etc.).
-        let tmp = std::env::temp_dir().join("onnx-extract-macos");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).expect("ONNX: cannot create temp dir");
-        let ar_status = Command::new("ar")
-            .arg("x")
-            .arg(archive)
-            .current_dir(&tmp)
-            .status()
-            .expect("ONNX: cannot run ar");
-        if !ar_status.success() {
-            panic!("ONNX: ar extraction failed");
-        }
-        // Collect all .o files (duplicates already deduplicated by ar x).
-        let mut objects: Vec<PathBuf> = fs::read_dir(&tmp)
-            .expect("ONNX: cannot read temp dir")
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "o"))
-            .collect();
-        objects.sort();
-        eprintln!(
-            "donsetch build: linking {} unique objects into dylib",
-            objects.len()
-        );
-        let mut cmd = Command::new("cc");
-        cmd.args(["-dynamiclib", "-o"])
-            .arg(output)
-            .args(&objects)
-            .args(["-lc++", "-lpthread", "-ldl", "-lm"])
-            .args(["-framework", "CoreFoundation"])
-            .args(["-framework", "Foundation"]);
-        cmd.status()
-    } else {
-        // Linux: shared object from static archive.
-        // --whole-archive includes all objects.
-        // --allow-multiple-definition handles duplicate symbols in the archive.
-        // -z noexecstack clears the executable stack flag (ONNX has assembly
-        // objects without .note.GNU-stack, which defaults to execstack on Linux).
-        Command::new("cc")
-            .args(["-shared", "-z", "noexecstack", "-o"])
-            .arg(output)
-            .arg("-Wl,--whole-archive,--allow-multiple-definition")
-            .arg(archive)
-            .arg("-Wl,--no-whole-archive")
-            .args(["-lstdc++", "-lpthread", "-ldl", "-lm"])
-            .status()
-    };
-
-    let status = status.unwrap_or_else(|e| panic!("ONNX: failed to spawn linker ({e})"));
+    let status = Command::new("cc")
+        .args(["-shared", "-z", "noexecstack", "-o"])
+        .arg(output)
+        .arg("-Wl,--whole-archive,--allow-multiple-definition")
+        .arg(archive)
+        .arg("-Wl,--no-whole-archive")
+        .args(["-lstdc++", "-lpthread", "-ldl", "-lm"])
+        .status()
+        .unwrap_or_else(|e| panic!("ONNX: failed to spawn linker ({e})"));
     if !status.success() {
         panic!("ONNX: shared library build failed");
     }

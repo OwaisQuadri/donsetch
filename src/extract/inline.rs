@@ -13,6 +13,8 @@ pub fn markdown(el: ElementRef<'_>, base: &str, opts: &super::ExtractOptions) ->
     let mut link = 0usize;
     render(el, base, opts, &mut buf, &mut total, &mut link, 0);
     let collapsed = collapse(&buf);
+    // Restore <br> sentinels as newlines after whitespace collapse.
+    let collapsed = collapsed.replace('\u{0}', "\n");
     let ld = if total > 0 {
         link as f32 / total as f32
     } else {
@@ -132,7 +134,11 @@ fn render(
                     }
                     "script" | "style" | "noscript" | "svg" | "img" | "button" | "input"
                     | "select" => {}
-                    "br" => buf.push(' '),
+                    // <br> becomes a line break in the output markdown.
+                    // Uses a NUL sentinel that survives the whitespace
+                    // collapse pass, then gets replaced with \n in
+                    // markdown().
+                    "br" => buf.push('\u{0}'),
                     // Block boundaries inside inline rendering
                     // (multi-paragraph comments, list items): at
                     // least a space — the words must never fuse.
@@ -249,4 +255,49 @@ pub fn strip_trackers(u: &str) -> String {
         parsed.set_query(Some(&qs.join("&")));
     }
     parsed.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scraper::Html;
+
+    fn render_inline(html: &str) -> String {
+        let document = Html::parse_fragment(html);
+        let root = document.root_element();
+        let opts = super::super::ExtractOptions {
+            focus: None,
+            selector: None,
+            max_chars: None,
+            offset: 0,
+            include_links: false,
+            include_media: false,
+            toc: false,
+            section: None,
+            must_contain: None,
+        };
+        markdown(root, "https://example.com/", &opts).0
+    }
+
+    #[test]
+    fn br_tag_produces_newline() {
+        let result = render_inline("<div>line one<br>line two</div>");
+        assert!(result.contains('\n'), "expected a newline, got: {result:?}");
+        assert!(result.contains("line one"));
+        assert!(result.contains("line two"));
+    }
+
+    #[test]
+    fn multiple_br_tags_produce_multiple_newlines() {
+        let result = render_inline("<div>a<br>b<br>c</div>");
+        assert_eq!(result, "a\nb\nc");
+    }
+
+    #[test]
+    fn br_inside_paragraph_kept() {
+        let result = render_inline("<p>first<br>second</p>");
+        assert!(result.contains('\n'), "expected newline, got: {result:?}");
+        assert!(result.contains("first"));
+        assert!(result.contains("second"));
+    }
 }

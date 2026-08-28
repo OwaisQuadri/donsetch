@@ -865,7 +865,6 @@ dependencies = [
  "boring",
  "boring-sys",
  "brotli",
- "cc",
  "clap",
  "dirs",
  "encoding_rs",

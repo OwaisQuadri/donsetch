@@ -44,6 +44,9 @@ ort = { version = "=2.0.0-rc.12", default-features = false, features = ["load-dy
 tokenizers = { version = "0.23", default-features = false, features = ["onig"], optional = true }
 ndarray = { version = "0.17", optional = true }
 
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-native", "copy-dylibs", "api-24"], optional = true }
+
 [features]
 # No default features — the core tool (fetch, search, crawl, PDF)
 # works standalone. OCR and semantic reranking pull in ONNX Runtime,
@@ -63,7 +66,6 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 [build-dependencies]
 sha2 = "0.11"
 lzma-rust2 = "0.11"
-cc = "1.0"
 
 [profile.release]
 lto = "fat"

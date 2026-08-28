@@ -1,39 +1,29 @@
-//! Runtime ONNX Runtime initialization via dlopen.
+//! Runtime ONNX Runtime initialization.
 //!
-//! ONNX Runtime is loaded dynamically at runtime to avoid SIGILL
+//! ONNX Runtime is loaded differently depending on platform:
+//!
+//! **Linux x86_64**: dynamically loaded via dlopen to avoid SIGILL
 //! on non-AVX CPUs. The prebuilt ONNX static archive contains
-//! unguarded AVX instructions in its C++ global constructors.
-//! Statically linking it causes SIGILL at process start, before
-//! `main()` runs.
+//! unguarded AVX instructions in C++ global constructors that run
+//! before `main()`. Statically linking it causes SIGILL at process
+//! start on any CPU without AVX. With `ort`'s `load-dynamic` feature,
+//! ONNX is NOT statically linked. A shared library (.so) is built
+//! from the prebuilt archive at compile time and dlopen'd at runtime
+//! after an AVX check. Non-AVX CPUs get a working binary (minus
+//! OCR/rerank) instead of SIGILL.
 //!
-//! With `ort`'s `load-dynamic` feature, ONNX is NOT statically
-//! linked. Instead, we dlopen the shared library at runtime,
-//! but only after confirming AVX support via the CPU module.
-//!
-//! ## Lifecycle
-//!
-//! 1. Process starts (no ONNX code loaded, no AVX constructors).
-//! 2. User runs OCR or rerank.
-//! 3. `ensure_loaded()` checks AVX support (disk-cached).
-//! 4. If no AVX: return error, OCR/rerank disabled gracefully.
-//! 5. If AVX: dlopen `libonnxruntime.so` (or `.dylib`/`.dll`),
-//!    call `ort::init_from(path)`, then `ort::init()`.
-//! 6. Subsequent OCR/rerank calls reuse the initialized runtime.
-//!
-//! ## Shared library location
-//!
-//! The shared library is built at compile time from the prebuilt
-//! ONNX static archive and placed next to the donsetch binary.
-//! At runtime, we search:
-//!   a. Next to the current executable
-//!   b. `cache_dir()/onnx/` (fallback for relocatable installs)
+//! **macOS / Windows**: statically linked (ort `download-binaries`).
+//! macOS ARM64 has no AVX concept (ARM NEON). Windows x64 AVX issues
+//! are rare (most x64 CPUs since 2011 have AVX) and can't be fixed
+//! with dynamic loading because the MSVC linker can't build a DLL
+//! from the static archive with duplicate protobuf symbols.
 
 #[cfg(any(feature = "ocr", feature = "rerank"))]
 use std::path::PathBuf;
-#[cfg(any(feature = "ocr", feature = "rerank"))]
+#[cfg(all(target_os = "linux", any(feature = "ocr", feature = "rerank")))]
 use std::sync::OnceLock;
 
-/// Error returned when the CPU lacks AVX support.
+/// Error returned when the CPU lacks AVX support (Linux only).
 pub const NO_AVX_MSG: &str = "ONNX Runtime requires AVX CPU support. \
     Your CPU does not support AVX (pre-2011 Intel or virtualized \
     without AVX passthrough). OCR and rerank are disabled. \
@@ -58,7 +48,9 @@ pub fn ensure_loaded() -> Result<(), String> {
     }
 }
 
-#[cfg(any(feature = "ocr", feature = "rerank"))]
+// ── Linux: dynamic loading via dlopen ───────────────────────────
+
+#[cfg(all(target_os = "linux", any(feature = "ocr", feature = "rerank")))]
 fn load_and_init() -> Result<(), String> {
     // 1. AVX gate (disk-cached, permanent if true).
     if !crate::cpu::has_avx() {
@@ -73,9 +65,8 @@ fn load_and_init() -> Result<(), String> {
     })?;
 
     // 3. dlopen and init.
-    //    ort::init_from loads the .so/.dylib/.dll via libloading.
-    //    ort::init() initializes the ONNX environment using the
-    //    dlopen'd library.
+    //    ort::init_from loads the .so via libloading.
+    //    builder.commit() initializes the ONNX environment.
     let builder = ort::init_from(&lib_path).map_err(|e| {
         format!(
             "Failed to load ONNX Runtime from {}: {e}",
@@ -89,16 +80,15 @@ fn load_and_init() -> Result<(), String> {
     Ok(())
 }
 
-/// Find the ONNX Runtime shared library.
+/// Find the ONNX Runtime shared library (Linux only).
 ///
 /// Searches:
 /// 1. Next to the current executable (primary).
 /// 2. `cache_dir()/onnx/` (fallback for relocatable installs).
-#[cfg(any(feature = "ocr", feature = "rerank"))]
+#[cfg(all(target_os = "linux", any(feature = "ocr", feature = "rerank")))]
 fn find_shared_lib() -> Option<PathBuf> {
     let lib_name = shared_lib_name();
 
-    // 1. Next to executable.
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
     {
@@ -108,7 +98,6 @@ fn find_shared_lib() -> Option<PathBuf> {
         }
     }
 
-    // 2. Cache dir fallback.
     let cache = crate::paths::cache_dir().join("onnx").join(lib_name);
     if cache.exists() {
         return Some(cache);
@@ -117,33 +106,31 @@ fn find_shared_lib() -> Option<PathBuf> {
     None
 }
 
-/// Platform-specific shared library filename.
-#[cfg(any(feature = "ocr", feature = "rerank"))]
+/// Platform-specific shared library filename (Linux only).
+#[cfg(all(target_os = "linux", any(feature = "ocr", feature = "rerank")))]
 fn shared_lib_name() -> &'static str {
-    if cfg!(target_os = "linux") {
-        "libonnxruntime.so"
-    } else if cfg!(target_os = "macos") {
-        "libonnxruntime.dylib"
-    } else if cfg!(target_os = "windows") {
-        "onnxruntime.dll"
-    } else {
-        "libonnxruntime.so" // fallback
-    }
+    "libonnxruntime.so"
 }
 
-#[cfg(all(test, any(feature = "ocr", feature = "rerank")))]
-mod tests {
-    use super::*;
+// ── macOS / Windows: static linking ────────────────────────────
 
+#[cfg(all(not(target_os = "linux"), any(feature = "ocr", feature = "rerank")))]
+fn load_and_init() -> Result<(), String> {
+    // macOS ARM64: no AVX concept (ARM NEON). Always works.
+    // Windows x64: if no AVX, process already crashed at startup
+    //   (static constructors ran before main). This code only
+    //   runs on AVX-capable machines.
+    // Just initialize the ONNX environment (static link).
+    ort::init().commit();
+    eprintln!("[onnx] Runtime initialized (static link)");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(all(target_os = "linux", any(feature = "ocr", feature = "rerank")))]
     #[test]
-    fn shared_lib_name_matches_platform() {
-        let name = shared_lib_name();
-        if cfg!(target_os = "linux") {
-            assert_eq!(name, "libonnxruntime.so");
-        } else if cfg!(target_os = "macos") {
-            assert_eq!(name, "libonnxruntime.dylib");
-        } else if cfg!(target_os = "windows") {
-            assert_eq!(name, "onnxruntime.dll");
-        }
+    fn shared_lib_name_is_so_on_linux() {
+        assert_eq!(super::shared_lib_name(), "libonnxruntime.so");
     }
 }

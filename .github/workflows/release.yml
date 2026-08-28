@@ -200,17 +200,10 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          # Include ONNX shared lib if present (built by build.rs for ocr/rerank targets).
-          # The .so/.dylib is dlopen'd at runtime after an AVX check.
-          ONNX_LIB=""
-          for ext in so dylib; do
-            if [ -f "libonnxruntime.$ext" ]; then
-              ONNX_LIB="libonnxruntime.$ext"
-              break
-            fi
-          done
-          if [ -n "$ONNX_LIB" ]; then
-            tar czf $GITHUB_WORKSPACE/donsetch-${{ matrix.name }}.tar.gz donsetch "$ONNX_LIB"
+          # Include ONNX shared lib if present (Linux x64 only, built
+          # by build.rs for dynamic loading). macOS uses static linking.
+          if [ -f libonnxruntime.so ]; then
+            tar czf $GITHUB_WORKSPACE/donsetch-${{ matrix.name }}.tar.gz donsetch libonnxruntime.so
           else
             tar czf $GITHUB_WORKSPACE/donsetch-${{ matrix.name }}.tar.gz donsetch
           fi
@@ -224,11 +217,7 @@ jobs:
             echo ERROR: pdfium.dll not found - build.rs copy failed
             exit 1
           )
-          if exist onnxruntime.dll (
-            tar czf %GITHUB_WORKSPACE%\donsetch-${{ matrix.name }}.tar.gz donsetch.exe pdfium.dll onnxruntime.dll
-          ) else (
-            tar czf %GITHUB_WORKSPACE%\donsetch-${{ matrix.name }}.tar.gz donsetch.exe pdfium.dll
-          )
+          tar czf %GITHUB_WORKSPACE%\donsetch-${{ matrix.name }}.tar.gz donsetch.exe pdfium.dll
 
       # ── Checksums ────────────────────────────────────────────
       # sha256sum format: "<hash>  <filename>" — compatible with
