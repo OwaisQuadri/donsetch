@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`src/onnx.rs` module docs rewritten:** a per-target map and the rule that `ort` must stay in per-target tables now lead; below them, reference sections on how ONNX is acquired and linked on each platform, a postmortem of how the 3.3.0 feature leak stayed silent, and why Windows links `DirectML.dll` without ever calling it.
 - **README gotchas:** documented that Windows needs `DirectML.dll` present at startup (in-box since Windows 10 1903, version irrelevant, `0xC0000135` and no output when missing — and never harvest a copy from another machine's `System32`, which fails just as silently with `0xC0000142`), and that OCR/rerank models are downloaded on first use rather than bundled, with their cache locations and how to pre-seed an offline machine.
 
+### Added
+
+- **HTTP transport in the Docker image.** The image now builds `--features ocr,rerank,http` (matching the linux-x64/macOS-arm64/Windows-x64 release binaries), `EXPOSE`s 8765, and the bundled compose file gains an opt-in `http` profile: `docker compose --profile http up -d donsetch-http` serves MCP at `http://localhost:8765/mcp` with a listener-based healthcheck. The profiled service carries its own `build:` block (it builds the image if it isn't there yet) and `restart: unless-stopped` (Docker-level crash recovery — the HTTP transport has no in-process supervisor). The port is published on `127.0.0.1` by default so an unset `DONSETCH_HTTP_TOKEN` never exposes unauthenticated MCP to the LAN. The stdio service is unchanged.
+
 ## [3.4.0] - 2026-08-28
 
 ### Added
