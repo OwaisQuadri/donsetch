@@ -51,6 +51,12 @@ async fn extract_cmd(args: &[String]) {
                 i += 1;
                 opts.selector = args.get(i).cloned();
             }
+            "--links" => {
+                opts.include_links = true;
+            }
+            "--media" => {
+                opts.include_media = true;
+            }
             "--input" => {
                 i += 1;
                 input_file = args.get(i).cloned();
@@ -65,7 +71,7 @@ async fn extract_cmd(args: &[String]) {
     }
     let Some(path) = input_file else {
         eprintln!(
-            "usage: donsetch dev extract --input <file> [--focus q] [--max n] [--offset n] [--selector css]"
+            "usage: donsetch dev extract --input <file> [--url base] [--focus q] [--max n] [--offset n] [--selector css] [--links] [--media]"
         );
         return;
     };
