@@ -172,7 +172,20 @@ impl Cdp {
         let cdp = self.clone();
         let mut events = self.subscribe();
         tokio::spawn(async move {
-            while let Ok(event) = events.recv().await {
+            // NOTE: this is a broadcast::Receiver, so `recv()` fails
+            // with `Lagged` whenever this loop is descheduled long
+            // enough for the ring buffer (256) to fill. Lagged does
+            // NOT mean dead: the receiver has already caught up and
+            // the next `recv()` yields the next live event. Dying on
+            // Lagged (a `while let Ok` loop) leaves every later
+            // Fetch.requestPaused unanswered, which wedges the whole
+            // CDP session (issue #76). Skip it, keep listening.
+            loop {
+                let event = match fetch_guard_step(events.recv().await) {
+                    GuardStep::Event(ev) => ev,
+                    GuardStep::Skip => continue,
+                    GuardStep::Stop => break,
+                };
                 let method = event.get("method").and_then(Value::as_str).unwrap_or("");
                 if method != "Fetch.requestPaused" {
                     continue;
@@ -238,5 +251,90 @@ impl Cdp {
                 });
             }
         })
+    }
+}
+
+/// One `recv()` step for the fetch guard loop, as a pure decision.
+/// Kept as a separate function so the failure mode of issue #76 is
+/// regression-testable without a live CDP endpoint.
+enum GuardStep {
+    Event(Value),
+    /// The receiver fell behind the 256-event ring during a burst.
+    /// It has already resynced; dying here (a `while let Ok` loop)
+    /// leaves every later `Fetch.requestPaused` unanswered, wedging
+    /// the whole CDP session. Continue listening.
+    Skip,
+    /// All senders are gone (CDP link dropped).
+    Stop,
+}
+
+#[inline]
+fn fetch_guard_step(
+    res: Result<Value, broadcast::error::RecvError>,
+) -> GuardStep {
+    match res {
+        Ok(ev) => GuardStep::Event(ev),
+        Err(broadcast::error::RecvError::Lagged(_skipped)) => {
+            GuardStep::Skip
+        }
+        Err(broadcast::error::RecvError::Closed) => GuardStep::Stop,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #76 regression: one `Lagged` used to kill the fetch
+    /// guard loop, starving every later requestPaused. The step must
+    /// translate Lagged to Skip (never Stop), and the loop must keep
+    /// receiving events after the lag.
+    #[tokio::test]
+    async fn fetch_guard_survives_lag() {
+        let (tx, mut laggard) = broadcast::channel::<Value>(4);
+        let mut consumer = tx.subscribe();
+        let (go, go_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut go = Some(go);
+
+        let sender = tokio::spawn(async move {
+            for i in 0..50u32 {
+                let _ = tx.send(json!({ "i": i }));
+                tokio::task::yield_now().await;
+            }
+            // Hold the sender open until the laggard reports the lag:
+            // proves survival-after-lag, not just a clean Closed.
+            let _ = go_rx.await;
+            for i in 100..110u32 {
+                let _ = tx.send(json!({ "i": i }));
+                tokio::task::yield_now().await;
+            }
+        });
+
+        // A fast consumer drains the first wave while the laggard,
+        // never polled, overflows its 4-slot ring.
+        for _ in 0..50 {
+            let _ = consumer.recv().await;
+        }
+
+        let mut events_seen = 0usize;
+        let mut lags = 0usize;
+        loop {
+            match fetch_guard_step(laggard.recv().await) {
+                GuardStep::Event(_) => events_seen += 1,
+                GuardStep::Skip => {
+                    lags += 1;
+                    if let Some(g) = go.take() {
+                        let _ = g.send(());
+                    }
+                }
+                GuardStep::Stop => break,
+            }
+        }
+        sender.await.unwrap();
+        assert_eq!(lags, 1, "lag swallowed exactly once, loop must not die");
+        assert!(
+            events_seen >= 1,
+            "post-lag events must still flow (got {events_seen})"
+        );
     }
 }
