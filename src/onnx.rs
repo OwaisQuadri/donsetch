@@ -122,7 +122,9 @@
 use std::path::PathBuf;
 #[cfg(any(feature = "ocr", feature = "rerank"))]
 use std::sync::OnceLock;
+#[cfg(any(feature = "ocr", feature = "rerank"))]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(any(feature = "ocr", feature = "rerank"))]
 use std::time::Duration;
 /// Error returned when the CPU lacks AVX support (Linux only).
 pub const NO_AVX_MSG: &str = "ONNX Runtime requires AVX CPU support. Your CPU does not support AVX (pre-2011 Intel or virtualized without AVX passthrough). OCR and rerank are disabled. All other features work normally.";

@@ -305,7 +305,10 @@ fn new_session_id() -> String {
 impl SessionTable {
     /// Registry for an existing session id, or None if unknown.
     fn registry(&self, id: &str) -> Option<CancelMap> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.gc_locked(&mut sessions);
         let s = sessions.get_mut(id)?;
         s.last_seen = Instant::now();
@@ -316,7 +319,10 @@ impl SessionTable {
     /// the shared default registry for session-less clients; it is
     /// never a candidate for MAX_SESSIONS eviction.
     fn registry_or_create(&self, id: &str) -> CancelMap {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.gc_locked(&mut sessions);
         if let Some(s) = sessions.get_mut(id) {
             s.last_seen = Instant::now();
@@ -346,7 +352,11 @@ impl SessionTable {
 
     /// Remove a session; true if it existed.
     fn remove(&self, id: &str) -> bool {
-        self.sessions.lock().unwrap().remove(id).is_some()
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id)
+            .is_some()
     }
 
     /// Drop sessions idle beyond TTL. Called with the lock held.
@@ -402,7 +412,10 @@ async fn mcp_handler(State(state): State<HttpState>, headers: HeaderMap, body: B
     if is_notification && method == "notifications/cancelled" {
         let cancels = resolve_cancels(&state, sid_header.as_deref());
         if let Some(rid) = req.pointer("/params/requestId").and_then(Value::as_i64)
-            && let Some(sender) = cancels.lock().unwrap().remove(&rid)
+            && let Some(sender) = cancels
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&rid)
         {
             let _ = sender.send(true);
         }
@@ -447,7 +460,10 @@ async fn mcp_handler(State(state): State<HttpState>, headers: HeaderMap, body: B
             // Timed out: drop any registry entry so the id can be
             // reused without leaking a dead watch sender.
             if let Some(rid) = request_id
-                && let Some(sender) = cancels.lock().unwrap().remove(&rid)
+                && let Some(sender) = cancels
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&rid)
             {
                 drop(sender);
             }
@@ -621,7 +637,10 @@ mod tests {
         if !backdate(&table, "old", Duration::from_secs(2)) {
             return; // host booted <2s ago; underflow, skip
         }
-        let mut sessions = table.sessions.lock().unwrap();
+        let mut sessions = table
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         table.gc_locked_with(&mut sessions, Duration::from_secs(1));
         drop(sessions);
         assert!(table.registry("old").is_none(), "idle session must be GC'd");
@@ -637,7 +656,10 @@ mod tests {
             table.registry_or_create(&format!("s{i:04}"));
         }
         // The oldest named entries were evicted as the table filled.
-        let live = table.sessions.lock().unwrap();
+        let live = table
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(
             live.len() <= MAX_SESSIONS,
             "table must stay bounded, has {}",

@@ -281,7 +281,10 @@ pub async fn handle(
         let rid = id.as_i64();
         let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
         if let Some(r) = rid {
-            cancels.lock().unwrap().insert(r, cancel_tx);
+            cancels
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(r, cancel_tx);
         }
         // Probe kept outside the ctx so the final suppression check
         // still works after the ctx is consumed.
@@ -306,7 +309,10 @@ pub async fn handle(
         // Deregister + stop forwarding progress. The forwarder ends
         // when ptx drops — it moved into ctx, dropped at await end.
         if let Some(r) = rid {
-            cancels.lock().unwrap().remove(&r);
+            cancels
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&r);
         }
         let _ = forwarder.await;
         // A cancelled request never gets a response, even if the
@@ -465,7 +471,9 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value, ctx: Option<ToolCtx>) ->
     {
         let hist = Arc::clone(&daemon.history);
         opts.skip_unchanged = Some(Arc::new(move |url: &str| {
-            hist.lock().unwrap().has_recent(url)
+            hist.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .has_recent(url)
         }));
     }
     {
@@ -473,7 +481,9 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value, ctx: Option<ToolCtx>) ->
         opts.on_page = Some(Arc::new(
             move |url: &str, fp: Option<&str>, md: &str, title: Option<&str>| {
                 if let Some(fp) = fp {
-                    let mut h = hist.lock().unwrap();
+                    let mut h = hist
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     h.record(url, fp, md.len(), title, md);
                 }
             },
@@ -530,7 +540,11 @@ async fn crawl_tool(daemon: &Arc<Daemon>, args: &Value, ctx: Option<ToolCtx>) ->
     let result = match daemon.crawler.crawl(&url, opts, resume.as_deref()).await {
         Ok(r) => {
             // Batch-flush the fingerprints the crawl just recorded.
-            daemon.history.lock().unwrap().flush();
+            daemon
+                .history
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .flush();
             r
         }
         Err(e) => {
@@ -1401,7 +1415,14 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
     // freshness); the rest of the pipeline (extraction,
     // thin→ghost, history) runs unchanged on the cached body.
     let mut prewarmed = false;
-    if !is_pdf_url && let Some(entry) = daemon.searcher.prewarms().lock().unwrap().take(&orig_url) {
+    if !is_pdf_url
+        && let Some(entry) = daemon
+            .searcher
+            .prewarms()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take(&orig_url)
+    {
         tier_used = "prewarmed";
         prewarmed = true;
         trace.step("prewarm", "search-handoff", "hit", 0);
@@ -2996,7 +3017,10 @@ fn apply_page_history(
     let Some(fp) = ex_fingerprint else {
         return;
     };
-    let mut hist = daemon.history.lock().unwrap();
+    let mut hist = daemon
+        .history
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let prev = hist.record(
         url,
         fp,

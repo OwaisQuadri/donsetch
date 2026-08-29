@@ -252,12 +252,18 @@ impl Searcher {
     /// True when an engine is benched for chronic failure.
     fn quarantined(&self, engine: &str) -> bool {
         const QUARANTINE_TTL: Duration = Duration::from_secs(600);
-        let f = self.failures.lock().unwrap();
+        let f = self
+            .failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         matches!(f.get(engine), Some(&(n, at)) if n >= 3 && at.elapsed() < QUARANTINE_TTL)
     }
 
     fn record_outcome(&self, engine: &str, ok: bool) {
-        let mut f = self.failures.lock().unwrap();
+        let mut f = self
+            .failures
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if ok {
             f.remove(engine);
         } else {
@@ -277,7 +283,10 @@ impl Searcher {
         let intent_probe = forced_intent.unwrap_or_else(|| intent::detect(query));
         let sf_key = format!("{}|{intent_probe:?}|{max_results}", norm_query(query));
         let leader = {
-            let mut m = self.inflight.lock().unwrap();
+            let mut m = self
+                .inflight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             m.insert(sf_key.clone())
         };
         if !leader {
@@ -333,7 +342,11 @@ impl Searcher {
         let intent = forced_intent.unwrap_or_else(|| intent::detect(query));
         let cache_key = format!("{}|{intent:?}", norm_query(query));
 
-        if let Some((at, cached, total)) = self.cache.lock().unwrap().get(&cache_key)
+        if let Some((at, cached, total)) = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&cache_key)
             && at.elapsed() < cache_ttl(intent, query)
         {
             let weak = rank::is_weak(cached, *total);
@@ -372,7 +385,10 @@ impl Searcher {
         // Rank engines by learned trust so width cuts drop
         // the weakest first.
         {
-            let trust = self.trust.lock().unwrap();
+            let trust = self
+                .trust
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             live.sort_by(|a, b| {
                 trust
                     .get(*b)
@@ -576,7 +592,11 @@ impl Searcher {
             )));
         }
 
-        let trust = self.trust.lock().unwrap().clone();
+        let trust = self
+            .trust
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let total = rank::merged_total(&per_engine);
         // Always merge 12 results for the cache, then trim to
         // max_results for the response. Without this, a first
@@ -602,7 +622,10 @@ impl Searcher {
         // degraded-period results expire with the moment.
         let cacheable = ok_engines >= 2 && total >= 8;
         if cacheable {
-            let mut cache = self.cache.lock().unwrap();
+            let mut cache = self
+                .cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             // LRU-ish cap: drop oldest when full.
             if cache.len() >= 500
                 && let Some(oldest) = cache
@@ -636,7 +659,10 @@ impl Searcher {
     }
 
     fn bump_trust(&self, base_engine: &str, ok: bool) {
-        let mut trust = self.trust.lock().unwrap();
+        let mut trust = self
+            .trust
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let t = trust.entry(base_engine.to_string()).or_insert(1.0);
         let target = if ok { 1.2 } else { 0.3 };
         *t = (*t * 0.7 + target * 0.3).clamp(0.2, 2.0);
@@ -706,7 +732,9 @@ impl Searcher {
                         let title = extract_title(&html);
                         let desc = extract_description(&html);
                         // v3 F1: keep the body for the warm handoff.
-                        sink.lock().unwrap().put(&url, o.body.clone(), ct);
+                        sink.lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .put(&url, o.body.clone(), ct);
                         (i, title, desc)
                     }
                 }
@@ -1217,7 +1245,10 @@ struct InflightGuard<'a> {
 
 impl Drop for InflightGuard<'_> {
     fn drop(&mut self) {
-        self.map.lock().unwrap().remove(&self.key);
+        self.map
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.key);
     }
 }
 

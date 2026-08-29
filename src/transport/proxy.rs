@@ -741,7 +741,9 @@ u:p@also_valid:8080
 
     #[test]
     fn env_https_proxy() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             std::env::remove_var("NO_PROXY");
             std::env::remove_var("no_proxy");
@@ -758,7 +760,9 @@ u:p@also_valid:8080
 
     #[test]
     fn env_http_proxy() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             std::env::remove_var("NO_PROXY");
             std::env::remove_var("no_proxy");
@@ -774,7 +778,9 @@ u:p@also_valid:8080
 
     #[test]
     fn env_all_proxy_fallback() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             std::env::remove_var("HTTPS_PROXY");
             std::env::remove_var("HTTP_PROXY");
@@ -793,7 +799,9 @@ u:p@also_valid:8080
 
     #[test]
     fn env_lowercase_proxy() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             std::env::remove_var("NO_PROXY");
             std::env::remove_var("no_proxy");
@@ -809,7 +817,9 @@ u:p@also_valid:8080
 
     #[test]
     fn env_no_proxy_bypass() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             std::env::set_var("HTTPS_PROXY", "http://proxy:8080");
             std::env::set_var("NO_PROXY", "example.com");
@@ -826,7 +836,9 @@ u:p@also_valid:8080
 
     #[test]
     fn env_no_proxy_wildcard() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             std::env::set_var("HTTPS_PROXY", "http://proxy:8080");
             std::env::set_var("NO_PROXY", "*");
@@ -843,7 +855,9 @@ u:p@also_valid:8080
 
     #[test]
     fn env_no_proxy_subdomain() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             std::env::set_var("HTTPS_PROXY", "http://proxy:8080");
             std::env::set_var("NO_PROXY", ".example.com");
@@ -868,7 +882,9 @@ u:p@also_valid:8080
 
     #[test]
     fn env_no_proxy_returns_none_without_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
             std::env::remove_var("HTTPS_PROXY");
             std::env::remove_var("HTTP_PROXY");

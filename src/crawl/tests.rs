@@ -92,13 +92,18 @@ impl MockSite {
                 let referers = Arc::clone(&referers);
                 let hits = Arc::clone(&hits2);
                 async move {
-                    hits.lock().unwrap().push(url.clone());
+                    hits.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(url.clone());
                     referers
                         .lock()
                         .unwrap()
                         .push((url.clone(), referer.clone()));
                     // Throttle simulation: 429 until counter burns out.
-                    if let Some(c) = throttles.lock().unwrap().get(&url)
+                    if let Some(c) = throttles
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .get(&url)
                         && c.load(Ordering::SeqCst) > 0
                     {
                         c.fetch_sub(1, Ordering::SeqCst);
@@ -114,7 +119,10 @@ impl MockSite {
                         };
                     }
                     // Transient 500 simulation: 500 until counter burns out.
-                    if let Some(c) = transients.lock().unwrap().get(&url)
+                    if let Some(c) = transients
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .get(&url)
                         && c.load(Ordering::SeqCst) > 0
                     {
                         c.fetch_sub(1, Ordering::SeqCst);
@@ -203,7 +211,9 @@ async fn map_mode_reads_sitemap_cheap() {
     // Cost: robots + sitemap discovery fetches, never the pages.
     // Multiple sitemap locations are tried (6 fallbacks), but only
     // /sitemap.xml returns 200 — the others 404.
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(!hits.iter().any(|h| h.ends_with("/a")));
     assert!(!hits.iter().any(|h| h.ends_with("/b")));
     assert!(!hits.iter().any(|h| h.ends_with("/c")));
@@ -263,7 +273,9 @@ async fn crawl_cycles_terminate() {
     o.deadline = Duration::from_secs(5);
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
     // Each page fetched exactly once despite the cycle.
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let a_hits = hits.iter().filter(|h| h.ends_with("/a")).count();
     let b_hits = hits.iter().filter(|h| h.ends_with("/b")).count();
     assert_eq!(a_hits, 1);
@@ -353,7 +365,9 @@ async fn crawl_same_host_enforced() {
     o.max_pages = 10;
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
     assert!(!r.pages.iter().any(|p| p.url.contains("other.com")));
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(!hits.iter().any(|h| h.contains("other.com")));
 }
 
@@ -394,7 +408,9 @@ async fn crawl_robots_disallow_respected() {
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
     assert!(!r.pages.iter().any(|p| p.url.contains("/private")));
     assert!(r.pages.iter().any(|p| p.url.ends_with("/ok")));
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(!hits.iter().any(|h| h.contains("/private")));
 }
 
@@ -555,7 +571,9 @@ async fn crawl_focus_ranks_relevant_first() {
     o.focus = Some("migration".into());
     o.max_pages = 2; // seed + ONE more — focus decides which
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // The migration page must be fetched; the random one must not
     // (only 1 content-page budget).
     assert!(hits.iter().any(|h| h.contains("migration")));
@@ -628,7 +646,9 @@ async fn v2_canonical_dedup_prevents_double_fetch() {
     o.mode = CrawlMode::Content;
     o.max_pages = 10;
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // The seed declares canonical=/canonical. When /canonical is
     // linked, it's fetched. But the canonical form is marked seen
     // by the seed's own fetch, preventing a separate fetch of
@@ -687,7 +707,9 @@ async fn v2_pagination_link_rel_next_discovered() {
         .crawl("https://ex.com/page/1", o, None)
         .await
         .unwrap();
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(
         hits.iter().any(|h| h.ends_with("/page/2")),
         "pagination link rel=next must be discovered"
@@ -714,7 +736,9 @@ async fn v2_feed_discovery_seeds_frontier() {
     o.mode = CrawlMode::Content;
     o.max_pages = 10;
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(
         hits.iter().any(|h| h.ends_with("/feed.xml")),
         "feed URL must be fetched"
@@ -745,7 +769,9 @@ async fn v2_base_href_resolves_relative_links() {
     o.mode = CrawlMode::Content;
     o.max_pages = 10;
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(
         hits.iter().any(|h| h == "https://ex.com/sub/deep"),
         "relative link must resolve against <base href>"
@@ -947,7 +973,9 @@ async fn sitemap_fallback_locations_tried() {
     o.mode = CrawlMode::Map;
     let r = crawler.crawl("https://ex.com/", o, None).await.unwrap();
     assert!(r.map.contains(&"https://ex.com/found-page".to_string()));
-    let hits = hits.lock().unwrap();
+    let hits = hits
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(hits.iter().any(|h| h.contains("sitemap_index.xml")));
 }
 

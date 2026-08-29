@@ -152,8 +152,14 @@ impl EgressPool {
     /// - everyone else rides proxies first; direct only as
     ///   last resort (protect the home IP)
     pub fn pick(&self, engine: &str, exclude: &[String], direct_available: bool) -> Option<Egress> {
-        let pairs = self.pairs.lock().unwrap();
-        let dead = self.dead.lock().unwrap();
+        let pairs = self
+            .pairs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let dead = self
+            .dead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = Instant::now();
 
         let state_of = |id: &str| -> u8 {
@@ -221,7 +227,10 @@ impl EgressPool {
     /// Record a successful engine call through this egress.
     pub fn report_ok(&self, engine: &str, egress_id: &str) {
         self.stress_record(true);
-        let mut pairs = self.pairs.lock().unwrap();
+        let mut pairs = self
+            .pairs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let s = pairs
             .entry((engine.to_string(), egress_id.to_string()))
             .or_insert(PairState {
@@ -238,7 +247,10 @@ impl EgressPool {
     /// burn the pair, not the engine.
     pub fn report_blocked(&self, engine: &str, egress_id: &str) {
         self.stress_record(false);
-        let mut pairs = self.pairs.lock().unwrap();
+        let mut pairs = self
+            .pairs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let s = pairs
             .entry((engine.to_string(), egress_id.to_string()))
             .or_insert(PairState {
@@ -271,7 +283,10 @@ impl EgressPool {
     /// Preflight guard: un-bench every lane (used when the
     /// probe endpoint itself died and burned all proxies).
     pub fn revive_all(&self) {
-        self.dead.lock().unwrap().clear();
+        self.dead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// True when the pool has any proxy lanes at all — the
@@ -302,7 +317,10 @@ impl EgressPool {
         };
         let interval = base + Duration::from_millis(jitter(jit));
         let wait = {
-            let pairs = self.pairs.lock().unwrap();
+            let pairs = self
+                .pairs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             pairs
                 .get(&(engine.to_string(), egress_id.to_string()))
                 .and_then(|s| s.last_used)

@@ -59,7 +59,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             && v.get("id").is_none()
             && v.get("method").and_then(Value::as_str) == Some("notifications/cancelled")
             && let Some(rid) = v.pointer("/params/requestId").and_then(Value::as_i64)
-            && let Some(sender) = cancels.lock().unwrap().remove(&rid)
+            && let Some(sender) = cancels
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&rid)
         {
             let _ = sender.send(true);
             continue;

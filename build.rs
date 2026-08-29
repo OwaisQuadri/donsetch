@@ -493,12 +493,13 @@ fn onnx_target_info(os: &str, arch: &str) -> Option<OnnxTarget> {
             "onnxruntime-linux-x64-1.24.2/lib/libonnxruntime.so.1.24.2",
             "libonnxruntime.so",
         ),
-        ("linux", "aarch64") => (
-            "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-linux-aarch64-1.24.2.tgz",
-            "6715b3d19965a2a6981e78ed4ba24f17a8c30d2d26420dbed10aac7ceca0085e",
-            "onnxruntime-linux-aarch64-1.24.2/lib/libonnxruntime.so.1.24.2",
-            "libonnxruntime.so",
-        ),
+        // NOTE: onnxruntime-linux-aarch64-1.24.2 exists but dlopen'ing
+        // it from this binary deadlocks inside the loader on native
+        // aarch64 (proven by the CI payload probe timing out at its
+        // exact 15s guard in the v3.4.2 arm64 experiment). Same
+        // family as pykeio/ort #579. ARM64 therefore ships without
+        // OCR/rerank (doctor reports "not compiled"; the honest
+        // guard message explains it where relevant).
         _ => return None,
     };
     Some(OnnxTarget {

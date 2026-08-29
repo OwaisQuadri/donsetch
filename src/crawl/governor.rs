@@ -113,12 +113,18 @@ impl Governor {
     }
 
     pub fn set_crawl_delay(&self, d: Option<f64>) {
-        *self.crawl_delay.lock().unwrap() = d;
+        *self
+            .crawl_delay
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = d;
     }
 
     /// Base delay honoring host-declared crawl-delay.
     fn base(&self) -> Duration {
-        let cd = self.crawl_delay.lock().unwrap();
+        let cd = self
+            .crawl_delay
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match *cd {
             Some(s) if s > 0.0 => Duration::from_secs_f64(s.max(BASE_DELAY.as_secs_f64())),
             _ => BASE_DELAY,
@@ -145,7 +151,10 @@ impl Governor {
     /// for the shared host penalty box. Caller `tokio::time::sleep`s.
     pub fn wait_for(&self, host: &str, lane: &str, seq: u64) -> Duration {
         let host_boxed = {
-            let hosts = self.hosts.lock().unwrap();
+            let hosts = self
+                .hosts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             hosts
                 .get(host)
                 .and_then(|h| h.boxed_until)
@@ -168,7 +177,10 @@ impl Governor {
             LaneKind::Direct => self.base(),
             LaneKind::Proxy => self.base().mul_f64(1.5),
         };
-        let mut lanes = self.lanes.lock().unwrap();
+        let mut lanes = self
+            .lanes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = (host.to_string(), lane.to_string());
         let hl = lanes.entry(key).or_default();
         let now = Instant::now();
@@ -191,7 +203,10 @@ impl Governor {
     /// penalty window computed while it was upset.
     pub fn on_success(&self, host: &str, lane: &str, latency: Duration, dwell_ms: u64) {
         let ms = latency.as_secs_f64() * 1000.0;
-        let mut lanes = self.lanes.lock().unwrap();
+        let mut lanes = self
+            .lanes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = (host.to_string(), lane.to_string());
         let hl = lanes.entry(key).or_default();
         let old_rung = hl.rung;
@@ -234,7 +249,10 @@ impl Governor {
         drop(lanes);
 
         // Success decays the shared host penalty too.
-        let mut hosts = self.hosts.lock().unwrap();
+        let mut hosts = self
+            .hosts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(h) = hosts.get_mut(host) {
             h.rung = h.rung.saturating_sub(1);
             if h.rung == 0 {
@@ -247,7 +265,10 @@ impl Governor {
     /// whole host into the shared penalty box.
     pub fn on_throttled(&self, host: &str, lane: &str) {
         {
-            let mut lanes = self.lanes.lock().unwrap();
+            let mut lanes = self
+                .lanes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let key = (host.to_string(), lane.to_string());
             let hl = lanes.entry(key).or_default();
             hl.rung = (hl.rung + 2).min(MAX_BACKOFF_RUNG);
@@ -255,7 +276,10 @@ impl Governor {
             hl.next_allowed = Instant::now() + self.base().mul_f64(rung_mult * self.jitter(0xbeef));
         }
         // Shared host penalty box: everyone backs off together.
-        let mut hosts = self.hosts.lock().unwrap();
+        let mut hosts = self
+            .hosts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let h = hosts.entry(host.to_string()).or_default();
         h.rung = (h.rung + 1).min(MAX_BACKOFF_RUNG);
         let host_rung_mult = (1u64 << h.rung) as f64;
@@ -266,7 +290,10 @@ impl Governor {
     /// Record a network error (timeout, reset): gentler than
     /// throttled — one lane rung, no host box.
     pub fn on_error(&self, host: &str, lane: &str) {
-        let mut lanes = self.lanes.lock().unwrap();
+        let mut lanes = self
+            .lanes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = (host.to_string(), lane.to_string());
         let hl = lanes.entry(key).or_default();
         hl.rung = (hl.rung + 1).min(MAX_BACKOFF_RUNG);
@@ -281,7 +308,10 @@ impl Governor {
     /// boxed (caller waits for the box to lift).
     pub fn best_lane(&self, host: &str) -> Option<&Lane> {
         let host_boxed = {
-            let hosts = self.hosts.lock().unwrap();
+            let hosts = self
+                .hosts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             hosts
                 .get(host)
                 .and_then(|h| h.boxed_until)
@@ -291,7 +321,10 @@ impl Governor {
         if host_boxed {
             return None;
         }
-        let lanes = self.lanes.lock().unwrap();
+        let lanes = self
+            .lanes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = Instant::now();
         self.lanes_all.iter().min_by_key(|l| {
             let key = (host.to_string(), l.id.clone());
@@ -358,7 +391,10 @@ mod tests {
         let before = g.wait_for("ex.com", "lane0", 1);
         // Simulate the box expiring, then successes.
         {
-            let mut hosts = g.hosts.lock().unwrap();
+            let mut hosts = g
+                .hosts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             hosts.get_mut("ex.com").unwrap().boxed_until =
                 Some(Instant::now() - Duration::from_secs(1));
             hosts.get_mut("ex.com").unwrap().rung = 2;
@@ -380,7 +416,10 @@ mod tests {
             g.on_success("ex.com", "lane0", Duration::from_millis(500), 0);
         }
         {
-            let lanes = g.lanes.lock().unwrap();
+            let lanes = g
+                .lanes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let hl = lanes.get(&("ex.com".into(), "lane0".into())).unwrap();
             assert!(hl.rung >= 1);
         }

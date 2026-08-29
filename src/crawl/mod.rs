@@ -548,7 +548,9 @@ impl Crawler {
                 'work: loop {
                     // ── Stop conditions ──
                     if Instant::now() >= deadline_at {
-                        let mut s = stop_flag.lock().unwrap();
+                        let mut s = stop_flag
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if s.is_none() {
                             *s = Some(StopReason::Deadline);
                         }
@@ -559,24 +561,34 @@ impl Crawler {
                     if let Some(rx) = &opts_worker.cancel
                         && (*rx.borrow() || rx.has_changed().unwrap_or(false))
                     {
-                        let mut s = stop_flag.lock().unwrap();
+                        let mut s = stop_flag
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if s.is_none() {
                             *s = Some(StopReason::Cancelled);
                         }
                         break 'work;
                     }
-                    if stop_flag.lock().unwrap().is_some() {
+                    if stop_flag
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_some()
+                    {
                         break 'work;
                     }
                     if pages_done.load(Ordering::SeqCst) >= max_pages {
-                        let mut s = stop_flag.lock().unwrap();
+                        let mut s = stop_flag
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if s.is_none() {
                             *s = Some(StopReason::MaxPages);
                         }
                         break 'work;
                     }
                     if chars_total.load(Ordering::SeqCst) >= max_total {
-                        let mut s = stop_flag.lock().unwrap();
+                        let mut s = stop_flag
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if s.is_none() {
                             *s = Some(StopReason::CharBudget);
                         }
@@ -586,7 +598,9 @@ impl Crawler {
                     // without finding enough quality content. Prevents
                     // infinite loops on sites full of low-quality pages.
                     if total_fetched.load(Ordering::SeqCst) >= max_pages * 3 {
-                        let mut s = stop_flag.lock().unwrap();
+                        let mut s = stop_flag
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if s.is_none() {
                             *s = Some(StopReason::MaxPages);
                         }
@@ -594,13 +608,22 @@ impl Crawler {
                     }
 
                     // ── Pop next ──
-                    let next = queue.lock().unwrap().pop();
+                    let next = queue
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .pop();
                     let Some(item) = next else {
                         // Frontier empty — but other workers may add.
                         // Grace: spin briefly, then exit.
                         tokio::time::sleep(Duration::from_millis(150)).await;
-                        if queue.lock().unwrap().is_empty() {
-                            let mut s = stop_flag.lock().unwrap();
+                        if queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .is_empty()
+                        {
+                            let mut s = stop_flag
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             if s.is_none() {
                                 *s = Some(StopReason::FrontierEmpty);
                             }
@@ -620,7 +643,9 @@ impl Crawler {
                         }
                     };
                     if item.depth > max_depth {
-                        let mut s = stop_flag.lock().unwrap();
+                        let mut s = stop_flag
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if s.is_none() {
                             *s = Some(StopReason::DepthLimit);
                         }
@@ -669,7 +694,11 @@ impl Crawler {
                     // entry point and always fetched.
                     if !is_seed {
                         let lcanon = frontier::locale_canonical(parsed.path());
-                        if locale_seen.lock().unwrap().contains(&lcanon) {
+                        if locale_seen
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .contains(&lcanon)
+                        {
                             filtered_out.fetch_add(1, Ordering::Relaxed);
                             continue 'work;
                         }
@@ -682,21 +711,30 @@ impl Crawler {
                         if governor.wait_for(host, "*", seq) > Duration::ZERO {
                             // Whole host boxed — if the frontier
                             // holds only this host, we're done.
-                            if queue.lock().unwrap().is_empty() {
-                                let mut s = stop_flag.lock().unwrap();
+                            if queue
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .is_empty()
+                            {
+                                let mut s = stop_flag
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                                 if s.is_none() {
                                     *s = Some(StopReason::ThrottledOut);
                                 }
                                 break 'work;
                             }
                             // Requeue and yield.
-                            queue.lock().unwrap().requeue(frontier::Frontier {
-                                url: item.url.clone(),
-                                score: item.score,
-                                depth: item.depth,
-                                retries: item.retries,
-                                parent: item.parent.clone(),
-                            });
+                            queue
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .requeue(frontier::Frontier {
+                                    url: item.url.clone(),
+                                    score: item.score,
+                                    depth: item.depth,
+                                    retries: item.retries,
+                                    parent: item.parent.clone(),
+                                });
                             tokio::time::sleep(Duration::from_millis(400)).await;
                             continue 'work;
                         }
@@ -744,13 +782,16 @@ impl Crawler {
                     let is_transient = page.status == 0
                         || (page.status >= 500 && !matches!(page.verdict, Verdict::Challenge(_)));
                     if is_transient && item.retries < 2 {
-                        queue.lock().unwrap().requeue(frontier::Frontier {
-                            url: item.url.clone(),
-                            score: item.score * 0.8,
-                            depth: item.depth,
-                            retries: item.retries + 1,
-                            parent: item.parent.clone(),
-                        });
+                        queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .requeue(frontier::Frontier {
+                                url: item.url.clone(),
+                                score: item.score * 0.8,
+                                depth: item.depth,
+                                retries: item.retries + 1,
+                                parent: item.parent.clone(),
+                            });
                         continue 'work;
                     }
 
@@ -770,10 +811,13 @@ impl Crawler {
                             match ghost_hook(item.url.clone()).await {
                                 Ok(gp) => ghost_html = Some(gp.html),
                                 Err(why) => {
-                                    skipped.lock().unwrap().push((
-                                        item.url.clone(),
-                                        format!("ghost escalation failed: {why}"),
-                                    ));
+                                    skipped
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .push((
+                                            item.url.clone(),
+                                            format!("ghost escalation failed: {why}"),
+                                        ));
                                 }
                             }
                         }
@@ -796,7 +840,10 @@ impl Crawler {
                                 .clone()
                                 .unwrap_or_else(|| format!("{:?}", page.verdict))
                         };
-                        skipped.lock().unwrap().push((item.url.clone(), why));
+                        skipped
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push((item.url.clone(), why));
                         continue 'work;
                     }
                     // Count every successful fetch (safety valve
@@ -818,7 +865,10 @@ impl Crawler {
                         if canon_norm != fetched_norm {
                             // Mark the canonical form as seen so
                             // it won't be fetched separately.
-                            queue.lock().unwrap().mark_seen(canon_norm.clone());
+                            queue
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .mark_seen(canon_norm.clone());
                             // Record the canonical as the page's
                             // true URL for output.
                             // (page_url is updated below.)
@@ -938,10 +988,13 @@ impl Crawler {
                                     }
                                 }
                                 Err(why) => {
-                                    skipped.lock().unwrap().push((
-                                        item.url.clone(),
-                                        format!("ghost escalation failed: {why}"),
-                                    ));
+                                    skipped
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .push((
+                                            item.url.clone(),
+                                            format!("ghost escalation failed: {why}"),
+                                        ));
                                 }
                             }
                         }
@@ -954,7 +1007,10 @@ impl Crawler {
                     // now blocked from the crawl budget.
                     {
                         let lcanon = frontier::locale_canonical(parsed.path());
-                        locale_seen.lock().unwrap().insert(lcanon);
+                        locale_seen
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .insert(lcanon);
                     }
 
                     // Near-dup signature: title + first 200 normalized
@@ -978,7 +1034,10 @@ impl Crawler {
                         sig_str.hash(&mut h);
                         h.finish()
                     };
-                    let duplicate = !dup_sigs.lock().unwrap().insert(sig);
+                    let duplicate = !dup_sigs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(sig);
 
                     // Quality gate: skip near-empty pages (boilerplate,
                     // redirects, error pages). Does NOT count against
@@ -1016,7 +1075,13 @@ impl Crawler {
                     } else {
                         let done = pages_done.fetch_add(1, Ordering::SeqCst) + 1;
                         if let Some(cb) = &opts_worker.progress {
-                            cb(done, queue.lock().unwrap().len());
+                            cb(
+                                done,
+                                queue
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .len(),
+                            );
                         }
                         if !duplicate {
                             chars_total.fetch_add(chars, Ordering::SeqCst);
@@ -1024,18 +1089,21 @@ impl Crawler {
                         if let Some(rec) = &opts_worker.on_page {
                             rec(&page.url, r.fingerprint.as_deref(), &md, r.title.as_deref());
                         }
-                        pages.lock().unwrap().push(CrawlPage {
-                            url: page.url.clone(),
-                            title: r.title.clone().unwrap_or_default(),
-                            kind: r.content_kind,
-                            markdown: md,
-                            chars,
-                            quality: r.quality,
-                            duplicate,
-                            parent: item.parent.clone(),
-                            score: item.score,
-                            lastmod: None, // filled after worker loop from sitemap
-                        });
+                        pages
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(CrawlPage {
+                                url: page.url.clone(),
+                                title: r.title.clone().unwrap_or_default(),
+                                kind: r.content_kind,
+                                markdown: md,
+                                chars,
+                                quality: r.quality,
+                                duplicate,
+                                parent: item.parent.clone(),
+                                score: item.score,
+                                lastmod: None, // filled after worker loop from sitemap
+                            });
                         if duplicate {
                             skipped
                                 .lock()
@@ -1077,8 +1145,12 @@ impl Crawler {
                         // pagination doesn't consume depth budget.
                         let next_hrefs = extract_link_rel(&html, "next");
                         {
-                            let ls = locale_seen.lock().unwrap();
-                            let mut q = queue.lock().unwrap();
+                            let ls = locale_seen
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let mut q = queue
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             for nh in &next_hrefs {
                                 if let Some(nu) = frontier::resolve(&base, nh) {
                                     if opts_worker.same_host
@@ -1168,8 +1240,12 @@ impl Crawler {
                             let feed_text = String::from_utf8_lossy(&feed_page.body);
                             let entries = parse_feed_urls(&feed_text, 200);
                             {
-                                let ls = locale_seen.lock().unwrap();
-                                let mut q = queue.lock().unwrap();
+                                let ls = locale_seen
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                let mut q = queue
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                                 for eu in &entries {
                                     if let Ok(u) = Url::parse(eu) {
                                         if opts_worker.same_host
@@ -1231,7 +1307,9 @@ impl Crawler {
 
                         // Standard <a href> harvest.
                         let filtered: Vec<(url::Url, String, f64)> = {
-                            let ls = locale_seen.lock().unwrap();
+                            let ls = locale_seen
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             links
                                 .into_iter()
                                 .filter_map(|(child, anchor)| {
@@ -1290,7 +1368,9 @@ impl Crawler {
                         }; // ls dropped here
 
                         {
-                            let mut q = queue.lock().unwrap();
+                            let mut q = queue
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             for (cu, _anchor, s) in filtered {
                                 q.push_with_parent(cu, s, item.depth + 1, Some(item.url.clone()));
                             }
@@ -1307,16 +1387,27 @@ impl Crawler {
         // ── Result + resume token ──────────────────────────
         let elapsed = started.elapsed();
         let (final_pages, stop, queued_entries) = {
-            let p = std::mem::take(&mut *pages.lock().unwrap());
+            let p = std::mem::take(
+                &mut *pages
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
             let s = stop_flag
                 .lock()
                 .unwrap()
                 .unwrap_or(StopReason::FrontierEmpty);
-            let q = sh_queue.lock().unwrap().snapshot_entries();
+            let q = sh_queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .snapshot_entries();
             (p, s, q)
         };
 
-        let skipped_v = std::mem::take(&mut *skipped.lock().unwrap());
+        let skipped_v = std::mem::take(
+            &mut *skipped
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
         let filtered = filtered_out.load(Ordering::Relaxed);
 
         // Lastmod lookup from sitemap entries + relevance-sorted
@@ -1355,7 +1446,10 @@ impl Crawler {
                             .iter()
                             .map(|(u, s, d, r, p)| (u.clone(), *s, *d, *r, p.clone()))
                             .collect(),
-                        seen: sh_queue.lock().unwrap().seen_snapshot(),
+                        seen: sh_queue
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .seen_snapshot(),
                     };
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)

@@ -420,23 +420,35 @@ impl ByokStore {
     }
 
     pub fn is_configured(&self) -> bool {
-        self.config.lock().unwrap().is_configured()
+        self.config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_configured()
     }
 
     /// True if "local" is the default search method.
     pub fn is_local_default(&self) -> bool {
-        self.config.lock().unwrap().is_local_default()
+        self.config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_local_default()
     }
 
     pub fn pick_key_skipping(
         &self,
         skip: &std::collections::HashSet<(String, String)>,
     ) -> Option<(String, String)> {
-        self.config.lock().unwrap().pick_key_skipping(skip)
+        self.config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pick_key_skipping(skip)
     }
 
     pub fn update_key_state(&self, provider: &str, key: &str, state: KeyState) {
-        let mut cfg = self.config.lock().unwrap();
+        let mut cfg = self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         cfg.update_key_state(provider, key, state);
         cfg.save();
     }
@@ -444,7 +456,10 @@ impl ByokStore {
     /// Reload config from disk (picks up CLI key changes).
     pub fn reload(&self) {
         let new_cfg = ByokConfig::load();
-        *self.config.lock().unwrap() = new_cfg;
+        *self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = new_cfg;
     }
 }
 

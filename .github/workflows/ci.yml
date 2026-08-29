@@ -56,16 +56,13 @@ jobs:
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            # Full OCR/rerank since v3.4.2: build.rs ships the
-            # official ONNX Runtime linux-aarch64 prebuilt, and the
-            # payload probe test proves it really loads on native
-            # ARM runners.
-            features: --features ocr,rerank,http
-            # PDF on aarch64: the FPDF_LoadMemDocument64 hang from
-            # issue #9 predates the current pdfium-static chromium/7809
-            # build. Experiments run with a 30s per-test timeout
-            # (slow-timeout in .config/nextest.toml); if this job
-            # goes red on pdf:: tests, flip this back.
+            # PDF enabled since the v3.4.2 arm64 experiment (the
+            # chromium/7809 static build fixed the old
+            # FPDF_LoadMemDocument64 hang; full pdf:: suite passes
+            # on native arm64). OCR/rerank stay off: the official
+            # ONNX aarch64 prebuilt deadlocks at dlopen on native
+            # arm64 (probe timed out at its exact 15s guard).
+            features: ''
             extra-args: ''
             release-check: false
           - name: macos-arm64

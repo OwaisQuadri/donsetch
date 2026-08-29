@@ -187,7 +187,9 @@ pub async fn connect(
     // we, but EGRESS-SCOPED (session_key carries the
     // proxy id when proxied; see fetch/client.rs).
     if let Some(sess) = stream.ssl().session() {
-        let mut store = sessions.lock().unwrap();
+        let mut store = sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if store.len() >= 512 {
             store.clear(); // sessions are short-lived; wipe + refill
         }

@@ -75,7 +75,10 @@ impl Fetcher {
     /// solve) into the persistent jar so the tier-1
     /// re-fetch carries the clearance.
     pub async fn import_cookies(&self, cookies: &[CookieRecord]) {
-        let mut jar = self.jar.lock().unwrap();
+        let mut jar = self
+            .jar
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for c in cookies {
             jar.store_raw(&c.name, &c.value, &c.domain, c.expires_at);
         }
@@ -85,7 +88,10 @@ impl Fetcher {
     /// write-back to the persistent domain profile after a
     /// successful warm fetch.
     pub fn jar_snapshot(&self, host: &str) -> Vec<CookieRecord> {
-        let jar = self.jar.lock().unwrap();
+        let jar = self
+            .jar
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         jar.snapshot_for(host)
     }
 
@@ -141,7 +147,10 @@ impl Fetcher {
 
         // Fresh-window cache hit: no request at all (browser-true).
         let check = {
-            let cache = self.cache.lock().unwrap();
+            let cache = self
+                .cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             cache.check(url_str)
         };
         let conditional = match check {
@@ -199,13 +208,20 @@ impl Fetcher {
                 .fetch_once_via(&current, &conditional, effective_proxy, use_jar, ref_arg)
                 .await?;
             {
-                let mut jar = self.jar.lock().unwrap();
+                let mut jar = self
+                    .jar
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 jar.store_from_headers(&host, &out.headers);
             }
 
             // 304: merge body from cache.
             if out.status == 304
-                && let Some((body, status, headers)) = self.cache.lock().unwrap().stored(&current)
+                && let Some((body, status, headers)) = self
+                    .cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .stored(&current)
             {
                 out.status = status;
                 out.headers = headers;
@@ -268,7 +284,10 @@ impl Fetcher {
                     // every later fetch (hardcoded ContentOk made it
                     // worse). Walls are never cacheable.
                     if matches!(out.verdict, Verdict::ContentOk) {
-                        let mut cache = self.cache.lock().unwrap();
+                        let mut cache = self
+                            .cache
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
                         cache.store(&current, out.status, &out.headers, &out.body);
                     }
 
@@ -282,12 +301,18 @@ impl Fetcher {
                             .await
                     {
                         {
-                            let mut jar = self.jar.lock().unwrap();
+                            let mut jar = self
+                                .jar
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             jar.store_from_headers(&host, &retry.headers);
                         }
                         retry.verdict = walls::detect(retry.status, &retry.headers, &retry.body);
                         if matches!(retry.verdict, Verdict::ContentOk) {
-                            let mut cache = self.cache.lock().unwrap();
+                            let mut cache = self
+                                .cache
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             cache.store(&current, retry.status, &retry.headers, &retry.body);
                         }
                         out = retry;
@@ -350,7 +375,10 @@ impl Fetcher {
         // Header set from profile (Chrome order, coherence) + cookie + conditionals.
         let mut req_headers = self.profile.h1_headers(&authority, &path);
         if use_jar {
-            let jar = self.jar.lock().unwrap();
+            let jar = self
+                .jar
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(cookie) = jar.header_for(host, &path) {
                 let pos = req_headers
                     .iter()
@@ -413,7 +441,11 @@ impl Fetcher {
         }
 
         // 1) Try a pooled h2 connection for this origin.
-        let pooled = self.pool.lock().unwrap().take_h2(&origin);
+        let pooled = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take_h2(&origin);
         if let Some(mut conn) = pooled {
             match self
                 .h2_request(&mut conn, &authority, &path, &req_headers, true)
@@ -421,7 +453,10 @@ impl Fetcher {
             {
                 Ok(mut out) => {
                     out.verdict = walls::detect(out.status, &out.headers, &out.body);
-                    self.pool.lock().unwrap().put_h2(&origin, conn);
+                    self.pool
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .put_h2(&origin, conn);
                     return Ok(out);
                 }
                 Err(_) => { /* conn died; drop it and go fresh */ }
@@ -523,7 +558,10 @@ impl Fetcher {
             let out = self
                 .h2_request(&mut conn, authority, path, req_headers, false)
                 .await?;
-            self.pool.lock().unwrap().put_h2(origin, conn);
+            self.pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .put_h2(origin, conn);
             Ok(out)
         } else {
             let resp = tokio::time::timeout(

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/herobanner.png" width="640" alt="DonSeTch — The web, for AI agents">
+<img src="assets/herobanner.png" width="640" alt="DonSeTch, The web, for AI agents">
 
 **$0. No keys, no accounts. Built from scratch in Rust.**
 
@@ -37,13 +37,13 @@ npm install -g donsetch
 
 [Install](#-install) · [Two ways to use it](#-two-ways-to-use-it) · [The 3 tools](#-the-3-tools) · [Chrome TLS](#-chrome-tls-not-chrome-like) · [Solve & Bounce](#-solve-and-bounce) · [Search](#-keyless-search) · [PDF](#-pdf--ocr) · [Benchmark](#-wrb-web-research-benchmark) · [Comparison](#-comparison) · [Gotchas](#-gotchas) · [Limits](#-honest-limits)
 
-### 🔥 [DonSeTch vs Firecrawl — live head-to-head](#-donsetch-vs-firecrawl-live-head-to-head)
+### 🔥 [DonSeTch vs Firecrawl, live head-to-head](#-donsetch-vs-firecrawl-live-head-to-head)
 
 </div>
 
 ---
 
-DonSeTch gives any AI agent full web research from a single local process. Three tools, zero API keys, zero accounts. Built in Rust — one binary, no Python, no Playwright, no Selenium, no `reqwest`, no `hyper`. Every layer built from scratch.
+DonSeTch gives any AI agent full web research from a single local process. Three tools, zero API keys, zero accounts. Built in Rust, one binary, no Python, no Playwright, no Selenium, no `reqwest`, no `hyper`. Every layer built from scratch.
 
 Works with every MCP client: Claude Code, Cursor, OpenCode, Pi, anything that speaks MCP. Also works as a standalone CLI.
 
@@ -51,8 +51,8 @@ Works with every MCP client: Claude Code, Cursor, OpenCode, Pi, anything that sp
 
 | | What it does |
 |---|---|
-| 🛡️ **Real Chrome TLS** | Drives Chrome's own BoringSSL natively. Your ClientHello IS Chrome's ClientHello — fingerprint is emergent from the real engine, not a faked table that rots. |
-| ⏱️ **Temporal stealth** | TLS session resumption, conditional revalidation (304), persistent cookies, connection pooling. The loudest remaining bot tell — and nobody else fakes it. |
+| 🛡️ **Real Chrome TLS** | Drives Chrome's own BoringSSL natively. Your ClientHello IS Chrome's ClientHello, fingerprint is emergent from the real engine, not a faked table that rots. |
+| ⏱️ **Temporal stealth** | TLS session resumption, conditional revalidation (304), persistent cookies, connection pooling. The loudest remaining bot tell, and nobody else fakes it. |
 | 👻 **Solve-and-bounce** | Browser solves the challenge, hands cookies to tier 1, goes to sleep. Tier 1 fetches at full speed. The browser almost never fetches content. |
 | 🧠 **Self-improving fetch** | Learns from every fetch. Cookie lifetimes learned adaptively. Warm starts skip the browser entirely. Converges to optimal routing per domain. |
 | 🔎 **Semantic reranking** | Local ONNX cross-encoder reads query + result through full attention. Pushes out generic articles that keyword-match but aren't about the topic. |
@@ -63,24 +63,24 @@ Works with every MCP client: Claude Code, Cursor, OpenCode, Pi, anything that sp
 
 ---
 
-## 🆕 v3 — the agent-first upgrade
+## 🆕 v3, the agent-first upgrade
 
 Four things no free (or paid) competitor has, plus a stack of agent-first mechanics:
 
 | | What it does |
 |---|---|
-| 🔗 **Reference handles** | Fetched-page links render as `[text](L12)`, search results as `S1…Sn` — and `fetch S3` just works. URLs cost 80 tokens a piece; handles cost 3. Raw URLs stay in `structuredContent` for citation. |
+| 🔗 **Reference handles** | Fetched-page links render as `[text](L12)`, search results as `S1…Sn`, and `fetch S3` just works. URLs cost 80 tokens a piece; handles cost 3. Raw URLs stay in `structuredContent` for citation. |
 | 🧾 **Probe mode** | `must_contain: "CVE-2026-1234"` verifies a claim against the FULLY-fetched page but returns MATCH/NO-MATCH + ≤3 excerpts (~60 tokens instead of 4k). Verification questions stop paying reading prices. |
-| ♻️ **Resurrection fetch** | Dead link? `archive=auto` transparently serves the nearest Wayback snapshot, labeled `ARCHIVED COPY — 2021-04-03 (5 years old)`. Dead ends become honest answers. |
-| 🕵️ **Anti-cloak check** | On domains known to serve decoys, tier-1 responses are equivalence-checked against a headless render — `decoy suspected` is stamped, never silently passed off as content. |
+| ♻️ **Resurrection fetch** | Dead link? `archive=auto` transparently serves the nearest Wayback snapshot, labeled `ARCHIVED COPY, 2021-04-03 (5 years old)`. Dead ends become honest answers. |
+| 🕵️ **Anti-cloak check** | On domains known to serve decoys, tier-1 responses are equivalence-checked against a headless render, `decoy suspected` is stamped, never silently passed off as content. |
 | 📌 **Page memory** | Every fetch is fingerprinted; re-fetches report `changed (minor/changed/rewritten)` with section-level diffs. `since_last=true` collapses a re-check to one line (~30 tokens). Delta crawls skip unchanged pages. |
-| 🧠 **Domain intelligence** | Reddit `.json`, npm/PyPI/crates.io/Go/RubyGems, GitHub issues/releases, Stack Overflow QA trees, Wikipedia infoboxes, docs-site outlines — restructured from each site's own keyless endpoints/DOM, honestly labeled `via=adapter:…`, kill-switchable, always falling back to the generic pipeline. |
+| 🧠 **Domain intelligence** | Reddit `.json`, npm/PyPI/crates.io/Go/RubyGems, GitHub issues/releases, Stack Overflow QA trees, Wikipedia infoboxes, docs-site outlines, restructured from each site's own keyless endpoints/DOM, honestly labeled `via=adapter:…`, kill-switchable, always falling back to the generic pipeline. |
 | ⏱️ **The clock** | `deadline_ms` on fetch/search, real MCP cancellation, progress notifications per crawl page, and an `ms` cost footer on every result. No operation can silently hang. |
 | 🧵 **Article stitching** | `stitch=true` walks `rel=next` and returns an 8-part article as ONE call with part markers. |
-| ⚡ **Warm handoff** | Search enrichment pre-fetches the top results; your next `fetch S1` serves from that cache — the search→fetch second hop runs in ~3ms. |
+| ⚡ **Warm handoff** | Search enrichment pre-fetches the top results; your next `fetch S1` serves from that cache, the search→fetch second hop runs in ~3ms. |
 | 🛡️ **h2 parity, gated** | The HTTP/2 preface (SETTINGS, window update, header order) is asserted byte-identical to Chromium in CI. Detectability regressions are build failures. |
-| 🧯 **Crash-only daemon** | `donsetch mcp --supervised` — a panic is a blip: the daemon restarts, state reloads, the session survives (SIGKILL-verified). |
-| 🧾 **Error codes** | Every error carries a stable machine code (`wall.challenge`, `guard.ssrf`, `deadline.hit`, `archive.stale`, …) — branch on codes, not prose. |
+| 🧯 **Crash-only daemon** | `donsetch mcp --supervised`, a panic is a blip: the daemon restarts, state reloads, the session survives (SIGKILL-verified). |
+| 🧾 **Error codes** | Every error carries a stable machine code (`wall.challenge`, `guard.ssrf`, `deadline.hit`, `archive.stale`, …), branch on codes, not prose. |
 
 ---
 
@@ -106,7 +106,7 @@ Four things no free (or paid) competitor has, plus a stack of agent-first mechan
 
 ## 📦 Install
 
-### Option 1 — npm (recommended)
+### Option 1, npm (recommended)
 
 ```bash
 npm install -g donsetch
@@ -122,7 +122,7 @@ Downloads the prebuilt binary for your platform from GitHub Releases with SHA256
 | Windows x86_64 | `donsetch-win32-x64.tar.gz` |
 | Termux (Android) | Build from source (see build notes) |
 
-### Option 2 — Homebrew (macOS / Linux)
+### Option 2, Homebrew (macOS / Linux)
 
 ```bash
 brew tap dondai44423/donsetch
@@ -131,17 +131,17 @@ brew install donsetch
 
 Installs the same official release binaries.
 
-### Option 3 — Pi agent (native extension)
+### Option 3, Pi agent (native extension)
 
 ```bash
 pi install npm:donsetch
 ```
 
-Installs DonSeTch as a native pi extension. The donsetch MCP binary spawns at session start, discovers its 3 tools dynamically, and registers them as native pi tools — no MCP adapter, no proxy, no config. Tools stay in sync with the binary automatically (zero maintenance). If the binary is missing, the extension auto-downloads it from GitHub Releases.
+Installs DonSeTch as a native pi extension. The donsetch MCP binary spawns at session start, discovers its 3 tools dynamically, and registers them as native pi tools, no MCP adapter, no proxy, no config. Tools stay in sync with the binary automatically (zero maintenance). If the binary is missing, the extension auto-downloads it from GitHub Releases.
 
-Update with `pi update --extensions` — both the binary and extension update together.
+Update with `pi update --extensions`, both the binary and extension update together.
 
-### Option 4 — Build from source
+### Option 4, Build from source
 
 | Dependency | Why | Linux | macOS | Windows |
 |---|---|---|---|---|
@@ -150,7 +150,7 @@ Update with `pi update --extensions` — both the binary and extension update to
 | **NASM** | BoringSSL assembly | `pacman -S nasm` / `apt install nasm` | `brew install nasm` | `choco install nasm` |
 | **CMake** | BoringSSL build | `pacman -S cmake` / `apt install cmake` | `brew install cmake` | `winget install cmake` |
 | **Clang** | bindgen (boring-sys) | `apt install clang libclang-dev` | *(bundled on macOS)* | `choco install llvm` |
-| **LLD** | PDFium link (aarch64) | `apt install lld` *(aarch64 only)* | — | — |
+| **LLD** | PDFium link (aarch64) | `apt install lld` *(aarch64 only)* |, |, |
 
 ```bash
 git clone https://github.com/dondai44423/donsetch.git
@@ -164,20 +164,20 @@ Binary lands at `target/release/donsetch`. First build takes ~2 min (compiling B
 <summary><b>Build notes</b></summary>
 
 - **BoringSSL** is vendored and built from source via `boring-sys`. First build compiles it (~2 min), then cached.
-- **PDFium** is downloaded as a static library by `build.rs` — no manual setup.
+- **PDFium** is downloaded as a static library by `build.rs`, no manual setup.
 - **ONNX Runtime** is downloaded at build time by `oar-ocr` (OCR) and `ort` (reranker) when those features are enabled.
 - **Models** (OCR + reranker) download on first use to `~/.cache/donsetch/`, not bundled in the binary.
-- **Feature flags**: `default = []` — the core tool (fetch, search, crawl, PDF) works standalone. Build with `--features ocr,rerank` for OCR + semantic reranking (pulls in ONNX Runtime), and `--features http` for the [HTTP transport](#http-transport-remote-clients-and-debugging). The prebuilt npm binary ships with all three on linux-x64, macOS-arm64, and Windows-x64; the linux-arm64 and macOS-x64 prebuilts are core-only.
+- **Feature flags**: `default = []`, the core tool (fetch, search, crawl, PDF) works standalone. Build with `--features ocr,rerank` for OCR + semantic reranking (pulls in ONNX Runtime), and `--features http` for the [HTTP transport](#http-transport-remote-clients-and-debugging). The prebuilt npm binary ships with all three on linux-x64, macOS-arm64, and Windows-x64; the linux-arm64 prebuilt is PDF + core (the ONNX aarch64 prebuilt deadlocks at dlopen on native arm64, so OCR/rerank stay honest about being unavailable there); the macOS-x64 prebuilt is core-only.
 - **Reranker threads**: on Linux, CPU-constrained containers are detected from the process's effective parallelism (including cgroup v1/v2 quota and affinity), and the ONNX intra-op pool is clamped automatically when that budget is below the host's physical core count. `DONSEEK_RERANK_THREADS` remains a cross-platform explicit override, for example, use `1` in a shared 2-vCPU service to reserve a core for network work. The CPU budget and override are sampled when the reranker first initializes, so restart DonSeTch after an in-place container CPU resize. Other platforms use best-effort OS detection; unconstrained hosts preserve ONNX's native default and affinity behavior.
-- **Chromium** (optional): needed for tier 2 browser escalation on bot-walled sites. Linux: `pacman -S chromium` / `apt install chromium-browser`. macOS: `brew install chromium`. Windows: Edge works. **Playwright**: if you already have `npx playwright install`, DonSeTch auto-discovers `~/.cache/ms-playwright/chromium-*/chrome-linux/chrome` — no manual `DONGHOST_CHROME` needed. **Ubuntu Snap**: set `DONGHOST_CHROME=/snap/chromium/current/usr/lib/chromium-browser/chrome` — the `/snap/bin/chromium` wrapper doesn't reliably pass CDP flags.
+- **Chromium** (optional): needed for tier 2 browser escalation on bot-walled sites. Linux: `pacman -S chromium` / `apt install chromium-browser`. macOS: `brew install chromium`. Windows: Edge works. **Playwright**: if you already have `npx playwright install`, DonSeTch auto-discovers `~/.cache/ms-playwright/chromium-*/chrome-linux/chrome`, no manual `DONGHOST_CHROME` needed. **Ubuntu Snap**: set `DONGHOST_CHROME=/snap/chromium/current/usr/lib/chromium-browser/chrome`, the `/snap/bin/chromium` wrapper doesn't reliably pass CDP flags.
 - **Linux Xvfb**: for headful Chrome on Linux, `xorg-server-xvfb` is needed (`apt install xvfb`). DonSeTch starts Xvfb automatically on `:99`. If your distro uses a regional Ubuntu Ports mirror that is down, fix it: `sudo sed -i 's|http://.*\.clouds\.ports\.ubuntu\.com|http://ports.ubuntu.com|' /etc/apt/sources.list.d/ubuntu.sources && sudo apt-get update`.
-- **Linux ARM64 (aarch64)**: the default build (no features) works out of the box. Requires `lld` + `clang libclang-dev` for PDFium + boring-sys: `apt install lld clang libclang-dev` (fix mirror first if needed, see above). If you enable `--features ocr,rerank`, ONNX Runtime's C++ global constructors may deadlock at startup on aarch64.
-- **AppArmor / sandbox** (Ubuntu 23.10+): unprivileged user namespaces are disabled by default, so Chromium fails with `No usable sandbox!`. DonSeTch now passes `--no-sandbox --disable-setuid-sandbox` automatically — no manual fix needed.
+- **Linux ARM64 (aarch64)**: fetch, search, crawl and PDF work out of the box. Requires `lld` + `clang libclang-dev` for PDFium + boring-sys: `apt install lld clang libclang-dev` (fix mirror first if needed, see above). OCR/rerank are not available on the arm64 prebuilt: the official ONNX aarch64 prebuilt deadlocks at dlopen on native arm64, so the build reports "not compiled" honestly instead of hanging.
+- **AppArmor / sandbox** (Ubuntu 23.10+): unprivileged user namespaces are disabled by default, so Chromium fails with `No usable sandbox!`. DonSeTch now passes `--no-sandbox --disable-setuid-sandbox` automatically, no manual fix needed.
 - **Termux (Android)**: `pkg install rust clang make pkg-config go lld && cargo build --release`. Chromium: `pkg install x11-repo && pkg install chromium`. DonSeTch auto-detects Termux and uses headless mode (no Xvfb needed). **boring-sys NDK workaround**: boring-sys's build script panics on Android targets without `ANDROID_NDK_HOME`. Run `export ANDROID_NDK_HOME=$PREFIX` before `cargo build` to satisfy the check (Termux IS the native Android environment, its toolchain lives in `$PREFIX`). PDFium uses bblanchon's Android shared library (`libpdfium.so`), not the glibc-targeted static archive.
 
 </details>
 
-### Option 5 — Docker
+### Option 5, Docker
 
 For isolated deployment, a consistent runtime environment, and easy updates:
 
@@ -187,7 +187,7 @@ cd donsetch
 docker compose build
 ```
 
-**Optional build choice — Chromium.** The default image excludes
+**Optional build choice, Chromium.** The default image excludes
 Chromium; tier 2 browser escalation only activates when a browser is
 configured. To bake Chromium in (~+350MB) for tier 2 bot-wall bypass:
 
@@ -219,8 +219,8 @@ stdio MCP client config (Docker flavor):
 }
 ```
 
-OpenCode uses a stricter MCP schema — a `type` discriminator, a single
-`command` array, and an explicit `enabled` — in
+OpenCode uses a stricter MCP schema, a `type` discriminator, a single
+`command` array, and an explicit `enabled`, in
 `~/.config/opencode/opencode.json`:
 
 ```json
@@ -250,11 +250,11 @@ docker compose run --rm donsetch
 `docker compose --profile http up -d donsetch-http` starts it (the
 stdio service above is unchanged), and MCP clients connect to
 `http://localhost:8765/mcp`. The port is published on `127.0.0.1` by
-default — set `DONSETCH_HTTP_TOKEN` before exposing it further (see
+default, set `DONSETCH_HTTP_TOKEN` before exposing it further (see
 the HTTP transport env vars in the MCP section). The service carries
 `restart: unless-stopped`: the binary is `panic = "abort"` in release
 and the HTTP transport has no in-process supervisor (that's stdio
-`--supervised`), so Docker is the crash recovery — a panicking request
+`--supervised`), so Docker is the crash recovery, a panicking request
 restarts the container instead of leaving it down.
 
 **Docker Compose options.** The bundled `docker-compose.yml`:
@@ -268,14 +268,15 @@ restarts the container instead of leaving it down.
   HTTP server with `restart: unless-stopped` (see above).
 
 **Architecture notes.** Multi-stage build (`rust:slim` →
-`debian:trixie-slim`, kept on the same glibc generation — ort-sys's
-prebuilt ONNX Runtime needs glibc 2.38+ symbols on both sides), built
+`debian:trixie-slim`, kept on the same glibc generation; the ONNX
+Runtime prebuilt needs glibc >= 2.27 on both sides), built
 with `--features ocr,rerank,http` (the same feature set as the
-linux-x64, macOS-arm64, and Windows-x64 release binaries), PDFium
+linux-x64, macOS-arm64, and Windows-x64 release
+binaries), PDFium
 acquired at build time by the repo's own
 `build.rs` (sha256-verified), Go installed per-target-arch for
 BoringSSL's build system (amd64 and arm64). Single ~36MB binary in a
-minimal runtime image — no Python, no Playwright.
+minimal runtime image, no Python, no Playwright.
 
 ---
 
@@ -373,8 +374,7 @@ curl -X POST http://localhost:8765/mcp \
 `Mcp-Session-Id` header. Echo it back on subsequent requests to get a
 dedicated cancellation registry: posting `notifications/cancelled`
 with the session header while a tool call is in flight aborts it (same
-semantics as stdio). Session-less clients share one default registry —
-cancellation still works, but request ids share a namespace. Unknown
+semantics as stdio). Session-less clients share one default registry, cancellation still works, but request ids share a namespace. Unknown
 or expired session ids get a 404. Sessions idle for 30 minutes are
 dropped; `DELETE /mcp` with the session header ends one immediately.
 
@@ -390,9 +390,9 @@ curl -X POST http://localhost:8765/mcp \
 
 | Variable | Default | Effect |
 |---|---|---|
-| `DONSETCH_TRANSPORT` | `stdio` | `stdio` or `http` — same as the `--http` flag |
+| `DONSETCH_TRANSPORT` | `stdio` | `stdio` or `http`, same as the `--http` flag |
 | `DONSETCH_HTTP_HOST` | `127.0.0.1` | Bind address (use `0.0.0.0` to accept remote clients) |
-| `DONSETCH_HTTP_PORT` | `8765` | Listen port — same as `--port` |
+| `DONSETCH_HTTP_PORT` | `8765` | Listen port, same as `--port` |
 | `DONSETCH_HTTP_TOKEN` | unset | When set, `/mcp` requires `Authorization: Bearer <token>`; `/health` stays open |
 | `DONSETCH_HTTP_TIMEOUT_SECS` | `300` | Per-request timeout; timed-out calls return a JSON-RPC error |
 | `DONSETCH_HTTP_CORS` | off | `1`/`true`/`on` allows cross-origin requests. Off by default: MCP clients are processes, not browsers, and a permissive layer would let any webpage in a local browser read responses from a localhost instance |
@@ -403,8 +403,9 @@ just `--features http` for the transport alone); a plain `cargo build`
 produces a stdio-only binary that exits with an error naming the
 missing `http` feature if you pass `--http` or set
 `DONSETCH_TRANSPORT=http`. Of the prebuilt
-binaries, linux-x64, macOS-arm64, and Windows-x64 ship with `http`;
-the linux-arm64 and macOS-x64 prebuilts are core-only.
+binaries, linux-x64, macOS-arm64, and Windows-x64 ship
+with `http`; the macOS-x64 prebuilt is core-only (ort-sys publishes no
+prebuilt ONNX Runtime for Intel macOS).
 
 On SIGTERM/SIGINT the server stops accepting new requests, drains
 in-flight ones, and shuts the daemon down (no orphan Chrome
@@ -418,7 +419,7 @@ donsetch search "rust async patterns"
 donsetch crawl https://docs.example.com --topic "api reference"
 ```
 
-Same engine, same output — the CLI is a thin adapter over the same `call_tool` function the MCP server uses. Every feature available to the agent is available on the command line.
+Same engine, same output, the CLI is a thin adapter over the same `call_tool` function the MCP server uses. Every feature available to the agent is available on the command line.
 
 ```bash
 donsetch fetch https://example.com --focus "pricing" --max-chars 2000
@@ -435,13 +436,13 @@ donsetch update
 | Command | What it does |
 |---|---|
 | `fetch <url>` | Fetch a URL as clean markdown. Auto bot-wall bypass, PDF, JS render. |
-| `search <query>` | Web search — 10+ keyless engines merged + reranked, or your API keys. |
+| `search <query>` | Web search, 10+ keyless engines merged + reranked, or your API keys. |
 | `crawl <url>` | Crawl a site into markdown. Sitemap-aware, focus-ranked, resumable. |
 | `mcp` | Start MCP server (JSON-RPC on stdio). |
 | `keys` | Manage BYOK search provider keys (`add`, `remove`, `list`, `default`, `reset`, `export`, `import`, `clear`). |
 | `proxy` | Manage proxy configuration (`add`, `remove`, `list`, `check`, `clear`, `test`, `import`, `export`). |
-| `status` | Quick status overview — version, keys, proxies, cache, health. |
-| `doctor` | Health check with auto-fix. |
+| `status` | Quick status overview, version, keys, proxies, cache, health. |
+| `doctor` | Health check with auto-fix. `doctor` is the first thing to run after install, `doctor --deep` adds the live browser probe, `doctor --json` emits a machine-readable document, `doctor --fix` repairs the mechanical problems (cache dirs, stale state, corrupt models). Also prints MCP client registration blocks. |
 | `update` | Self-update from GitHub Releases. |
 | `rollback` | Revert to previous version. |
 | `version` | Show version and build info. |
@@ -461,7 +462,7 @@ donsetch update
 
 ---
 
-## 🖱️ Browser actions — page control inside fetch (v2)
+## 🖱️ Browser actions, page control inside fetch (v2)
 
 `web_fetch` accepts an `actions` array executed in the real headless browser **before** extraction:
 
@@ -477,7 +478,7 @@ donsetch update
 }
 ```
 
-Steps: `wait`, `wait_selector`, `wait_text` (deterministic waits — no blind sleeps), `click` (by CSS selector or visible text), `hover`, `type` (human-cadence keystrokes), `press`, `scroll`. Up to 16 steps. After the script runs, the normal extraction pipeline works on the final DOM — `focus`, `section`, `toc` all apply to the interacted-with page. Per-step results come back in `structuredContent.actions`; the first failing step aborts honestly with everything that succeeded, so you fix one step and re-run. Form submits, search flows, load-more buttons, lazy-load scrolls — one call, no separate browser tool.
+Steps: `wait`, `wait_selector`, `wait_text` (deterministic waits, no blind sleeps), `click` (by CSS selector or visible text), `hover`, `type` (human-cadence keystrokes), `press`, `scroll`. Up to 16 steps. After the script runs, the normal extraction pipeline works on the final DOM, `focus`, `section`, `toc` all apply to the interacted-with page. Per-step results come back in `structuredContent.actions`; the first failing step aborts honestly with everything that succeeded, so you fix one step and re-run. Form submits, search flows, load-more buttons, lazy-load scrolls, one call, no separate browser tool.
 
 ---
 
@@ -487,7 +488,7 @@ Everyone in the impersonation game (curl-impersonate, rquest, wreq) patches a fo
 
 DonSeTch does something different in kind:
 
-> **We drive Chrome's own TLS library (BoringSSL) with its native Chrome behaviors switched on** — GREASE, extension permutation, ECH-GREASE, ALPS, SCT, OCSP, brotli cert-compression. The ClientHello is *generated by the same machinery* that generates Chrome's.
+> **We drive Chrome's own TLS library (BoringSSL) with its native Chrome behaviors switched on**, GREASE, extension permutation, ECH-GREASE, ALPS, SCT, OCSP, brotli cert-compression. The ClientHello is *generated by the same machinery* that generates Chrome's.
 
 When Chrome's TLS posture shifts, we update a data table, not patch a C library. **The fingerprint isn't a table we fake. It's emergent from the real engine.**
 
@@ -497,17 +498,17 @@ When Chrome's TLS posture shifts, we update a data table, not patch a C library.
 | Signal | Match |
 |---|---|
 | **JA4** | cipher hash identical to Chrome 150 |
-| **Akamai h2 fingerprint** | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p` — exact match |
-| **h2 header order** | sec-ch-ua → sec-ch-ua-mobile → sec-ch-ua-platform → ... — exact match |
+| **Akamai h2 fingerprint** | `1:65536;2:0;4:6291456;6:262144\|15663105\|0\|m,a,s,p`, exact match |
+| **h2 header order** | sec-ch-ua → sec-ch-ua-mobile → sec-ch-ua-platform → ..., exact match |
 | **Extension set** | identical (contents differ only in random GREASE/key material, like real Chrome) |
 
 </details>
 
 ### Own HTTP/2 stack (because off-the-shelf leaks)
 
-Off-the-shelf h2 (hyper's `h2` crate) doesn't expose pseudo-header order, exact SETTINGS set, WINDOW_UPDATE values, or HPACK indexing strategy — all fingerprintable (Akamai h2 fingerprint). So we wrote our own:
+Off-the-shelf h2 (hyper's `h2` crate) doesn't expose pseudo-header order, exact SETTINGS set, WINDOW_UPDATE values, or HPACK indexing strategy, all fingerprintable (Akamai h2 fingerprint). So we wrote our own:
 
-- Own HPACK (RFC 7541 — all 257 Huffman symbols + 61 static entries verified)
+- Own HPACK (RFC 7541, all 257 Huffman symbols + 61 static entries verified)
 - Own frame engine (SETTINGS, HEADERS, DATA, WINDOW_UPDATE, PING, GOAWAY, RST_STREAM, CONTINUATION)
 - Own flow control with WINDOW_UPDATE replenishment
 - Own connection pool with TLS 1.3 session resumption
@@ -541,7 +542,7 @@ DonSeTch inverts both.
 | Step | What happens | Speed |
 |---|---|---|
 | 1. Tier 1 fetch | Fast stealth HTTP (BoringSSL TLS) | ~100-300ms |
-| 2. Wall detected | Cloudflare / DataDome / PerimeterX / Akamai | — |
+| 2. Wall detected | Cloudflare / DataDome / PerimeterX / Akamai |, |
 | 3. Ghost solves | Headless browser navigates, waits for challenge to clear, harvests clearance cookies | ~2-6s |
 | 4. **Bounce** | Cookies handed to tier 1. Tier 1 re-fetches at full speed. Browser goes to sleep. | ~100-300ms |
 | 5. Subsequent fetches | Tier 1 with warm cookies. Browser stays asleep. | ~100-300ms |
@@ -551,13 +552,13 @@ DonSeTch inverts both.
 Raw CDP launch without `--enable-automation` means `navigator.webdriver` is *natively* false. No JS injection ever. No Runtime, Console, or Debugger domains. Environmental truthfulness instead of spoofing: real window, real GPU, real locale, consistent story.
 
 <details>
-<summary><b>Process lifecycle — the RAM-smart part</b></summary>
+<summary><b>Process lifecycle, the RAM-smart part</b></summary>
 
 The ghost process is **SIGSTOP'd** (frozen, not killed) after 20s of idleness:
 
 | State | RAM | CPU | Wake time |
 |---|---|---|---|
-| Active | full | real | — |
+| Active | full | real |, |
 | Frozen (SIGSTOP) | mapped but cold | 0 | ~50ms (SIGCONT) |
 | Reaped (>10 min frozen) | freed | 0 | ~1-2s (relaunch, profile keeps warmth) |
 
@@ -582,13 +583,13 @@ No ML, no prediction models. Pure deterministic observation + state → better r
 | Visit 1 (unknown) | `Cold` | Tier 1 → walled → ghost solves → cookies stored |
 | Visit 2 (cookies fresh) | `Warm` | Tier 1 with injected cookies → success. Ghost stays asleep. |
 | Visit N (cookies expired) | `SkipToSolve` | Skip the doomed tier-1 round-trip, go straight to ghost |
-| Visit M (24h since cold check) | `RecheckCold` | Try tier 1 cold — the wall may have been removed |
+| Visit M (24h since cold check) | `RecheckCold` | Try tier 1 cold, the wall may have been removed |
 
 When warm cookies go stale, the system learns the real lifetime: `observed_lifetime = min(previous, now - last_solved)`. Over multiple cycles, it converges to the real cookie lifetime for each domain.
 
-**Only clearance cookies are persisted** (cf_clearance, datadome, _abck, etc.) — tracking cookies are filtered out to keep the state file compact.
+**Only clearance cookies are persisted** (cf_clearance, datadome, _abck, etc.), tracking cookies are filtered out to keep the state file compact.
 
-**Disable disk persistence** with `DONSEEK_NO_DISK_STATE=1` — keeps in-memory state for the session but skips writing to `~/.cache/donsetch/ghost-state.json`. On by default.
+**Disable disk persistence** with `DONSEEK_NO_DISK_STATE=1`, keeps in-memory state for the session but skips writing to `~/.cache/donsetch/ghost-state.json`. On by default.
 
 ---
 
@@ -653,14 +654,14 @@ Reproduce: `python3 bench/search_quality.py --verbose`
 
 > **Take these numbers with a grain of salt.** This is a small benchmark (110 questions) with an easier metric (answer-in-snippet, not LLM-graded). Tavily ran 4,326 questions through GPT-4.1 with OpenAI's grader. Running the same scale of benchmark on DonSeTch requires reliable rotating proxies (free ones die fast) and an LLM API key for grading, both of which are the hard part. The keyless search is still genuinely good at finding the right information. Anyone is free to run a deeper, more realistic benchmark and report their own numbers. The script is in the repo.
 
-### BYOK (Bring Your Own Keys) — Pro Search, No Vendor Lock-in
+### BYOK (Bring Your Own Keys), Pro Search, No Vendor Lock-in
 
 The local engine is powerful, but paid providers give you higher rate limits, premium data sources, and managed infrastructure. DonSeTch makes BYOK a first-class feature, not an afterthought:
 
-- **Multi-provider, multi-key stacking** — add as many keys as you want, even for the same provider. Two Exa keys with 1,500 credits each? You now have 3,000 credits in a single pool. DonSeTch rotates across them automatically — when one hits its rate limit or runs dry, it falls through to the next. No manual switching.
-- **Smart fallback** — if a provider exhausts all its keys or errors out, DonSeTch falls back to the local keyless engine. You never get a dead search. Set the order yourself: BYOK-first or local-first.
-- **Key rotation** — every key tracks its own rate-limit cooldown and credit-depletion state. A throttled key is skipped until it recovers; a depleted key is retired. All automatic.
-- **Portable key store** — export, import, transfer, or wipe your keys. Move between machines in one command.
+- **Multi-provider, multi-key stacking**, add as many keys as you want, even for the same provider. Two Exa keys with 1,500 credits each? You now have 3,000 credits in a single pool. DonSeTch rotates across them automatically, when one hits its rate limit or runs dry, it falls through to the next. No manual switching.
+- **Smart fallback**, if a provider exhausts all its keys or errors out, DonSeTch falls back to the local keyless engine. You never get a dead search. Set the order yourself: BYOK-first or local-first.
+- **Key rotation**, every key tracks its own rate-limit cooldown and credit-depletion state. A throttled key is skipped until it recovers; a depleted key is retired. All automatic.
+- **Portable key store**, export, import, transfer, or wipe your keys. Move between machines in one command.
 
 <div align="center">
 
@@ -669,7 +670,7 @@ The local engine is powerful, but paid providers give you higher rate limits, pr
 </div>
 
 ```bash
-# Add keys — stack as many as you want per provider
+# Add keys, stack as many as you want per provider
 donsetch keys add exa sk-exa-...         # 1,500 credits
 donsetch keys add exa sk-exa-...         # another 1,500 -> 3,000 total
 donsetch keys add tavily tvly-...
@@ -682,7 +683,7 @@ donsetch keys add unlocker <key>[::zone]   # Bright Data Web Unlocker (anti-bot 
 # See what's configured (keys are masked)
 donsetch keys list
 
-# Set dispatch order — which engine tries first?
+# Set dispatch order, which engine tries first?
 donsetch keys default local       # local keyless first, BYOK fallback
 donsetch keys default exa          # BYOK first, local fallback
 
@@ -719,13 +720,13 @@ Env: `DONSETCH_BYPASS=0` disables; `DONSETCH_BYPASS_MAX_DAILY=<n>` caps spend pe
 Planning to use Bright Data? Grab it through this referral link (no extra cost to you, it helps me keep this project going): https://get.brightdata.com/ivqwoicrrlbr
 
 - **DonSift extraction engine**: HTML bytes in, agent-native markdown out. Block model: typed blocks (Heading/Para/List/Table/Code/Quote/Media) with heading breadcrumbs.
-- **`focus`** — BM25-relevant blocks only. Cuts context 80%+ on long pages. 12-language BM25: CJK character unigrams + bigrams, stopword lists, light stemming, accent folding.
-- **`toc` + `section`** — heading outline first, then target one section. Two cheap calls instead of one expensive one.
-- **Pagination** — `next_offset` in the response. Call again with `offset=that value`.
-- **Token-war policies** — links stripped by default (~30% savings), link-farm lists dropped, bare-link lines dropped, wiki `[edit]` junk dropped, cross-block duplicate suppression.
+- **`focus`**, BM25-relevant blocks only. Cuts context 80%+ on long pages. 12-language BM25: CJK character unigrams + bigrams, stopword lists, light stemming, accent folding.
+- **`toc` + `section`**, heading outline first, then target one section. Two cheap calls instead of one expensive one.
+- **Pagination**, `next_offset` in the response. Call again with `offset=that value`.
+- **Token-war policies**, links stripped by default (~30% savings), link-farm lists dropped, bare-link lines dropped, wiki `[edit]` junk dropped, cross-block duplicate suppression.
 - **Content classification**: `Article` / `Listing` / `Forum` / `Docs` / `Table` / `Page`.
 - **Quality score** (0.0-1.0): content density, metadata, structure, language, text volume.
-- **Agent-trust signals inline** — focus-miss notice, section-miss notice, JS-shell warning, empty-content note — all in the content, not metadata.
+- **Agent-trust signals inline**, focus-miss notice, section-miss notice, JS-shell warning, empty-content note, all in the content, not metadata.
 
 <details>
 <summary><b>Anti-bot benchmark</b></summary>
@@ -793,12 +794,12 @@ DonSeTch detects PDFs (by Content-Type or `%PDF` magic bytes) and parses them to
 
 | Document type | Result |
 |---|---|
-| Academic papers | ✅ Clean text — math symbols recovered, not CID garbage |
-| Scanned documents | ✅ OCR'd — PP-OCR cascade (En → Zh → Deva), confidence-scored |
-| Tax forms (W-9) | ✅ Forms as data — field names + values as table |
-| Multi-column layouts | ✅ Reading order preserved — column detection + merge |
-| Encrypted PDFs | ⛔ Honest flag — `encrypted: password required` |
-| Corrupt PDFs | ⛔ Honest flag — `corrupt: parse failed at offset N` |
+| Academic papers | ✅ Clean text, math symbols recovered, not CID garbage |
+| Scanned documents | ✅ OCR'd, PP-OCR cascade (En → Zh → Deva), confidence-scored |
+| Tax forms (W-9) | ✅ Forms as data, field names + values as table |
+| Multi-column layouts | ✅ Reading order preserved, column detection + merge |
+| Encrypted PDFs | ⛔ Honest flag, `encrypted: password required` |
+| Corrupt PDFs | ⛔ Honest flag, `corrupt: parse failed at offset N` |
 | Nepali UDHR (broken ToUnicode) | ✅ 10,542 usable Nepali chars at 86% confidence (pymupdf: 28) |
 
 </details>
@@ -811,13 +812,13 @@ Every layer built in Rust. No dependency on existing OSS web tooling.
 
 | Component | What it does | Key files |
 |---|---|---|
-| 🛡️ **DonShadow** | Tier 1 stealth HTTP — BoringSSL TLS, own HTTP/1.1 + HTTP/2, temporal stealth, cookie jar | `src/fetch/`, `src/transport/` |
-| 👻 **DonGhost** | Tier 2 ghost browser — CDP (no Runtime/Console/Debugger), solve-and-bounce, SIGSTOP lifecycle | `src/ghost/` |
-| 📝 **DonSift** | HTML-to-markdown — block model, 12-language BM25 focus, token-war policies | `src/extract/` |
-| 🔎 **DonSeek** | Keyless multi-engine search — weighted RRF + BM25 + consensus + semantic reranking | `src/search/` |
-| 🕷️ **DonTread** | Crawl engine — sitemap, focus-ranked frontier, Governor pacing, resume tokens | `src/crawl/` |
-| 📄 **DonSheet** | PDF extraction — PDFium FFI, pixel-truth fusion, OCR arbitration cascade, forms | `src/pdf/` |
-| 🔌 **MCP daemon** | stdio server — JSON-RPC 2.0, 3 tools | `src/mcp/` |
+| 🛡️ **DonShadow** | Tier 1 stealth HTTP, BoringSSL TLS, own HTTP/1.1 + HTTP/2, temporal stealth, cookie jar | `src/fetch/`, `src/transport/` |
+| 👻 **DonGhost** | Tier 2 ghost browser, CDP (no Runtime/Console/Debugger), solve-and-bounce, SIGSTOP lifecycle | `src/ghost/` |
+| 📝 **DonSift** | HTML-to-markdown, block model, 12-language BM25 focus, token-war policies | `src/extract/` |
+| 🔎 **DonSeek** | Keyless multi-engine search, weighted RRF + BM25 + consensus + semantic reranking | `src/search/` |
+| 🕷️ **DonTread** | Crawl engine, sitemap, focus-ranked frontier, Governor pacing, resume tokens | `src/crawl/` |
+| 📄 **DonSheet** | PDF extraction, PDFium FFI, pixel-truth fusion, OCR arbitration cascade, forms | `src/pdf/` |
+| 🔌 **MCP daemon** | stdio server, JSON-RPC 2.0, 3 tools | `src/mcp/` |
 
 **637 tests. Zero clippy warnings.** `cargo clippy --all-targets --features ocr,rerank -- -Dwarnings` is the law.
 
@@ -908,17 +909,17 @@ Both are local-first web tools for AI agents. Both are keyless and open source. 
 
 | | **DonSeTch** | **wigolo** |
 |---|---|---|
-| **Install** | `npm install -g donsetch` — done | `npx wigolo init` — downloads ~1.5 GB (ML models + browser), then config wizard |
+| **Install** | `npm install -g donsetch`, done | `npx wigolo init`, downloads ~1.5 GB (ML models + browser), then config wizard |
 | **Startup time** | 0.3s | ~13s cold start (ML model + browser + module initialization) |
 | **Search latency** | 6.1s avg | 23.5s avg (fetches page content during search for ML reranking) |
-| **Search engines** | 5 keyless + intent verticals (GitHub, HN, Scholar, StackExchange, MDN) — 5-8 effective per query | 18 adapters total; 4-5 in default keyless mode (Bing, DDG, Wikipedia, Marginalia, Mojeek) |
-| **Bot-wall bypass** | Auto-escalation with Chrome-true TLS (BoringSSL) — bypasses Cloudflare on StackOverflow, Amazon, BBC, Guardian | TLS impersonation + stealth browser mode exist, but in testing: blocked on StackOverflow, timed out on Reddit (120s) |
+| **Search engines** | 5 keyless + intent verticals (GitHub, HN, Scholar, StackExchange, MDN), 5-8 effective per query | 18 adapters total; 4-5 in default keyless mode (Bing, DDG, Wikipedia, Marginalia, Mojeek) |
+| **Bot-wall bypass** | Auto-escalation with Chrome-true TLS (BoringSSL), bypasses Cloudflare on StackOverflow, Amazon, BBC, Guardian | TLS impersonation + stealth browser mode exist, but in testing: blocked on StackOverflow, timed out on Reddit (120s) |
 | **Crawl** | Semantic topic filter, sitemap discovery, per-page quality scoring, resume tokens | URL pattern filtering (regex), sitemap strategy, but no semantic topic ranking, no quality scores, no resume |
 | **Token efficiency** | 5.7 KB per search, `focus` cuts fetch tokens 50-80% | 11.4 KB per search, 40% is scoring metadata |
 | **Dependencies** | 0 npm packages. Single 36 MB Rust binary | 28 npm packages, Playwright browser, ML models, SQLite cache (~1.5 GB total per wigolo docs) |
 | **Setup steps** | 1 (`npm install -g donsetch`) | 1-2 (`npx wigolo init` downloads ~1.5 GB, then optional agent wiring + LLM env vars) |
 | **Config** | Zero. Works immediately | Init wizard, env vars for LLM provider, optional hybrid search config |
-| **Pi agent** | `pi install npm:donsetch` — native extension, zero config | Not available |
+| **Pi agent** | `pi install npm:donsetch`, native extension, zero config | Not available |
 | **Fetch success rate** | 87.5% (14/16 tested sites) | 67% (10/15 tested sites) |
 | **Cold-start failure points** | Binary, search engines | ML model, Playwright, SQLite, 28-package dependency tree |
 
@@ -984,14 +985,14 @@ For agent workloads, fetch and crawl matter most. DonSeTch wins both: it reaches
 |---|---|
 | First build takes ~2 min | BoringSSL is compiled from source. Cached after that. |
 | Go is a build dependency | BoringSSL's build system is Go-based. You need Go even though DonSeTch is Rust. |
-| OCR/rerank not in default build | ONNX Runtime's C++ global constructors can deadlock on aarch64. Build with `--features ocr,rerank` to enable. The prebuilt npm binary ships with all three features on linux-x64, macOS-arm64, and Windows-x64 (linux-arm64/macOS-x64 prebuilts are core-only). |
-| `mcp --http` refused without the feature | The HTTP transport is an optional cargo feature. A binary built without `--features http` exits with an error naming the missing feature when you pass `--http` or set `DONSETCH_TRANSPORT=http`, instead of silently serving stdio. The linux-arm64 and macOS-x64 prebuilt binaries are core-only — build from source with `--features http` there. |
+| OCR/rerank not in default build | ONNX Runtime is a heavy optional dependency. Build with `--features ocr,rerank` to enable. The prebuilt npm binary ships with all three features on linux-x64, macOS-arm64, and Windows-x64 (the linux-arm64 prebuilt is PDF + core, the macOS-x64 prebuilt is core-only). |
+| `mcp --http` refused without the feature | The HTTP transport is an optional cargo feature. A binary built without `--features http` exits with an error naming the missing feature when you pass `--http` or set `DONSETCH_TRANSPORT=http`, instead of silently serving stdio. The macOS-x64 prebuilt binary is core-only, build from source with `--features http` there. |
 | Interactive captchas not solved | hCaptcha, reCAPTCHA, Turnstile checkbox = honest dead end. No solving service by design. |
 | robots.txt ON by default for crawl | `respect_robots=true` for crawl. `fetch` doesn't check robots. |
 | Search rate-limits without a proxy | Keyless search scrapes public engines from your IP. Set `DONSEEK_PROXIES` for heavy use. |
 | Reranking saturates a CPU-limited container | On Linux, DonSeTch auto-clamps ONNX to effective cgroup/affinity parallelism. Set `DONSEEK_RERANK_THREADS` to reserve a smaller budget or as a fallback on other platforms. |
-| Windows needs `DirectML.dll` present | The prebuilt binary links ONNX Runtime's DirectML provider, so `donsetch.exe` needs `DirectML.dll` at startup — even though DonSeTch only ever runs on CPU. Windows ships it in-box from Windows 10 1903 (build 18362) onward, so normal desktop and Server installs need nothing, and **the version does not matter** (Windows 10 22H2's DirectML 1.0 works exactly as well as Windows 11's 1.15). Only trimmed images — Server Core, Nano Server — and pre-1903 Windows lack it; there the process exits instantly with no output and exit code `-1073741515` (`0xC0000135`, `STATUS_DLL_NOT_FOUND`). Fix: copy `bin/x64-win/DirectML.dll` out of the [`Microsoft.AI.DirectML`](https://www.nuget.org/packages/Microsoft.AI.DirectML) NuGet package to sit next to `donsetch.exe`. Do **not** copy one out of another machine's `System32` — in-box builds are tied to their own Windows version and die just as silently on a different one, with `0xC0000142` (`STATUS_DLL_INIT_FAILED`). Builds without `ocr`/`rerank` don't link ONNX and are unaffected. |
-| First OCR or search on a fresh machine downloads models | Models are fetched on first use, not bundled: ~24MB of reranker on the first search, and OCR models on the first scanned PDF — pulled per script as they're needed, up to ~37MB once English, CJK and Devanagari are all cached. They land in `%LOCALAPPDATA%\donsetch\` (`~/.cache/donsetch/` on Linux, `~/Library/Caches/donsetch/` on macOS) and are reused forever after. To pre-seed an offline or air-gapped box, copy the `ocr` and `rerank` subdirectories from a warmed machine — nothing else from that directory should be copied. |
+| Windows needs `DirectML.dll` present | The prebuilt binary links ONNX Runtime's DirectML provider, so `donsetch.exe` needs `DirectML.dll` at startup, even though DonSeTch only ever runs on CPU. Windows ships it in-box from Windows 10 1903 (build 18362) onward, so normal desktop and Server installs need nothing, and **the version does not matter** (Windows 10 22H2's DirectML 1.0 works exactly as well as Windows 11's 1.15). Only trimmed images, Server Core, Nano Server, and pre-1903 Windows lack it; there the process exits instantly with no output and exit code `-1073741515` (`0xC0000135`, `STATUS_DLL_NOT_FOUND`). Fix: copy `bin/x64-win/DirectML.dll` out of the [`Microsoft.AI.DirectML`](https://www.nuget.org/packages/Microsoft.AI.DirectML) NuGet package to sit next to `donsetch.exe`. Do **not** copy one out of another machine's `System32`, in-box builds are tied to their own Windows version and die just as silently on a different one, with `0xC0000142` (`STATUS_DLL_INIT_FAILED`). Builds without `ocr`/`rerank` don't link ONNX and are unaffected. |
+| First OCR or search on a fresh machine downloads models | Models are fetched on first use, not bundled: ~24MB of reranker on the first search, and OCR models on the first scanned PDF, pulled per script as they're needed, up to ~37MB once English, CJK and Devanagari are all cached. They land in `%LOCALAPPDATA%\donsetch\` (`~/.cache/donsetch/` on Linux, `~/Library/Caches/donsetch/` on macOS) and are reused forever after. To pre-seed an offline or air-gapped box, copy the `ocr` and `rerank` subdirectories from a warmed machine, nothing else from that directory should be copied. |
 | Not built for mass scraping | DonSeTch is for agentic research, not bulk extraction. |
 | Disable disk persistence | `DONSEEK_NO_DISK_STATE=1` skips writing self-improvement data to disk. In-memory state still works for the session. |
 
@@ -1015,7 +1016,7 @@ PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md). Run `cargo clippy --all-tar
 
 ## 📄 License
 
-Copyright (c) 2026 Bishesh Bhandari. AGPL-3.0 — see [LICENSE](LICENSE).
+Copyright (c) 2026 Bishesh Bhandari. AGPL-3.0, see [LICENSE](LICENSE).
 
 ---
 
