@@ -128,6 +128,12 @@ pub fn check_fail(name: &str, detail: &str, instructions: &str) {
     }
 }
 
+/// `    Check name              detail`  (no icon, informational)
+pub fn check_dim(name: &str, detail: &str) {
+    let padded = format!("{:<26}", name);
+    println!("    {} {}", padded, dim(detail));
+}
+
 /// `  \u{2713} Check name              fixed: detail`
 pub fn check_fixed(name: &str, detail: &str) {
     let padded = format!("{:<26}", name);

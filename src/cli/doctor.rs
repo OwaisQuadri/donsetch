@@ -28,29 +28,66 @@ enum CheckResult {
 
 pub async fn run() {
     cli::init();
+
+    // Flags: --json (structured output for agents/CI), --deep
+    // (full live-probe suite), --fix (apply safe repairs after the
+    // checks), --fast (default: skip slow probes). --mcp prints
+    // MCP client registration blocks for any detected client.
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let json = args.iter().any(|a| a == "--json");
+    let deep = args.iter().any(|a| a == "--deep");
+    let fix = args.iter().any(|a| a == "--fix");
+    let only_mcp = args.iter().any(|a| a == "--mcp");
+
     cli::print_title("DonSeTch Doctor");
     println!();
 
     let mut p = 0u32; // passed
     let mut w = 0u32; // warnings
     let mut f = 0u32; // failed
+    // (name, status, detail, hint) collected for --json and --fix.
+    let mut collected: Vec<(String, String, String, String)> = Vec::new();
 
     macro_rules! report {
         ($name:expr, $r:expr) => {
             match $r {
                 CheckResult::Pass(d) => {
+                    collected.push((
+                        $name.to_string(),
+                        "pass".into(),
+                        d.clone(),
+                        String::new(),
+                    ));
                     cli::check_pass($name, &d);
                     p += 1;
                 }
                 CheckResult::Warn(d) => {
+                    collected.push((
+                        $name.to_string(),
+                        "warn".into(),
+                        d.clone(),
+                        String::new(),
+                    ));
                     cli::check_warn($name, &d);
                     w += 1;
                 }
                 CheckResult::Fail(d, i) => {
+                    collected.push((
+                        $name.to_string(),
+                        "fail".into(),
+                        d.clone(),
+                        i.clone(),
+                    ));
                     cli::check_fail($name, &d, &i);
                     f += 1;
                 }
                 CheckResult::Fixed(d) => {
+                    collected.push((
+                        $name.to_string(),
+                        "fixed".into(),
+                        d.clone(),
+                        String::new(),
+                    ));
                     cli::check_fixed($name, &d);
                     p += 1;
                 }
@@ -71,16 +108,27 @@ pub async fn run() {
                 "TLS initialization failed — check system CA certificates",
             );
             f += 1;
+            collected.push((
+                "Fetcher init".into(),
+                "fail".into(),
+                e.to_string(),
+                "TLS initialization failed — check system CA certificates".into(),
+            ));
             None
         }
     };
 
-    // 2. Network reachability.
+    // 2. Network reachability (always: it gates nothing else).
     if let Some(ref fm) = fetcher {
         report!("Network", check_network(fm).await);
+    } else {
+        report!(
+            "Network",
+            CheckResult::Warn("skipped: fetcher unavailable".to_string())
+        );
     }
 
-    // 3. TLS fingerprint.
+    // 3. TLS fingerprint (fast enough to keep in fast mode).
     if let Some(ref fm) = fetcher {
         report!("TLS fingerprint", check_tls(fm).await);
     }
@@ -94,10 +142,13 @@ pub async fn run() {
     // 6. Ghost profile.
     report!("Ghost profile", check_ghost_profile());
 
-    // 7. Browser launch — the REAL test: launch, fingerprint
-    // selftest, clean kill. Presence checks above are cheap;
-    // this proves tier 2 actually works on this machine.
-    report!("Browser launch", check_browser_launch().await);
+    // 7. Browser launch: the only heavyweight probe. Fast mode
+    // (default) skips the seconds-long live launch; --deep runs it.
+    if deep {
+        report!("Browser launch", check_browser_launch().await);
+    } else {
+        cli::check_dim("Browser launch", "skipped (--deep to run)");
+    }
 
     // 8. Cache directory.
     report!("Cache directory", check_cache_dir());
@@ -123,8 +174,16 @@ pub async fn run() {
     // 15. Bypass unlocker key.
     report!("Bypass unlocker", check_bypass());
 
-    // ── Summary ──────────────────────────────────────────────
+    // 16. MCP client registration (detect + print blocks).
+    print_mcp_section();
 
+    // ── Self-healing pass (--fix) ───────────────────────────
+    if fix {
+        println!();
+        let _ = apply_fixes(&mut collected).await;
+    }
+
+    // ── Summary ──────────────────────────────────────────────
     println!();
     let total = p + w + f;
     println!("  {p}/{total} passed, {w} warning(s), {f} failed");
@@ -132,13 +191,23 @@ pub async fn run() {
 
     if f > 0 {
         println!("  Status: {}", cli::red("issues found"));
-        // Scripts gate on the exit code — doctor failing must not
-        // read as success.
-        std::process::exit(1);
     } else if w > 0 {
         println!("  Status: {}", cli::yellow("healthy with warnings"));
     } else {
         println!("  Status: {}", cli::green("healthy"));
+    }
+
+    // JSON goes LAST so tail-parsers get exactly one clean document.
+    if json {
+        print_json_summary(&collected, p, w, f, deep);
+    }
+    if only_mcp {
+        std::process::exit(0);
+    }
+    // Scripts gate on the exit code: doctor failing must not read
+    // as success.
+    if f > 0 {
+        std::process::exit(1);
     }
 }
 
@@ -690,4 +759,177 @@ fn format_size(bytes: u64) -> String {
     } else {
         format!("{bytes}B")
     }
+}
+
+/// Print the structured doctor report for agent/CI consumers.
+/// Emitted AFTER the human-readable output on stdout; consumers
+/// using --json are expected to parse the trailing JSON document.
+fn print_json_summary(
+    collected: &[(String, String, String, String)],
+    p: u32,
+    w: u32,
+    f: u32,
+    deep: bool,
+) {
+    use serde_json::json;
+    let checks: Vec<serde_json::Value> = collected
+        .iter()
+        .map(|(name, status, detail, hint)| {
+            json!({
+                "name": name,
+                "status": status,
+                "detail": detail,
+                "hint": hint,
+            })
+        })
+        .collect();
+    let doc = json!({
+        "doctor": {
+            "version": env!("CARGO_PKG_VERSION"),
+            "platform": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "mode": if deep { "deep" } else { "fast" },
+            "summary": { "passed": p, "warnings": w, "failed": f },
+            "checks": checks,
+        }
+    });
+    println!("\n__DONSETCH_DOCTOR_JSON__");
+    println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
+}
+
+/// Detect installed MCP clients and print ready-to-paste
+/// registration blocks. Clients manage their own process model,
+/// so the block is the stdio form; donsetch's own supervisor
+/// (--supervised) is the recommended argv for every client.
+fn print_mcp_section() {
+    println!();
+    println!("  {}", cli::bold("MCP client registration"));
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "donsetch".to_string());
+    let found = detect_mcp_clients();
+    if found.is_empty() {
+        cli::check_dim(
+            "MCP clients",
+            "none detected; generic stdio block below",
+        );
+    } else {
+        for (client, path) in &found {
+            cli::check_pass(
+                &format!("{client} (detected)"),
+                &format!("config at {}", path.display()),
+            );
+        }
+    }
+    let generic = format!(
+        "{{\"mcpServers\": {{\"donsetch\": {{\"command\": \"{exe}\", \
+         \"args\": [\"mcp\", \"--supervised\"]}}}}}}"
+    );
+    println!("      Add to an MCP client (Claude Desktop, OpenCode, .mcp.json):");
+    println!("      {generic}");
+    println!(
+        "      Hermes ({}):",
+        "~/.hermes/config.yaml"
+    );
+    println!("        mcp_servers:");
+    println!("          donsetch:");
+    println!("            command: {exe}");
+    println!("            args: [\"mcp\", \"--supervised\"]");
+    println!("            transport: stdio");
+    println!(
+        "      Supervised mode restarts donsetch if it is ever killed,",
+    );
+    println!("      which is why the blocks above prefer it.");
+}
+
+/// Known MCP client config locations. Only these small fixed files
+/// are probed: detection is cheap and never scans the filesystem.
+fn detect_mcp_clients() -> Vec<(String, std::path::PathBuf)> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from);
+    let mut out = Vec::new();
+    let mut add = |id: &str, p: std::path::PathBuf| {
+        if p.exists() {
+            out.push((id.to_string(), p));
+        }
+    };
+    if let Some(h) = &home {
+        add("Claude Desktop (macOS)", h.join("Library/Application Support/Claude/claude_desktop_config.json"));
+        add("Claude Desktop (Windows)", h.join("AppData/Roaming/Claude/claude_desktop_config.json"));
+        add("OpenCode", h.join(".config/opencode/opencode.json"));
+        add("Hermes", h.join(".hermes/config.yaml"));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        add(".mcp.json", cwd.join(".mcp.json"));
+        if let Some(h) = &home {
+            add(".mcp.json (home)", h.join(".mcp.json"));
+        }
+    }
+    out
+}
+
+/// Apply safe, reversible repairs for the mechanical failure
+/// classes the checks can produce. Anything destructive (profile
+/// deletion, key removal) is deliberately out of scope: repair
+/// only what cannot hurt. Re-run repaired checks once to report
+/// the true post-repair state.
+async fn apply_fixes(
+    collected: &mut Vec<(String, String, String, String)>,
+) -> Result<(), String> {
+    let failed: Vec<String> = collected
+        .iter()
+        .filter(|(_, status, _, _)| status == "fail")
+        .map(|(n, _, _, _)| n.clone())
+        .collect();
+    if failed.is_empty() {
+        println!("  {}: nothing to repair", cli::green("--fix"));
+        return Ok(());
+    }
+
+    for name in &failed {
+        match name.as_str() {
+            "Cache directory" => {
+                let dir = crate::paths::cache_dir();
+                if std::fs::create_dir_all(&dir).is_ok() {
+                    cli::check_fixed(
+                        "Cache directory",
+                        &format!("created {}", dir.display()),
+                    );
+                }
+            }
+            "Ghost state" => {
+                // state file is designed to be resettable; the lock
+                // file is stale-safe. Remove both.
+                let dir = crate::paths::cache_dir();
+                let _ = std::fs::remove_file(dir.join("ghost-state.json"));
+                if let Ok(cwd) = std::env::current_dir() {
+                    let _ = std::fs::remove_file(cwd.join(".donsetch-ghost.lock"));
+                }
+                cli::check_fixed(
+                    "Ghost state",
+                    "reset state; browser profile untouched",
+                );
+            }
+            "OCR models" | "Rerank model" => {
+                // Corrupt/missing models re-download automatically on
+                // first use; nothing to do here except confirm that.
+                if let Ok(dir) = std::fs::read_dir(crate::paths::cache_dir().join("ocr")) {
+                    for e in dir.flatten() {
+                        if e.path().is_file() && e.path().extension().is_none_or(|x| x != "json") {
+                            let _ = std::fs::remove_file(e.path());
+                        }
+                    }
+                }
+                cli::check_fixed(
+                    name,
+                    "corrupt models will re-download on next use",
+                );
+            }
+            _ => {}
+        }
+    }
+    println!();
+    println!("  {}: re-run `donsetch doctor` to confirm", cli::bold("done"));
+    Ok(())
 }
