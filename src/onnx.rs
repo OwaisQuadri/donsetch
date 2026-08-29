@@ -122,12 +122,19 @@
 use std::path::PathBuf;
 #[cfg(any(feature = "ocr", feature = "rerank"))]
 use std::sync::OnceLock;
-
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 /// Error returned when the CPU lacks AVX support (Linux only).
-pub const NO_AVX_MSG: &str = "ONNX Runtime requires AVX CPU support. \
-    Your CPU does not support AVX (pre-2011 Intel or virtualized \
-    without AVX passthrough). OCR and rerank are disabled. \
-    All other features work normally.";
+pub const NO_AVX_MSG: &str = "ONNX Runtime requires AVX CPU support. Your CPU does not support AVX (pre-2011 Intel or virtualized without AVX passthrough). OCR and rerank are disabled. All other features work normally.";
+
+/// Message when an init attempt deadlocked inside the dynamic
+/// loader (pykeio/ort #579/#560 class). Kept as a stable, actionable
+/// line: the user can still run without OCR/rerank.
+pub const ONNX_HUNG_MSG: &str = "ONNX Runtime initialization hung (known upstream loader deadlock); OCR and rerank are disabled for this run. Fetch, PDF, crawl and search all continue to work normally.";
+
+/// How long the dedicated ONNX init thread may take before we
+/// declare the loader deadlocked and fail fast.
+pub const ONNX_INIT_TIMEOUT_SECS: u64 = 15;
 
 /// Ensure ONNX Runtime is loaded and initialized.
 ///
@@ -144,7 +151,46 @@ pub fn ensure_loaded() -> Result<(), String> {
     #[cfg(any(feature = "ocr", feature = "rerank"))]
     {
         static STATE: OnceLock<Result<(), String>> = OnceLock::new();
-        STATE.get_or_init(load_and_init).clone()
+        static HUNG: AtomicBool = AtomicBool::new(false);
+
+        if let Some(r) = STATE.get() {
+            return r.clone();
+        }
+        // Once an init attempt has hung, fail fast forever: do not
+        // re-spawn a thread that will also hang (each hung attempt
+        // leaks that thread; a retry-happy daemon would stack them).
+        if HUNG.load(Ordering::Acquire) {
+            return Err(ONNX_HUNG_MSG.to_string());
+        }
+
+        // ort's init path (dlopen on Linux, env construction on
+        // macOS/Windows) can deadlock inside the dynamic loader in
+        // complex binaries (pykeio/ort #579, #560) instead of
+        // returning an error. Run it on a dedicated thread with a
+        // bounded wait so a hung loader can never hang the MCP
+        // server; the stuck thread leaks (it cannot be killed) but
+        // the daemon keeps working and every later call fails fast.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("onnx-init".into())
+            .spawn(move || {
+                // Receiver may already be gone on timeout: ignore.
+                let _ = tx.send(load_and_init());
+            });
+        let outcome = match spawned {
+            Ok(_) => match rx.recv_timeout(Duration::from_secs(ONNX_INIT_TIMEOUT_SECS)) {
+                Ok(r) => r,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    HUNG.store(true, Ordering::Release);
+                    Err(ONNX_HUNG_MSG.to_string())
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    Err("ONNX init thread panicked".to_string())
+                }
+            },
+            Err(e) => Err(format!("cannot spawn ONNX init thread: {e}")),
+        };
+        STATE.get_or_init(|| outcome).clone()
     }
 }
 

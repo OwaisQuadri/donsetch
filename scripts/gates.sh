@@ -21,6 +21,7 @@ else
     case "$platform" in
         darwin-arm64) NEED=11000000; EXPECT="commit probe ok" ;;
         linux-x64)    NEED=15000000; EXPECT="shared library present" ;;
+        linux-arm64)  NEED=15000000; EXPECT="shared library present" ;;
         *)            NEED=6000000;  EXPECT="not compiled" ;;
     esac
 fi

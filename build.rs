@@ -280,7 +280,7 @@ fn main() {
     if has_onnx {
         if let Some(info) = onnx_target_info(&os, &arch) {
             // Linux x86_64: build shared lib for dynamic loading.
-            build_onnx_shared_lib(info, &manifest);
+            fetch_onnx_prebuilt(info, &manifest);
         } else {
             // macOS/Windows: ort crate uses download-binaries (static
             // linking). No shared library build needed.
@@ -465,26 +465,38 @@ fn fetch_pdfium(os: &str, arch: &str, vendored: &Path) {
 }
 
 /// Pinned ONNX Runtime tarball info per platform.
-/// Source: pyke CDN (cdn.pyke.io), ort-sys 2.0.0-rc.12.
-/// Hashes verified from the ort-sys dist.txt.
+/// Source: microsoft/onnxruntime official GitHub releases (v1.24.2),
+/// the prebuilt shared library for each target. These are built
+/// against older glibc than the pyke archive relink we used before
+/// (GLIBC_2.27 max required vs 2.38) and contain no
+/// `__isoc23_*`/2.38-only imports, so OCR/rerank work on every
+/// distro from Ubuntu 18.04 onward, including 20.04/22.04 where the
+/// old .so failed to load at all. SHA256 pins verified at download.
 struct OnnxTarget {
     url: &'static str,
     sha256: &'static str,
-    /// Static archive filename inside the tarball.
-    archive_name: &'static str,
-    /// Shared library filename to produce.
+    /// Path of the real shared library inside the tarball.
+    inner_lib: &'static str,
+    /// File name we ship it as, next to the binary.
     shared_name: &'static str,
 }
 
 /// Return ONNX target info if a prebuilt is available for this platform.
-/// Only Linux x86_64 uses dynamic loading. macOS/Windows use static
-/// linking (no shared library build needed).
+/// Linux x86_64 and aarch64 use runtime dlopen of the official prebuilt.
+/// macOS/Windows use static linking via the ort crate (no shared library
+/// build needed).
 fn onnx_target_info(os: &str, arch: &str) -> Option<OnnxTarget> {
-    let (url, sha256, archive_name, shared_name) = match (os, arch) {
+    let (url, sha256, inner_lib, shared_name) = match (os, arch) {
         ("linux", "x86_64") => (
-            "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-unknown-linux-gnu.tar.lzma2",
-            "acc1cba79c337594ead1d88ca72516147aa60054c84217b53399a31caa5ba671",
-            "libonnxruntime.a",
+            "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-linux-x64-1.24.2.tgz",
+            "43725474ba5663642e17684717946693850e2005efbd724ac72da278fead25e6",
+            "onnxruntime-linux-x64-1.24.2/lib/libonnxruntime.so.1.24.2",
+            "libonnxruntime.so",
+        ),
+        ("linux", "aarch64") => (
+            "https://github.com/microsoft/onnxruntime/releases/download/v1.24.2/onnxruntime-linux-aarch64-1.24.2.tgz",
+            "6715b3d19965a2a6981e78ed4ba24f17a8c30d2d26420dbed10aac7ceca0085e",
+            "onnxruntime-linux-aarch64-1.24.2/lib/libonnxruntime.so.1.24.2",
             "libonnxruntime.so",
         ),
         _ => return None,
@@ -492,23 +504,22 @@ fn onnx_target_info(os: &str, arch: &str) -> Option<OnnxTarget> {
     Some(OnnxTarget {
         url,
         sha256,
-        archive_name,
+        inner_lib,
         shared_name,
     })
 }
 
-/// Download the ONNX tarball, decompress (custom LZMA2), extract the
-/// static archive, build a shared library from it, and copy to the
-/// output directory. This replaces ort-sys's static linking with a
-/// runtime dlopen approach to avoid SIGILL on non-AVX CPUs.
-fn build_onnx_shared_lib(info: OnnxTarget, manifest: &Path) {
+/// Download the official ONNX Runtime prebuilt, verify its SHA256, and
+/// copy it next to the binary for runtime dlopen. Used for Linux x86_64
+/// and aarch64: the ort-sys static relink is gone, so builds no longer
+/// need a working C toolchain or pay a 110MB static extraction.
+fn fetch_onnx_prebuilt(info: OnnxTarget, manifest: &Path) {
     let vendored = manifest.join("vendor").join("onnx");
     let _ = fs::create_dir_all(&vendored);
-    let archive_path = vendored.join(info.archive_name);
     let shared_path = vendored.join(info.shared_name);
 
-    // If the shared library already exists, skip the download+build.
-    // The vendored dir is cleaned on `cargo clean`.
+    // If the shared library already exists, skip the download. The
+    // vendored dir is cleaned on `cargo clean`.
     if shared_path.exists() {
         eprintln!(
             "donsetch build: ONNX shared lib already present at {}",
@@ -519,54 +530,67 @@ fn build_onnx_shared_lib(info: OnnxTarget, manifest: &Path) {
     }
 
     // 1. Download the tarball.
-    let tarball = vendored.join("onnx.tar.lzma2");
-    if !archive_path.exists() {
-        eprintln!("donsetch build: fetching ONNX Runtime from {}", info.url);
-        let status = Command::new("curl")
-            .args([
-                "-fSL",
-                "--proto",
-                "=https",
-                "--proto-redir",
-                "=https",
-                "--retry",
-                "3",
-                "-o",
-            ])
-            .arg(&tarball)
-            .arg(info.url)
-            .status()
-            .unwrap_or_else(|e| panic!("ONNX: failed to spawn curl ({e})"));
-        if !status.success() {
-            panic!("ONNX: curl download failed for {}", info.url);
-        }
-
-        // 2. Verify SHA-256.
-        let mut f = fs::File::open(&tarball).expect("ONNX: cannot open tarball");
-        let mut buf = Vec::with_capacity(8 * 1024 * 1024);
-        f.read_to_end(&mut buf).expect("ONNX: cannot read tarball");
-        let got = sha256_hex(&buf);
-        assert_eq!(
-            got, info.sha256,
-            "ONNX: sha256 mismatch (expected {}, got {})",
-            info.sha256, got
-        );
-
-        // 3. Decompress custom LZMA2 format (pyke uses lzma-rust2, not standard xz).
-        let decompressed = lzma2_decompress(&buf);
-
-        // 4. Parse tar to extract the static archive.
-        let entry = extract_tar_entry(&decompressed, info.archive_name)
-            .unwrap_or_else(|| panic!("ONNX: {} not found in tarball", info.archive_name));
-        fs::write(&archive_path, &entry).expect("ONNX: cannot write archive");
-        let _ = fs::remove_file(&tarball);
+    let tarball = vendored.join("onnx.tgz");
+    eprintln!("donsetch build: fetching ONNX Runtime from {}", info.url);
+    let status = Command::new("curl")
+        .args([
+            "-fSL",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--retry",
+            "3",
+            "-o",
+        ])
+        .arg(&tarball)
+        .arg(info.url)
+        .status()
+        .unwrap_or_else(|e| panic!("ONNX: failed to spawn curl ({e})"));
+    if !status.success() {
+        panic!("ONNX: curl download failed for {}", info.url);
     }
 
-    // 5. Build the shared library from the static archive.
-    build_shared_from_archive(&archive_path, &shared_path, info.shared_name);
+    // 2. Verify SHA-256.
+    let mut f = fs::File::open(&tarball).expect("ONNX: cannot open tarball");
+    let mut buf = Vec::with_capacity(16 * 1024 * 1024);
+    f.read_to_end(&mut buf).expect("ONNX: cannot read tarball");
+    let got = sha256_hex(&buf);
+    assert_eq!(
+        got, info.sha256,
+        "ONNX: sha256 mismatch (expected {}, got {})",
+        info.sha256, got
+    );
 
-    // 6. Copy to output directories.
+    // 3. Extract the shared library from the plain tar.gz archive.
+    let entry = extract_tarball_entry(&buf, info.inner_lib)
+        .unwrap_or_else(|| panic!("ONNX: {} not found in tarball", info.inner_lib));
+    fs::write(&shared_path, &entry).expect("ONNX: cannot write shared lib");
+
+    // 4. Sanity: the file must be a plausible ELF shared object.
+    assert!(
+        entry.len() > 10 * 1024 * 1024,
+        "ONNX: extracted lib is implausibly small ({} bytes)",
+        entry.len()
+    );
+    assert!(
+        &entry[..4] == b"\x7fELF",
+        "ONNX: extracted file is not an ELF library"
+    );
+
+    let _ = fs::remove_file(&tarball);
+
+    // 5. Copy to output directories.
     copy_onnx_shared_lib(&shared_path);
+}
+
+/// Extract one entry from a gzip-compressed tar archive (plain
+/// gzip, unlike the removed pyke LZMA2 custom format).
+fn extract_tarball_entry(data: &[u8], wanted: &str) -> Option<Vec<u8>> {
+    use flate2::read::GzDecoder;
+    let mut tar_bytes = Vec::new();
+    GzDecoder::new(data).read_to_end(&mut tar_bytes).ok()?;
+    extract_tar_entry(&tar_bytes, wanted)
 }
 
 /// Copy the ONNX shared library to all locations where the binary
@@ -591,19 +615,6 @@ fn copy_onnx_shared_lib(shared_path: &Path) {
     }
 }
 
-/// Decompress pyke's custom LZMA2 format using lzma-rust2.
-fn lzma2_decompress(data: &[u8]) -> Vec<u8> {
-    use std::io::Read;
-    let mut reader = lzma_rust2::Lzma2Reader::new(data, 1 << 26, None);
-    let mut out = Vec::with_capacity(90 * 1024 * 1024);
-    reader
-        .read_to_end(&mut out)
-        .expect("ONNX: LZMA2 decompression failed");
-    out
-}
-
-/// Simple tar parser: find and extract a single file by name.
-/// Tar format: 512-byte header blocks, file data padded to 512-byte boundaries.
 fn extract_tar_entry(data: &[u8], name: &str) -> Option<Vec<u8>> {
     let mut pos = 0;
     while pos + 512 <= data.len() {
@@ -644,26 +655,6 @@ fn extract_tar_entry(data: &[u8], name: &str) -> Option<Vec<u8>> {
 /// duplicate protobuf symbols in the ONNX archive, and -z noexecstack
 /// to clear the executable stack flag (ONNX assembly objects lack
 /// .note.GNU-stack, which defaults to execstack on Linux).
-fn build_shared_from_archive(archive: &Path, output: &Path, _shared_name: &str) {
-    eprintln!(
-        "donsetch build: building ONNX shared lib from {}",
-        archive.display()
-    );
-    let status = Command::new("cc")
-        .args(["-shared", "-z", "noexecstack", "-o"])
-        .arg(output)
-        .arg("-Wl,--whole-archive,--allow-multiple-definition")
-        .arg(archive)
-        .arg("-Wl,--no-whole-archive")
-        .args(["-lstdc++", "-lpthread", "-ldl", "-lm"])
-        .status()
-        .unwrap_or_else(|e| panic!("ONNX: failed to spawn linker ({e})"));
-    if !status.success() {
-        panic!("ONNX: shared library build failed");
-    }
-}
-
-/// SHA-256 hex digest of a byte slice (build-time, no external tool).
 fn sha256_hex(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let hash = Sha256::digest(data);

@@ -269,14 +269,10 @@ enum GuardStep {
 }
 
 #[inline]
-fn fetch_guard_step(
-    res: Result<Value, broadcast::error::RecvError>,
-) -> GuardStep {
+fn fetch_guard_step(res: Result<Value, broadcast::error::RecvError>) -> GuardStep {
     match res {
         Ok(ev) => GuardStep::Event(ev),
-        Err(broadcast::error::RecvError::Lagged(_skipped)) => {
-            GuardStep::Skip
-        }
+        Err(broadcast::error::RecvError::Lagged(_skipped)) => GuardStep::Skip,
         Err(broadcast::error::RecvError::Closed) => GuardStep::Stop,
     }
 }

@@ -47,7 +47,7 @@ jobs:
           - name: linux-arm64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            features: ''
+            features: --features ocr,rerank,http
           - name: darwin-arm64
             os: macos-latest
             target: aarch64-apple-darwin
@@ -207,6 +207,7 @@ jobs:
             win32-x64)    NEED=25000000; EXPECT="commit probe ok" ;;
             darwin-arm64) NEED=11000000; EXPECT="commit probe ok" ;;
             linux-x64)    NEED=15000000; EXPECT="shared library present" ;;
+            linux-arm64)  NEED=15000000; EXPECT="shared library present" ;;
             *)            NEED=6000000;  EXPECT="not compiled" ;;
           esac
           if [ "$SIZE" -lt "$NEED" ]; then
@@ -214,7 +215,7 @@ jobs:
             echo "(a binary this small cannot contain the features it was built with)"
             exit 1
           fi
-          if [ "${{ matrix.name }}" = "linux-x64" ]; then
+          if [ "${{ matrix.name }}" = "linux-x64" ] || [ "${{ matrix.name }}" = "linux-arm64" ]; then
             if [ ! -f libonnxruntime.so ] || [ "$(wc -c < libonnxruntime.so)" -lt 10000000 ]; then
               echo "payload gate FAIL: libonnxruntime.so missing or too small"
               exit 1
@@ -261,8 +262,9 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          # Include ONNX shared lib if present (Linux x64 only, built
-          # by build.rs for dynamic loading). macOS uses static linking.
+          # Include ONNX shared lib if present (Linux x64 + arm64,
+          # shipped by build.rs for runtime dlopen). macOS/Windows
+          # use static linking.
           if [ -f libonnxruntime.so ]; then
             tar czf $GITHUB_WORKSPACE/donsetch-${{ matrix.name }}.tar.gz donsetch libonnxruntime.so
           else

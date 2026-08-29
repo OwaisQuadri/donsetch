@@ -56,7 +56,11 @@ jobs:
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            features: ''
+            # Full OCR/rerank since v3.4.2: build.rs ships the
+            # official ONNX Runtime linux-aarch64 prebuilt, and the
+            # payload probe test proves it really loads on native
+            # ARM runners.
+            features: --features ocr,rerank,http
             # PDFium's FPDF_LoadMemDocument64 hangs on aarch64 Linux
             # (same root cause as issue #9). Skip PDF-dependent tests;
             # they pass on all other platforms.
