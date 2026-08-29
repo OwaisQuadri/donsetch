@@ -167,7 +167,7 @@ Binary lands at `target/release/donsetch`. First build takes ~2 min (compiling B
 - **PDFium** is downloaded as a static library by `build.rs` — no manual setup.
 - **ONNX Runtime** is downloaded at build time by `oar-ocr` (OCR) and `ort` (reranker) when those features are enabled.
 - **Models** (OCR + reranker) download on first use to `~/.cache/donsetch/`, not bundled in the binary.
-- **Feature flags**: `default = []` — the core tool (fetch, search, crawl, PDF) works standalone. Build with `--features ocr,rerank` for OCR + semantic reranking (pulls in ONNX Runtime). The prebuilt npm binary ships with both features enabled.
+- **Feature flags**: `default = []` — the core tool (fetch, search, crawl, PDF) works standalone. Build with `--features ocr,rerank` for OCR + semantic reranking (pulls in ONNX Runtime), and `--features http` for the [HTTP transport](#http-transport-remote-clients-and-debugging). The prebuilt npm binary ships with all three on linux-x64, macOS-arm64, and Windows-x64; the linux-arm64 and macOS-x64 prebuilts are core-only.
 - **Reranker threads**: on Linux, CPU-constrained containers are detected from the process's effective parallelism (including cgroup v1/v2 quota and affinity), and the ONNX intra-op pool is clamped automatically when that budget is below the host's physical core count. `DONSEEK_RERANK_THREADS` remains a cross-platform explicit override, for example, use `1` in a shared 2-vCPU service to reserve a core for network work. The CPU budget and override are sampled when the reranker first initializes, so restart DonSeTch after an in-place container CPU resize. Other platforms use best-effort OS detection; unconstrained hosts preserve ONNX's native default and affinity behavior.
 - **Chromium** (optional): needed for tier 2 browser escalation on bot-walled sites. Linux: `pacman -S chromium` / `apt install chromium-browser`. macOS: `brew install chromium`. Windows: Edge works. **Playwright**: if you already have `npx playwright install`, DonSeTch auto-discovers `~/.cache/ms-playwright/chromium-*/chrome-linux/chrome` — no manual `DONGHOST_CHROME` needed. **Ubuntu Snap**: set `DONGHOST_CHROME=/snap/chromium/current/usr/lib/chromium-browser/chrome` — the `/snap/bin/chromium` wrapper doesn't reliably pass CDP flags.
 - **Linux Xvfb**: for headful Chrome on Linux, `xorg-server-xvfb` is needed (`apt install xvfb`). DonSeTch starts Xvfb automatically on `:99`. If your distro uses a regional Ubuntu Ports mirror that is down, fix it: `sudo sed -i 's|http://.*\.clouds\.ports\.ubuntu\.com|http://ports.ubuntu.com|' /etc/apt/sources.list.d/ubuntu.sources && sudo apt-get update`.
@@ -332,14 +332,81 @@ Or use `npx` without global install:
 
 Works with Claude Code, Cursor, OpenCode, Pi, Windsurf, and any client that speaks MCP. Three tools: `web_fetch`, `web_search`, `web_crawl`.
 
-**Streamable HTTP transport.** DonSeTch also speaks the MCP streamable-HTTP protocol for remote clients. Start with `--http`:
+### HTTP transport (remote clients and debugging)
+
+DonSeTch also speaks MCP over HTTP (the streamable-HTTP transport:
+JSON-RPC via POST, plus the GET SSE stream and DELETE session end that
+strict clients expect). Both transports dispatch through the same
+handler, so tools behave identically. HTTP is opt-in:
 
 ```bash
-donsetch mcp --http --bind 0.0.0.0:8765
-donsetch mcp --http --bind 0.0.0.0:8765 --token "secret"   # require bearer auth
+# Flags
+donsetch mcp --http --host 0.0.0.0 --port 8765
+
+# Env vars (identical effect; flags win over env when both are set)
+DONSETCH_TRANSPORT=http DONSETCH_HTTP_HOST=0.0.0.0 donsetch mcp
 ```
 
-Or set `DONSETCH_TRANSPORT=http` and `DONSETCH_HTTP_BIND` / `DONSETCH_HTTP_TOKEN` env vars. Endpoints: `POST /mcp` (JSON-RPC), `GET /mcp` (SSE stream), `DELETE /mcp` (end session), `GET /health`. Per-request timeout via `DONSETCH_HTTP_TIMEOUT_SECS` (default 300). CORS disabled by default; set `DONSETCH_HTTP_CORS=*` to allow a specific origin.
+MCP clients connect to `http://localhost:8765/mcp`:
+
+```json
+{
+  "mcpServers": {
+    "donsetch": { "url": "http://localhost:8765/mcp" }
+  }
+}
+```
+
+**Testing with curl:**
+
+```bash
+# Health check (always unauthenticated, for probes)
+curl http://localhost:8765/health
+
+# Test the MCP endpoint
+curl -X POST http://localhost:8765/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+**Sessions and cancellation.** The `initialize` response carries an
+`Mcp-Session-Id` header. Echo it back on subsequent requests to get a
+dedicated cancellation registry: posting `notifications/cancelled`
+with the session header while a tool call is in flight aborts it (same
+semantics as stdio). Session-less clients share one default registry —
+cancellation still works, but request ids share a namespace. Unknown
+or expired session ids get a 404. Sessions idle for 30 minutes are
+dropped; `DELETE /mcp` with the session header ends one immediately.
+
+```bash
+# Cancel request 42 during a long call (with a session header)
+curl -X POST http://localhost:8765/mcp \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: <from initialize>" \
+  -d '{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":42}}'
+```
+
+**Environment variables** (HTTP mode):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DONSETCH_TRANSPORT` | `stdio` | `stdio` or `http` — same as the `--http` flag |
+| `DONSETCH_HTTP_HOST` | `127.0.0.1` | Bind address (use `0.0.0.0` to accept remote clients) |
+| `DONSETCH_HTTP_PORT` | `8765` | Listen port — same as `--port` |
+| `DONSETCH_HTTP_TOKEN` | unset | When set, `/mcp` requires `Authorization: Bearer <token>`; `/health` stays open |
+| `DONSETCH_HTTP_TIMEOUT_SECS` | `300` | Per-request timeout; timed-out calls return a JSON-RPC error |
+| `DONSETCH_HTTP_CORS` | off | `1`/`true`/`on` allows cross-origin requests. Off by default: MCP clients are processes, not browsers, and a permissive layer would let any webpage in a local browser read responses from a localhost instance |
+
+**Build requirement.** HTTP is an optional cargo feature. Source
+builds need `cargo build --release --features ocr,rerank,http` (or
+just `--features http` for the transport alone); a plain `cargo build`
+produces a stdio-only binary that ignores `--http`. Of the prebuilt
+binaries, linux-x64, macOS-arm64, and Windows-x64 ship with `http`;
+the linux-arm64 and macOS-x64 prebuilts are core-only.
+
+On SIGTERM/SIGINT the server stops accepting new requests, drains
+in-flight ones, and shuts the daemon down (no orphan Chrome
+processes).
 
 ### CLI (for humans and scripts)
 
@@ -915,7 +982,8 @@ For agent workloads, fetch and crawl matter most. DonSeTch wins both: it reaches
 |---|---|
 | First build takes ~2 min | BoringSSL is compiled from source. Cached after that. |
 | Go is a build dependency | BoringSSL's build system is Go-based. You need Go even though DonSeTch is Rust. |
-| OCR/rerank not in default build | ONNX Runtime's C++ global constructors can deadlock on aarch64. Build with `--features ocr,rerank` to enable. The prebuilt npm binary ships with both. |
+| OCR/rerank not in default build | ONNX Runtime's C++ global constructors can deadlock on aarch64. Build with `--features ocr,rerank` to enable. The prebuilt npm binary ships with all three features on linux-x64, macOS-arm64, and Windows-x64 (linux-arm64/macOS-x64 prebuilts are core-only). |
+| `mcp --http` silently falls back to stdio | The HTTP transport is an optional cargo feature. A binary built without `--features http` ignores `--http` / `DONSETCH_TRANSPORT=http` and serves stdio. The linux-arm64 and macOS-x64 prebuilt binaries are core-only — build from source with `--features http` there. |
 | Interactive captchas not solved | hCaptcha, reCAPTCHA, Turnstile checkbox = honest dead end. No solving service by design. |
 | robots.txt ON by default for crawl | `respect_robots=true` for crawl. `fetch` doesn't check robots. |
 | Search rate-limits without a proxy | Keyless search scrapes public engines from your IP. Set `DONSEEK_PROXIES` for heavy use. |
