@@ -5,6 +5,55 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.2] - 2026-08-29
+
+### Fixed
+
+- **Fetch guard starvation (issue #76):** a single broadcast `Lagged`
+  during an event burst killed the CDP fetch-guard loop permanently,
+  every later `Fetch.requestPaused` went unanswered, and Chrome
+  wedged the whole tier-2 session into CDP timeouts. The guard now
+  survives `Lagged` (it has already resynced) and exits only on
+  `Closed`; a regression test reproduces the exact overflow shape.
+- **OCR/rerank dead on Ubuntu 20.04/22.04 and any glibc < 2.38:** the
+  shipped `libonnxruntime.so` was relinked from pyke's static archive
+  and required GLIBC_2.38 plus six `__isoc23_*` symbols, so it could
+  not even load on most long-term-support distros. Linux now ships
+  the official Microsoft prebuilt, which requires only GLIBC_2.27
+  (Ubuntu 18.04+) and has no isoc23 imports; it is also a third
+  smaller (22MB vs 33MB). No LD_PRELOAD shims, nothing for users to do.
+- **ONNX loader hangs can no longer hang the server:** ort's init path
+  can deadlock inside the dynamic loader instead of returning an
+  error (pykeio/ort #579, #560). Init now runs on a dedicated thread
+  with a 15s bound; a hang fails fast with a clear message, poisons
+  a flag so retries cannot stack leaking threads, and fetch/search/
+  crawl/PDF stay fully working.
+- **Mutex poisoning no longer kills the daemon:** with
+  `panic = "abort"`, any panicking worker thread poisoned a std
+  mutex and the next locker aborted the whole process. All std
+  mutex/rwlock unwraps now recover from poisoning (116 sites).
+
+### Added
+
+- **PDF on Linux ARM64:** the v3.4.2 native-arm64 CI experiment proved
+  the current pdfium-static pin fixed the old
+  `FPDF_LoadMemDocument64` hang (the full pdf:: suite passes on
+  native aarch64), so the arm64 prebuilt now ships PDF alongside
+  fetch/search/crawl.
+- **Doctor v2:** `--deep` runs the live browser probe (default fast
+  mode skips it); `--json` emits one machine-readable document at
+  the tail; `--fix` repairs the mechanical problems (cache dirs,
+  stale ghost state, corrupt models); MCP client detection prints
+  ready-to-paste registration blocks (Claude Desktop, OpenCode,
+  Hermes, .mcp.json).
+- **Bounded CI per-test timeouts:** a hung native-code test now fails
+  the job in 30s instead of wedging it until the workflow timeout.
+
+### Changed
+
+- README: em-dash-free, corrected platform matrix, doctor docs.
+- Issue #76: closed with a precise root-cause writeup.
+
 ## [3.4.1] - 2026-08-29
 
 ### Fixed
