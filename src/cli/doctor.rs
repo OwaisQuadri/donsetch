@@ -52,42 +52,22 @@ pub async fn run() {
         ($name:expr, $r:expr) => {
             match $r {
                 CheckResult::Pass(d) => {
-                    collected.push((
-                        $name.to_string(),
-                        "pass".into(),
-                        d.clone(),
-                        String::new(),
-                    ));
+                    collected.push(($name.to_string(), "pass".into(), d.clone(), String::new()));
                     cli::check_pass($name, &d);
                     p += 1;
                 }
                 CheckResult::Warn(d) => {
-                    collected.push((
-                        $name.to_string(),
-                        "warn".into(),
-                        d.clone(),
-                        String::new(),
-                    ));
+                    collected.push(($name.to_string(), "warn".into(), d.clone(), String::new()));
                     cli::check_warn($name, &d);
                     w += 1;
                 }
                 CheckResult::Fail(d, i) => {
-                    collected.push((
-                        $name.to_string(),
-                        "fail".into(),
-                        d.clone(),
-                        i.clone(),
-                    ));
+                    collected.push(($name.to_string(), "fail".into(), d.clone(), i.clone()));
                     cli::check_fail($name, &d, &i);
                     f += 1;
                 }
                 CheckResult::Fixed(d) => {
-                    collected.push((
-                        $name.to_string(),
-                        "fixed".into(),
-                        d.clone(),
-                        String::new(),
-                    ));
+                    collected.push(($name.to_string(), "fixed".into(), d.clone(), String::new()));
                     cli::check_fixed($name, &d);
                     p += 1;
                 }
@@ -809,10 +789,7 @@ fn print_mcp_section() {
         .unwrap_or_else(|_| "donsetch".to_string());
     let found = detect_mcp_clients();
     if found.is_empty() {
-        cli::check_dim(
-            "MCP clients",
-            "none detected; generic stdio block below",
-        );
+        cli::check_dim("MCP clients", "none detected; generic stdio block below");
     } else {
         for (client, path) in &found {
             cli::check_pass(
@@ -827,18 +804,13 @@ fn print_mcp_section() {
     );
     println!("      Add to an MCP client (Claude Desktop, OpenCode, .mcp.json):");
     println!("      {generic}");
-    println!(
-        "      Hermes ({}):",
-        "~/.hermes/config.yaml"
-    );
+    println!("      Hermes (~/.hermes/config.yaml):");
     println!("        mcp_servers:");
     println!("          donsetch:");
     println!("            command: {exe}");
     println!("            args: [\"mcp\", \"--supervised\"]");
     println!("            transport: stdio");
-    println!(
-        "      Supervised mode restarts donsetch if it is ever killed,",
-    );
+    println!("      Supervised mode restarts donsetch if it is ever killed,",);
     println!("      which is why the blocks above prefer it.");
 }
 
@@ -855,8 +827,14 @@ fn detect_mcp_clients() -> Vec<(String, std::path::PathBuf)> {
         }
     };
     if let Some(h) = &home {
-        add("Claude Desktop (macOS)", h.join("Library/Application Support/Claude/claude_desktop_config.json"));
-        add("Claude Desktop (Windows)", h.join("AppData/Roaming/Claude/claude_desktop_config.json"));
+        add(
+            "Claude Desktop (macOS)",
+            h.join("Library/Application Support/Claude/claude_desktop_config.json"),
+        );
+        add(
+            "Claude Desktop (Windows)",
+            h.join("AppData/Roaming/Claude/claude_desktop_config.json"),
+        );
         add("OpenCode", h.join(".config/opencode/opencode.json"));
         add("Hermes", h.join(".hermes/config.yaml"));
     }
@@ -874,9 +852,7 @@ fn detect_mcp_clients() -> Vec<(String, std::path::PathBuf)> {
 /// deletion, key removal) is deliberately out of scope: repair
 /// only what cannot hurt. Re-run repaired checks once to report
 /// the true post-repair state.
-async fn apply_fixes(
-    collected: &mut Vec<(String, String, String, String)>,
-) -> Result<(), String> {
+async fn apply_fixes(collected: &mut [(String, String, String, String)]) -> Result<(), String> {
     let failed: Vec<String> = collected
         .iter()
         .filter(|(_, status, _, _)| status == "fail")
@@ -892,10 +868,7 @@ async fn apply_fixes(
             "Cache directory" => {
                 let dir = crate::paths::cache_dir();
                 if std::fs::create_dir_all(&dir).is_ok() {
-                    cli::check_fixed(
-                        "Cache directory",
-                        &format!("created {}", dir.display()),
-                    );
+                    cli::check_fixed("Cache directory", &format!("created {}", dir.display()));
                 }
             }
             "Ghost state" => {
@@ -906,10 +879,7 @@ async fn apply_fixes(
                 if let Ok(cwd) = std::env::current_dir() {
                     let _ = std::fs::remove_file(cwd.join(".donsetch-ghost.lock"));
                 }
-                cli::check_fixed(
-                    "Ghost state",
-                    "reset state; browser profile untouched",
-                );
+                cli::check_fixed("Ghost state", "reset state; browser profile untouched");
             }
             "OCR models" | "Rerank model" => {
                 // Corrupt/missing models re-download automatically on
@@ -921,15 +891,15 @@ async fn apply_fixes(
                         }
                     }
                 }
-                cli::check_fixed(
-                    name,
-                    "corrupt models will re-download on next use",
-                );
+                cli::check_fixed(name, "corrupt models will re-download on next use");
             }
             _ => {}
         }
     }
     println!();
-    println!("  {}: re-run `donsetch doctor` to confirm", cli::bold("done"));
+    println!(
+        "  {}: re-run `donsetch doctor` to confirm",
+        cli::bold("done")
+    );
     Ok(())
 }

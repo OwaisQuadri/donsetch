@@ -61,10 +61,12 @@ jobs:
             # payload probe test proves it really loads on native
             # ARM runners.
             features: --features ocr,rerank,http
-            # PDFium's FPDF_LoadMemDocument64 hangs on aarch64 Linux
-            # (same root cause as issue #9). Skip PDF-dependent tests;
-            # they pass on all other platforms.
-            extra-args: -E 'not test(pdf)'
+            # PDF on aarch64: the FPDF_LoadMemDocument64 hang from
+            # issue #9 predates the current pdfium-static chromium/7809
+            # build. Experiments run with a 30s per-test timeout
+            # (slow-timeout in .config/nextest.toml); if this job
+            # goes red on pdf:: tests, flip this back.
+            extra-args: ''
             release-check: false
           - name: macos-arm64
             os: macos-latest
