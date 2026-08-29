@@ -601,10 +601,7 @@ fn check_onnx() -> CheckResult {
         {
             match crate::onnx::ensure_loaded() {
                 Ok(()) => CheckResult::Pass("static link, commit probe ok".into()),
-                Err(e) => CheckResult::Fail(
-                    "ONNX payload probe failed".into(),
-                    e.to_string(),
-                ),
+                Err(e) => CheckResult::Fail("ONNX payload probe failed".into(), e.to_string()),
             }
         }
         #[cfg(target_os = "linux")]
