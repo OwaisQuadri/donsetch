@@ -167,6 +167,46 @@ jobs:
             exit 1
           fi
 
+      # ── Payload integrity gates ────────────────────────────
+      # Compile success has shipped dead payloads before (v3.3.0:
+      # the ONNX archive was silently absent from win32-x64 and
+      # darwin-arm64). These gates are the tripwire: the shipped
+      # bytes must be big enough to contain what they claim, the
+      # Linux dylib must ship beside the binary, and `doctor` must
+      # actually PROBE the ONNX payload instead of printing a
+      # cfg constant.
+      - name: Payload integrity gates
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          BIN=donsetch
+          [ -f donsetch.exe ] && BIN=donsetch.exe
+          SIZE=$(wc -c < "$BIN")
+          case "${{ matrix.name }}" in
+            win32-x64)    NEED=25000000; EXPECT="commit probe ok" ;;
+            darwin-arm64) NEED=11000000; EXPECT="commit probe ok" ;;
+            linux-x64)    NEED=15000000; EXPECT="shared library present" ;;
+            *)            NEED=6000000;  EXPECT="not compiled" ;;
+          esac
+          if [ "$SIZE" -lt "$NEED" ]; then
+            echo "payload gate FAIL: $BIN is ${SIZE} bytes, expected >= ${NEED}"
+            echo "(a binary this small cannot contain the features it was built with)"
+            exit 1
+          fi
+          if [ "${{ matrix.name }}" = "linux-x64" ]; then
+            if [ ! -f libonnxruntime.so ] || [ "$(wc -c < libonnxruntime.so)" -lt 10000000 ]; then
+              echo "payload gate FAIL: libonnxruntime.so missing or too small"
+              exit 1
+            fi
+          fi
+          OUT=$(./$BIN doctor 2>&1 || true)
+          echo "$OUT" | grep -q "ONNX Runtime.*${EXPECT}" || {
+            echo "payload gate FAIL: doctor did not report the expected ONNX state"
+            echo "$OUT" | grep -i onnx || true
+            exit 1
+          }
+          echo "payload gates ok: ${SIZE} bytes, ONNX probe: ${EXPECT}"
+
       # ── QEMU non-AVX verification (Linux x64 only) ──────────
       #
       # The binary must run on non-AVX CPUs without SIGILL. QEMU's

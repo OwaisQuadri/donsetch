@@ -1,16 +1,24 @@
 # DonSeTch CI — build + test on Linux, macOS, Windows.
 #
+# Test runs use cargo-nextest with the `ci` cargo profile (release
+# opts, no fat LTO), so full test links take seconds, not minutes.
+# Deploy target/ artifacts are cached per platform (rust-cache), so
+# steady-state Windows runs are minutes, not 20.
+#
+# Two payload gates beyond compilation, because compile success has
+# shipped dead binaries before (v3.3.0 ONNX feature leak):
+#   1. The onnx_payload_probe unit test runs inside the features-on
+#      suites (linux-x64 dynamic load, macos-arm64 static link) and
+#      fails if the ONNX environment cannot initialize.
+#   2. Windows compile-checks the full release feature set
+#      (ocr,rerank,http) without linking: MSVC's 305MB static ONNX
+#      link stays a release-time cost. The complete Windows payload
+#      proof (doctor probe + size gate) lives in release.yml.
+#
 # The heavy dependencies need platform-specific setup:
 #   boring-sys (BoringSSL): CMake + C/C++ compiler + Go + bindgen (libclang)
 #   PDFium (static):         curl + tar (build.rs downloads at build time)
 #   oar-ocr (ONNX Runtime):  download-binaries feature fetches at build time
-#
-# boring-sys needs Go because BoringSSL's build system is Go-based.
-# It needs NASM for x86_64 assembly crypto. On Windows it needs
-# LLVM/Clang for bindgen (pre-installed on Linux/macOS runners).
-#
-# Tests run in debug mode (no LTO) for speed. Release builds are
-# verified by the release workflow on tag push.
 
 name: CI
 
@@ -27,7 +35,7 @@ env:
 jobs:
   build-test:
     # Context MUST stay "build-test (<platform>)": master's branch
-    # protection requires exactly these three check names
+    # protection requires exactly these check names
     # (build-test (linux-x86_64) / (macos-arm64) / (windows-x86_64)).
     # GitHub generates this format for matrix jobs without an explicit
     # name; setting it explicitly keeps the required-checks contract
@@ -41,14 +49,10 @@ jobs:
           - name: linux-x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            # http feature tested on Linux only: axum adds 20+ min
-            # compile time on Windows MSVC. macOS/Windows CI skip it.
-            # Release builds ship with http on linux-x64, macOS-arm64,
-            # and Windows-x64; linux-arm64/macOS-x64 are core-only
-            # (no ONNX prebuilt for those targets).
+            # Full feature set here: ocr+rerank (ONNX dlopen probe)
+            # and http (axum/tower-http) are only CI-exercised on Linux.
             features: --features ocr,rerank,http
-            test-skip: ''
-            test-mode: ''
+            release-check: false
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
@@ -56,30 +60,32 @@ jobs:
             # PDFium's FPDF_LoadMemDocument64 hangs on aarch64 Linux
             # (same root cause as issue #9). Skip PDF-dependent tests;
             # they pass on all other platforms.
-            test-skip: --skip pdf
-            test-mode: ''
+            extra-args: -E 'not test(pdf)'
+            release-check: false
           - name: macos-arm64
             os: macos-latest
             target: aarch64-apple-darwin
+            # Static ONNX link: the payload probe test proves the
+            # archive is really linked in (the exact check that would
+            # have caught v3.3.0's darwin-arm64 regression).
             features: --features ocr,rerank
-            test-skip: ''
-            test-mode: ''
+            extra-args: ''
+            release-check: false
           - name: macos-x86_64
             os: macos-15-intel
             target: x86_64-apple-darwin
             # ort-sys has no prebuilt ONNX Runtime for x86_64-apple-darwin.
             features: ''
-            test-skip: ''
-            test-mode: ''
+            extra-args: ''
+            release-check: false
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            # Core only: ocr,rerank pull in ONNX Runtime (305MB static
-            # archive) that takes 20+ min to link on MSVC. Those features
-            # are tested on Linux + macOS ARM64 instead.
+            # Core tests: linking 305MB of static ONNX on MSVC is a
+            # release-time cost anymore (see release.yml payload gate).
             features: ''
-            test-skip: ''
-            test-mode: ''
+            extra-args: ''
+            release-check: true
 
     steps:
       - uses: actions/checkout@v7
@@ -141,14 +147,28 @@ jobs:
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}-v3
+          key: ${{ matrix.target }}-v4
+          # A red run must still warm the cache: the next push is
+          # right behind it and should not pay full price again.
+          cache-on-failure: "true"
 
-      - name: Test
-        # Windows: --lib only (integration test linking takes 20+ min
-        # with the axum dependency tree on MSVC). Lib tests (689) cover
-        # all the same code paths. Non-Windows: full test suite.
-        run: cargo test ${{ matrix.features }} --target ${{ matrix.target }} ${{ matrix.test-mode }} --no-fail-fast -- ${{ matrix.test-skip }}
-        timeout-minutes: 20
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Test (nextest)
+        run: cargo nextest run --profile ci ${{ matrix.features }} --target ${{ matrix.target }} ${{ matrix.extra-args }}
+        timeout-minutes: 15
+
+      # Windows: compile-check the release feature set without the
+      # 305MB MSVC static link. Catches feature-gating typos and
+      # ort-sys build-script breakage at merge time; the real link
+      # and the payload gates run at release time.
+      - name: Compile-gate release features (Windows)
+        if: matrix.release-check
+        run: cargo check --profile ci --features ocr,rerank,http --target ${{ matrix.target }}
+        timeout-minutes: 15
 
       # Two platforms, because ~32 cfg sites are Windows-exclusive
       # (all of ghost/proc.rs) and Linux clippy never compiles them.
@@ -158,9 +178,11 @@ jobs:
       #
       # --all-targets pulls in #[cfg(test)] modules and tests/*.rs,
       # which the default lib+bins pass leaves unlinted.
+      # --profile ci reuses the test artifact graph (no recompile).
       - name: Clippy
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'windows-latest'
-        run: cargo clippy ${{ matrix.features }} --all-targets -- -Dwarnings
+        run: cargo clippy --profile ci ${{ matrix.features }} --all-targets -- -Dwarnings
+        timeout-minutes: 15
 
       - name: Format check
         if: matrix.os == 'ubuntu-latest'

@@ -592,11 +592,17 @@ fn check_onnx() -> CheckResult {
     }
     #[cfg(any(feature = "ocr", feature = "rerank"))]
     {
-        // On macOS/Windows, ONNX is statically linked (no shared lib).
-        // On Linux, ONNX is dynamically loaded after an AVX check.
+        // Real probe, not a cfg constant: initialize the ONNX
+        // environment and surface the result. A static-link build
+        // whose archive was never linked in fails here instead of
+        // printing a success string (this exact probe would have
+        // caught the v3.3.0 leak on Windows/macOS).
         #[cfg(not(target_os = "linux"))]
         {
-            CheckResult::Pass("static link, compiled in".into())
+            match crate::onnx::ensure_loaded() {
+                Ok(()) => CheckResult::Pass("static link, commit probe ok".into()),
+                Err(e) => CheckResult::Fail(format!("ONNX payload probe failed: {e}")),
+            }
         }
         #[cfg(target_os = "linux")]
         {

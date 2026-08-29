@@ -1,0 +1,17 @@
+# cargo-nextest config: https://nexte.st/docs/configuration/
+#
+# Every run uses the `ci` cargo profile (release opts, no fat LTO):
+# test links stay seconds instead of minutes, and `panic = "abort"`
+# stays faithful. The shipped binary still gets fat LTO via a real
+# `cargo build --release` at release time.
+#
+# Local: `cargo nextest run`          → fail-fast, stop at first red
+# CI:    `cargo nextest run --profile ci` → run everything, show all
+
+[profile.default]
+fail-fast = true
+cargo-profile = "ci"
+
+[profile.ci]
+fail-fast = false
+cargo-profile = "ci"

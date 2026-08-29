@@ -174,7 +174,13 @@ fn load_and_init() -> Result<(), String> {
         )
     })?;
 
-    builder.commit();
+    // Surface commit() failures: a dylib that loads but cannot
+    // initialize must fail OCR/rerank loudly, not silently degrade
+    // (that exact silence hid the v3.3.0 feature leak).
+    // NOTE: on the load-dynamic path commit() reports bool.
+    if !builder.commit() {
+        return Err("ONNX Runtime init failed (dynamic load)".to_string());
+    }
 
     eprintln!("[onnx] Runtime loaded from {}", lib_path.display());
     Ok(())
@@ -221,7 +227,12 @@ fn load_and_init() -> Result<(), String> {
     //   (static constructors ran before main). This code only
     //   runs on AVX-capable machines.
     // Just initialize the ONNX environment (static link).
-    ort::init().commit();
+    // Surface commit() failures: the 3.3.0 leak shipped binaries
+    // where the static archive was never linked in and this call
+    // failed silently — treat it as an error instead.
+    ort::init()
+        .commit()
+        .map_err(|e| format!("ONNX Runtime init failed (static): {e}"))?;
     eprintln!("[onnx] Runtime initialized (static link)");
     Ok(())
 }
@@ -232,5 +243,26 @@ mod tests {
     #[test]
     fn shared_lib_name_is_so_on_linux() {
         assert_eq!(super::shared_lib_name(), "libonnxruntime.so");
+    }
+
+    /// Payload probe: the ONNX environment must actually initialize
+    /// in this binary. On static-link targets this is the only thing
+    /// that catches a build where the archive was never linked in
+    /// (the v3.3.0 leak); on Linux it proves the dylib loads and
+    /// commits. Runs in every features-enabled CI job, so a dead
+    /// payload fails at merge time, not at release time. Non-AVX
+    /// Linux hosts skip it: they can't run ONNX by design (their
+    /// builds must still pass).
+    #[cfg(any(feature = "ocr", feature = "rerank"))]
+    #[test]
+    fn onnx_payload_probe_initializes() {
+        #[cfg(target_os = "linux")]
+        if !crate::cpu::has_avx() {
+            eprintln!("skipping ONNX payload probe: host has no AVX");
+            return;
+        }
+        super::ensure_loaded().expect("ONNX Runtime failed to initialize");
+        // A second call must reuse the memoized state, not re-init.
+        super::ensure_loaded().expect("ONNX Runtime failed to initialize (recheck)");
     }
 }
