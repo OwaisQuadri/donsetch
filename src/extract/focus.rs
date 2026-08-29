@@ -1026,10 +1026,10 @@ fn expand_breadcrumbs(blocks: &[Block], kept: &mut Vec<usize>, kept_set: &mut Ha
 /// not park the worker pool on the shared ONNX session mutex.
 fn offload_inference<R: Send + 'static>(work: impl FnOnce() -> R + Send + 'static) -> R {
     use tokio::runtime::RuntimeFlavor;
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        if handle.runtime_flavor() == RuntimeFlavor::MultiThread {
-            return tokio::task::block_in_place(work);
-        }
+    if let Ok(handle) = tokio::runtime::Handle::try_current()
+        && handle.runtime_flavor() == RuntimeFlavor::MultiThread
+    {
+        return tokio::task::block_in_place(work);
     }
     work()
 }
