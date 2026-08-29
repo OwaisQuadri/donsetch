@@ -52,7 +52,7 @@ fn render(
             Node::Text(t) => {
                 let s = t.text.as_ref();
                 if !s.trim().is_empty() {
-                    buf.push_str(s);
+                    buf.push_str(&escape_md_text(s, buf));
                     *total += s.trim().len();
                 }
             }
@@ -87,6 +87,7 @@ fn render(
                     "strong" | "b" => {
                         let t = RenderInner::run(c, base, opts, depth);
                         if !t.is_empty() {
+                            let t = escape_wrap_boundary(&t, '*');
                             buf.push_str(&format!("**{t}**"));
                             *total += t.len();
                         }
@@ -94,6 +95,7 @@ fn render(
                     "em" | "i" => {
                         let t = RenderInner::run(c, base, opts, depth);
                         if !t.is_empty() {
+                            let t = escape_wrap_boundary(&t, '*');
                             buf.push_str(&format!("*{t}*"));
                             *total += t.len();
                         }
@@ -176,6 +178,133 @@ impl RenderInner {
         render(c, base, opts, &mut t, &mut total, &mut link, depth + 1);
         t
     }
+}
+
+/// The inner render runs against an empty buffer, so its first
+/// character cannot see the emphasis marker that will precede it
+/// once the wrapper emits `*{t}*`. A bare leading `*`/`_` that
+/// becomes right-flanking next to the marker gets a backslash.
+/// (`\x` already emitted by the inner pass needs nothing: the
+/// backslash keeps the literal regardless of neighbours.)
+fn escape_wrap_boundary(t: &str, marker: char) -> String {
+    let mut chars = t.chars();
+    let Some(c0) = chars.next() else {
+        return t.to_string();
+    };
+    if !matches!(c0, '*' | '_') {
+        return t.to_string();
+    }
+    let Some(c1) = chars.next() else {
+        return t.to_string();
+    };
+    let right =
+        !marker.is_whitespace() && (!is_punct(marker) || c1.is_whitespace() || is_punct(c1));
+    if right {
+        let mut out = String::with_capacity(t.len() + 1);
+        out.push('\\');
+        out.push_str(t);
+        out
+    } else {
+        t.to_string()
+    }
+}
+
+/// Escape the markdown-active characters of a raw text node so a
+/// literal `*` in page text can never fuse with our own emphasis
+/// markers (issue #74: an em-wrapped footnote `* These figures ...`
+/// emitted `**` and re-parsed as strong).
+///
+/// Uses CommonMark flanking rules so escaped output stays readable:
+/// a `*` only gets a backslash when it can actually open or close
+/// emphasis in context (left- or right-flanking), so prose like
+/// `2 * 3` is untouched. `_` gets the same treatment minus the
+/// intraword exception (`foo_bar` can never form emphasis), which
+/// keeps snake_case identifiers free of backslash noise. Backticks
+/// are rare in prose and always escaped. A `[` only gets a
+/// backslash when a literal `](` follows later in the same text
+/// node, so prose like `See [1]` stays bare while `[T](u)` written
+/// as plain text can never render as a link. `prev` is the last
+/// character already emitted to the buffer (possibly a marker we
+/// generated), so adjacency across element boundaries is handled.
+fn escape_md_text(s: &str, buf: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    // `close_after[i]` = a literal `](` appears at or after index
+    // i+1, so a `[` here could open a link written as plain text
+    // (`[T](u)` in page text must never render as a link).
+    let mut close_after = vec![false; chars.len() + 1];
+    let mut seen = false;
+    for i in (0..chars.len()).rev() {
+        close_after[i] = seen;
+        if i + 1 < chars.len() && chars[i] == ']' && chars[i + 1] == '(' {
+            seen = true;
+        }
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut prev = buf.chars().next_back();
+    for (i, c) in chars.iter().enumerate() {
+        let next = chars.get(i + 1).copied();
+        match c {
+            '*' => {
+                if is_flanking(*c, prev, next) {
+                    out.push('\\');
+                }
+                out.push('*');
+            }
+            '_' => {
+                let intraword = prev.is_some_and(|p| p.is_alphanumeric())
+                    && next.is_some_and(|n| n.is_alphanumeric());
+                if !intraword && is_flanking(*c, prev, next) {
+                    out.push('\\');
+                }
+                out.push('_');
+            }
+            '`' => {
+                out.push('\\');
+                out.push('`');
+            }
+            '[' => {
+                if close_after[i] {
+                    out.push('\\');
+                }
+                out.push('[');
+            }
+            _ => out.push(*c),
+        }
+        prev = Some(*c);
+    }
+    out
+}
+
+/// Punctuation for flanking purposes: anything that is neither
+/// whitespace nor alphanumeric.
+fn is_punct(c: char) -> bool {
+    !c.is_whitespace() && !c.is_alphanumeric()
+}
+
+/// CommonMark delimiter flanking for a single-char run.
+/// `None` next/prev means the boundary of this text node; be
+/// conservative there: an unknown neighbour may still allow the
+/// char to act as a delimiter (our caller appends markers after).
+fn is_flanking(c: char, prev: Option<char>, next: Option<char>) -> bool {
+    if c != '*' && c != '_' {
+        return false;
+    }
+    let left = match next {
+        None => true,
+        Some(n) => !n.is_whitespace() && (!is_punct(n) || prev.is_none_or(is_punct_or_ws)),
+    };
+    let right = match prev {
+        None => false,
+        Some(p) => {
+            !p.is_whitespace()
+                && (!is_punct(p) || next.is_none_or(|n| n.is_whitespace() || is_punct(n)))
+        }
+    };
+    left || right
+}
+
+fn is_punct_or_ws(c: char) -> bool {
+    c.is_whitespace() || is_punct(c)
 }
 
 /// Wiki citation markers: "[1]", "[12]", "[a]", "[1][2]".
@@ -299,5 +428,92 @@ mod tests {
         assert!(result.contains('\n'), "expected newline, got: {result:?}");
         assert!(result.contains("first"));
         assert!(result.contains("second"));
+    }
+
+    fn render_inline_with(html: &str, links: bool) -> String {
+        let document = Html::parse_fragment(html);
+        let root = document.root_element();
+        let opts = super::super::ExtractOptions {
+            focus: None,
+            selector: None,
+            max_chars: None,
+            offset: 0,
+            include_links: links,
+            include_media: false,
+            toc: false,
+            section: None,
+            must_contain: None,
+        };
+        markdown(root, "https://example.com/", &opts).0
+    }
+
+    // issue #74: a literal `*` at the start of italic text fused
+    // with our emphasis marker into a strong delimiter and the
+    // paragraph stopped round-tripping.
+    #[test]
+    fn literal_star_inside_em_is_escaped() {
+        let html = "<p><em>* These figures refer to the latest edition
+            and may be revised at any time.</em></p>";
+        let result = render_inline_with(html, false);
+        assert_eq!(
+            result,
+            "*\\* These figures refer to the latest edition and may be revised at any time.*"
+        );
+    }
+
+    // ...with the nested link on, matching the issue's expected
+    // output exactly.
+    #[test]
+    fn issue_74_repro_with_link() {
+        let html = "<p><em>* These figures refer to the <strong><a
+            href=\"pricing/\">latest edition</a></strong> of the service
+            and may be revised at any time.</em></p>";
+        let result = render_inline_with(html, true);
+        assert_eq!(
+            result,
+            "*\\* These figures refer to the **[latest edition](https://example.com/pricing/)** of the service and may be revised at any time.*"
+        );
+    }
+
+    #[test]
+    fn strong_adjacent_literal_stars_do_not_fuse() {
+        let result = render_inline("<strong>*x*</strong>");
+        assert_eq!(result, "**\\*x\\***");
+    }
+
+    #[test]
+    fn intraword_underscores_stay_bare() {
+        let result = render_inline("<p>foo_bar_baz</p>");
+        assert_eq!(result, "foo_bar_baz");
+    }
+
+    #[test]
+    fn flanking_underscores_are_escaped() {
+        let result = render_inline("<p>_word_ and x _y_</p>");
+        assert_eq!(result, "\\_word\\_ and x \\_y\\_");
+    }
+
+    #[test]
+    fn spaced_asterisks_in_math_prose_stay_bare() {
+        let result = render_inline("<p>2 * 3 * 5 = 30</p>");
+        assert_eq!(result, "2 * 3 * 5 = 30");
+    }
+
+    #[test]
+    fn intraword_asterisks_are_escaped() {
+        let result = render_inline("<p>a*b*c</p>");
+        assert_eq!(result, "a\\*b\\*c");
+    }
+
+    #[test]
+    fn literal_backticks_are_escaped() {
+        let result = render_inline("<p>use `cargo test` now</p>");
+        assert_eq!(result, "use \\`cargo test\\` now");
+    }
+
+    #[test]
+    fn link_shaped_plain_text_stays_literal() {
+        let result = render_inline("<p>[T](u) and ![V](w) and [a] alone</p>");
+        assert_eq!(result, "\\[T](u) and !\\[V](w) and [a] alone");
     }
 }

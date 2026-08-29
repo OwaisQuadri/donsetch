@@ -400,7 +400,9 @@ curl -X POST http://localhost:8765/mcp \
 **Build requirement.** HTTP is an optional cargo feature. Source
 builds need `cargo build --release --features ocr,rerank,http` (or
 just `--features http` for the transport alone); a plain `cargo build`
-produces a stdio-only binary that ignores `--http`. Of the prebuilt
+produces a stdio-only binary that exits with an error naming the
+missing `http` feature if you pass `--http` or set
+`DONSETCH_TRANSPORT=http`. Of the prebuilt
 binaries, linux-x64, macOS-arm64, and Windows-x64 ship with `http`;
 the linux-arm64 and macOS-x64 prebuilts are core-only.
 
@@ -983,7 +985,7 @@ For agent workloads, fetch and crawl matter most. DonSeTch wins both: it reaches
 | First build takes ~2 min | BoringSSL is compiled from source. Cached after that. |
 | Go is a build dependency | BoringSSL's build system is Go-based. You need Go even though DonSeTch is Rust. |
 | OCR/rerank not in default build | ONNX Runtime's C++ global constructors can deadlock on aarch64. Build with `--features ocr,rerank` to enable. The prebuilt npm binary ships with all three features on linux-x64, macOS-arm64, and Windows-x64 (linux-arm64/macOS-x64 prebuilts are core-only). |
-| `mcp --http` silently falls back to stdio | The HTTP transport is an optional cargo feature. A binary built without `--features http` ignores `--http` / `DONSETCH_TRANSPORT=http` and serves stdio. The linux-arm64 and macOS-x64 prebuilt binaries are core-only — build from source with `--features http` there. |
+| `mcp --http` refused without the feature | The HTTP transport is an optional cargo feature. A binary built without `--features http` exits with an error naming the missing feature when you pass `--http` or set `DONSETCH_TRANSPORT=http`, instead of silently serving stdio. The linux-arm64 and macOS-x64 prebuilt binaries are core-only — build from source with `--features http` there. |
 | Interactive captchas not solved | hCaptcha, reCAPTCHA, Turnstile checkbox = honest dead end. No solving service by design. |
 | robots.txt ON by default for crawl | `respect_robots=true` for crawl. `fetch` doesn't check robots. |
 | Search rate-limits without a proxy | Keyless search scrapes public engines from your IP. Set `DONSEEK_PROXIES` for heavy use. |
