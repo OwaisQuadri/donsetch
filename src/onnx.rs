@@ -230,9 +230,10 @@ fn load_and_init() -> Result<(), String> {
     // Surface commit() failures: the 3.3.0 leak shipped binaries
     // where the static archive was never linked in and this call
     // failed silently — treat it as an error instead.
-    ort::init()
-        .commit()
-        .map_err(|e| format!("ONNX Runtime init failed (static): {e}"))?;
+    // NOTE: commit() reports bool on this path too.
+    if !ort::init().commit() {
+        return Err("ONNX Runtime init failed (static)".to_string());
+    }
     eprintln!("[onnx] Runtime initialized (static link)");
     Ok(())
 }
