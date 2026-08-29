@@ -158,7 +158,7 @@ jobs:
           tool: nextest
 
       - name: Test (nextest)
-        run: cargo nextest run --profile ci ${{ matrix.features }} --target ${{ matrix.target }} ${{ matrix.extra-args }}
+        run: cargo nextest run --profile ci --cargo-profile ci ${{ matrix.features }} --target ${{ matrix.target }} ${{ matrix.extra-args }}
         timeout-minutes: 15
 
       # Windows: compile-check the release feature set without the

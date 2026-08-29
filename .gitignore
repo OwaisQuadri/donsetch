@@ -38,3 +38,4 @@ tests/pdf-corpus/*.pdf
 .cache/
 npm/binaries/
 bench/regression-results.json
+/libonnxruntime.so

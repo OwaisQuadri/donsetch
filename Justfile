@@ -28,10 +28,11 @@ fmt-check:
 lint:
     cargo clippy --profile ci --all-targets --features ocr,rerank,http -- -Dwarnings
 
-# Full suite, full feature set, fail-fast. cargo-profile = ci comes
-# from .config/nextest.toml.
+# Full suite, full feature set, fail-fast. The cargo profile is
+# pinned via CLI (older nextest ignores the config-level
+# cargo-profile key).
 test:
-    cargo nextest run --features ocr,rerank,http
+    cargo nextest run --cargo-profile ci --features ocr,rerank,http
 
 # The binary for live smoke runs (fast profile, real behavior).
 bin:
