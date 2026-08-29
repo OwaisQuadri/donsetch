@@ -144,10 +144,41 @@ jobs:
         run: |
           "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append
 
+      # Cache key: <target>-dep-<DEP_HASH>-ci1.
+      # DEP_HASH hashes Cargo.lock + Cargo.toml with `version`
+      # lines stripped. That is the single most important line in
+      # this workflow: a release commit bumps the version in
+      # Cargo.toml, which under rust-cache's DEFAULT keying
+      # invalidates the whole dependency cache on every release
+      # and turns every tag build into a 15-25 min cold rebuild
+      # across 5 platforms. With version stripped, releases build
+      # warm: only donsetch itself recompiles. Real dependency or
+      # profile changes still change the hash and invalidate
+      # correctly. CI and release use separate suffixes so the
+      # release build's RUSTFLAGS artifacts never churn CI's.
+      - name: Compute version-insensitive dep hash
+        shell: bash
+        run: |
+          DEP_HASH=$(python3 - <<'EOF'
+          import hashlib, pathlib, re
+          h = hashlib.sha256()
+          lock = pathlib.Path('Cargo.lock').read_text()
+          lock = re.sub(r'name = "donsetch"\nversion = "[^"]+"',
+                        'name = "donsetch"', lock)
+          h.update(lock.encode())
+          for p in sorted(pathlib.Path('.').rglob('Cargo.toml')):
+              t = re.sub(r'\n\s*version\s*=\s*"[^"]*"', '', p.read_text())
+              h.update(p.name.encode()); h.update(t.encode())
+          print(h.hexdigest()[:16])
+          EOF
+          )
+          echo "DEP_HASH=$DEP_HASH" >> "$GITHUB_ENV"
+
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}-v4
+          key: ${{ matrix.target }}-dep-${{ env.DEP_HASH }}-ci1
+          add-rust-environment-hash-key: "false"
           # A red run must still warm the cache: the next push is
           # right behind it and should not pay full price again.
           cache-on-failure: "true"

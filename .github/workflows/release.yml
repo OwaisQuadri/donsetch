@@ -116,10 +116,35 @@ jobs:
         run: |
           "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append
 
+      # Cache key: <target>-dep-<DEP_HASH>-rel1 (see ci.yml for the
+      # full rationale). The version-insensitive hash is what makes
+      # release builds warm: without it, every version bump nukes
+      # the dependency cache and every tag build is a cold 15-25
+      # min rebuild on all five platforms.
+      - name: Compute version-insensitive dep hash
+        shell: bash
+        run: |
+          DEP_HASH=$(python3 - <<'EOF'
+          import hashlib, pathlib, re
+          h = hashlib.sha256()
+          lock = pathlib.Path('Cargo.lock').read_text()
+          lock = re.sub(r'name = "donsetch"\nversion = "[^"]+"',
+                        'name = "donsetch"', lock)
+          h.update(lock.encode())
+          for p in sorted(pathlib.Path('.').rglob('Cargo.toml')):
+              t = re.sub(r'\n\s*version\s*=\s*"[^"]*"', '', p.read_text())
+              h.update(p.name.encode()); h.update(t.encode())
+          print(h.hexdigest()[:16])
+          EOF
+          )
+          echo "DEP_HASH=$DEP_HASH" >> "$GITHUB_ENV"
+
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
+          key: release-${{ matrix.target }}-dep-${{ env.DEP_HASH }}-rel1
+          add-rust-environment-hash-key: "false"
+          cache-on-failure: "true"
 
       - name: Build
         env:

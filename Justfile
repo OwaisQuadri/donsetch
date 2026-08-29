@@ -17,6 +17,16 @@
 # Pre-push gate: everything CI will flag.
 all: fmt-check lint test
 
+# Pre-tag gate: `all` + the exact tag-time payload gates of the
+# release workflow, mirrored locally so a late gate failure can
+# never cost a release round-trip. Run before pushing a tag.
+preflight: all gates
+
+# The tag-time gates (linux-x64 mirror of release.yml).
+gates:
+    cargo build --release --features ocr,rerank,http
+    @sh scripts/gates.sh linux-x64 target/release
+
 fmt:
     cargo fmt --all
 
