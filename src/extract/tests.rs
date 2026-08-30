@@ -931,6 +931,25 @@ fn toc_mode_flat_page() {
     assert!(r.markdown.contains("no headings"));
 }
 
+#[test]
+fn toc_mode_is_not_replaced_by_raw_text_fallback() {
+    let body = "This paragraph belongs to the page body, not to its requested outline. ".repeat(20);
+    let html = format!(
+        r#"<html><head><title>Small guide</title></head><body><article>
+<h1>Small guide</h1><p>{body}</p>
+</article></body></html>"#
+    );
+    let r = extract_html_opts(
+        &html,
+        &ExtractOptions {
+            toc: true,
+            ..Default::default()
+        },
+    );
+    assert!(r.markdown.contains("[s1] Small guide"), "{}", r.markdown);
+    assert!(!r.markdown.contains("This paragraph belongs"));
+}
+
 // ════════════════════════════════════════════════════════════
 // 9. SECTION MODE
 // ════════════════════════════════════════════════════════════

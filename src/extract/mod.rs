@@ -511,6 +511,13 @@ pub fn extract(
         max_chars,
     )?;
 
+    // A TOC is a complete projection, not a failed short extraction. Once
+    // downstream has built the outline, content-oriented rescue paths must
+    // not replace it with the page body.
+    if opts.toc {
+        return Ok(extracted);
+    }
+
     // JSON-in-script rescue: SPAs (Next.js/React/YouTube) embed
     // their content as a JS-assigned JSON blob. DonSift sees an
     // empty shell, but the data is sitting in the HTML. When
