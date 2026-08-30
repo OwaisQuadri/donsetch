@@ -54,8 +54,44 @@ pub fn norm_key(raw: &str) -> String {
         .trim_end_matches("/index.html")
         .trim_end_matches("/index.htm")
         .to_lowercase();
-    let query = u.query().map(|q| format!("?{q}")).unwrap_or_default();
+    let query = u
+        .query()
+        .map(|query| {
+            let kept = query
+                .split('&')
+                .filter(|pair| {
+                    url::form_urlencoded::parse(pair.as_bytes())
+                        .next()
+                        .is_none_or(|(key, _)| !is_tracking_query_key(&key))
+                })
+                .collect::<Vec<_>>();
+            if kept.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", kept.join("&"))
+            }
+        })
+        .unwrap_or_default();
     format!("{host}{path}{query}")
+}
+
+fn is_tracking_query_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.starts_with("utm_")
+        || matches!(
+            key.as_str(),
+            "fbclid"
+                | "gclid"
+                | "dclid"
+                | "msclkid"
+                | "msockid"
+                | "mc_cid"
+                | "mc_eid"
+                | "igshid"
+                | "ref_src"
+                | "_ga"
+                | "_gl"
+        )
 }
 
 pub fn host_of(raw: &str) -> String {
@@ -488,6 +524,40 @@ mod tests {
         let a = norm_key("https://www.docs.rs/ratatui/index.html");
         let b = norm_key("http://docs.rs/ratatui/");
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn norm_key_drops_tracking_but_preserves_meaningful_query_parameters() {
+        let tracked = norm_key(
+            "https://example.com/search?topic=rust&utm_source=newsletter&page=2&gclid=abc",
+        );
+        let clean = norm_key("https://example.com/search?topic=rust&page=2");
+        let different_page = norm_key("https://example.com/search?topic=rust&page=3");
+
+        assert_eq!(tracked, clean);
+        assert_ne!(clean, different_page);
+    }
+
+    #[test]
+    fn norm_key_preserves_meaningful_query_order_and_encoding() {
+        assert_ne!(
+            norm_key("https://example.com/workflow?step=one&step=two"),
+            norm_key("https://example.com/workflow?step=two&step=one")
+        );
+        assert_ne!(
+            norm_key("https://example.com/search?q%3Da=b"),
+            norm_key("https://example.com/search?q=a%3Db")
+        );
+    }
+
+    #[test]
+    fn norm_key_detects_encoded_and_case_insensitive_tracking_keys() {
+        let clean = norm_key("https://example.com/page?id=7");
+        assert_eq!(
+            norm_key("https://example.com/page?%75tm_source=x&id=7&FBCLID=y"),
+            clean
+        );
+        assert_ne!(norm_key("https://example.com/page?ref=docs&id=7"), clean);
     }
 
     #[test]
