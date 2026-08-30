@@ -355,16 +355,22 @@ fn parse_brave(doc: &Html) -> Vec<Hit> {
 
 fn parse_bing(doc: &Html) -> Vec<Hit> {
     let items = sel("li.b_algo");
-    // Primary: h2 a; fallback: h2 > a, a.tilk, a[data-h]
-    let link = sel("h2 a, h2 > a, a.tilk, a[data-h]");
+    // Keep the title link and the attribution link separate. A grouped
+    // selector returns matches in document order, not selector-preference
+    // order; Bing places `a.tilk` (site + breadcrumb) before `h2 a`, so the
+    // old grouped selector silently used the breadcrumb as both URL and
+    // title on every result.
+    let title_link = sel("h2 a");
+    let fallback_link = sel("a.tilk, a[data-h]");
     // Primary: .b_caption p; fallback: .b_lineclamp*, [data-text]
     let cap = sel(".b_caption p, .b_lineclamp2, .b_lineclamp3, .b_lineclamp4, p[data-text]");
     let h2 = sel("h2");
     let mut hits = Vec::new();
     for (rank, li) in doc.select(&items).enumerate() {
         let Some(a) = li
-            .select(&link)
+            .select(&title_link)
             .next()
+            .or_else(|| li.select(&fallback_link).next())
             .or_else(|| li.select(&sel("a[href]")).next())
         else {
             continue;
@@ -666,5 +672,27 @@ mod tests {
         assert_eq!(hits.len(), 1, "SERP URL should be filtered, got {hits:?}");
         assert_eq!(hits[0].url, "https://doc.rust-lang.org/book");
         assert_eq!(hits[0].title, "The Rust Book");
+    }
+
+    #[test]
+    fn bing_prefers_result_heading_over_earlier_attribution_link() {
+        let html = r#"
+        <html><body><ol>
+          <li class="b_algo">
+            <div class="b_tpcn">
+              <a class="tilk" href="https://www.bing.com/site-attribution">
+                <span>rust-lang.org</span><cite>https://doc.rust-lang.org › book</cite>
+              </a>
+            </div>
+            <h2><a href="https://doc.rust-lang.org/book/">The Rust Programming Language</a></h2>
+            <div class="b_caption"><p>Learn Rust ownership and borrowing.</p></div>
+          </li>
+        </ol></body></html>
+        "#;
+        let hits = parse("bing", html);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "The Rust Programming Language");
+        assert_eq!(hits[0].url, "https://doc.rust-lang.org/book/");
+        assert!(!hits[0].title.contains("https://"));
     }
 }
