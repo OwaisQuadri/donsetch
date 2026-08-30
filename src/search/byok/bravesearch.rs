@@ -102,6 +102,12 @@ pub async fn search(
     if status == 401 || status == 403 {
         return Err(KeyError::InvalidKey);
     }
+    // No 402 branch: unlike Tavily/SerpApi/Serper/Brightdata's
+    // underlying services, Brave's API doesn't document a 402.
+    // Its rate-limit policy expresses both per-second throttling
+    // and monthly-quota exhaustion under the same 429 status (see
+    // the X-RateLimit-Policy header's 1s/30-day windows), so quota
+    // exhaustion is inferred here via message-sniffing only.
     if status == 429 {
         let lower = text.to_lowercase();
         if lower.contains("quota") || lower.contains("exceeded") || lower.contains("plan") {

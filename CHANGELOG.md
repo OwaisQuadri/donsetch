@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alongside the existing Serper.dev provider. Routes by intent like
   the other providers: `google_scholar` engine for paper queries,
   `tbm=nws` for news.
-- **Brave Search API BYOK provider:** `donsetch keys add bravesearch
-  <key>` wires up the official, keyed
+- **Brave Search API BYOK provider:** `donsetch keys add bravesearch <key>`
+  wires up the official, keyed
   [Brave Search API](https://api.search.brave.com) — distinct from
   the existing keyless `brave` SERP scraper. Uses a dedicated news
   endpoint for news-intent queries.
