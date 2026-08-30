@@ -5,6 +5,36 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Parallel query variants for `web_search` (PR #79):** a search call
+  can now carry up to two explicit `query_variants` alongside the base
+  query. All run concurrently under one shared deadline, each keeps
+  DonSeTch's existing ranking and returns as a clearly separated
+  result set, one global S-handle table covers every result, and
+  partial failures keep the successful searches. DonSeTch never
+  invents variants: the calling agent supplies alternative
+  formulations, the tool only fan-outs. Single-query behavior,
+  envelope, and cache keys are byte-for-byte unchanged.
+
+### Fixed
+
+- **Semantic reranking no longer starves async workers (PR #77):**
+  with the rerank feature on, concurrent searches ran synchronous
+  ONNX inference directly on Tokio workers while other workers
+  parked on the shared session mutex, starving timers and I/O.
+  Ranking now runs on the blocking pool (rerank builds only; the
+  inline path is unchanged otherwise). Measured with 8 concurrent
+  jobs on 2 CPUs: mean max executor stall 573.5ms to 3.5ms, no
+  latency regression, identical result digests.
+- **Same stall fixed on the fetch side:** focus extraction ran the
+  cross-encoder inline on the async worker. Scores now flow through
+  `block_in_place` on multi-thread runtimes (inline otherwise, since
+  `block_in_place` panics on current-thread runtimes), with a
+  single-worker timer regression test that fails on the old code.
+
 ## [3.4.2] - 2026-08-29
 
 ### Fixed
