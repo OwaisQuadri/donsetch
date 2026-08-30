@@ -1261,7 +1261,9 @@ async fn fetch_single_inner(daemon: &Arc<Daemon>, args: &Value, url: &str) -> Va
     let orig_url = url.to_string();
     let adapter_used: Option<&'static str>;
     let url = match crate::adapters::rewrite(&parsed_url) {
-        Some((new_url, name)) if !no_adapter => {
+        Some((new_url, name))
+            if !no_adapter && args.get("section").and_then(Value::as_str).is_none() =>
+        {
             adapter_used = Some(name);
             new_url
         }
