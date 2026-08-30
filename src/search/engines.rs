@@ -545,12 +545,12 @@ fn parse_yahoo(doc: &Html) -> Vec<Hit> {
         if !url.starts_with("http") {
             continue;
         }
-        let title = text(a);
-        let title = if title.is_empty() {
-            item.select(&h3).next().map(text).unwrap_or_default()
-        } else {
-            title
-        };
+        // Yahoo nests the breadcrumb and the h3 inside the same outer link.
+        // `text(a)` therefore concatenates site name + URL + real title. Use
+        // the dedicated heading first and retain the outer text only as a
+        // fallback for older layouts without an h3.
+        let heading = item.select(&h3).next().map(text).unwrap_or_default();
+        let title = if heading.is_empty() { text(a) } else { heading };
         let snippet = item.select(&cap).next().map(text).unwrap_or_default();
         if !title.is_empty() {
             hits.push(Hit {
@@ -692,7 +692,24 @@ mod tests {
         let hits = parse("bing", html);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "The Rust Programming Language");
-        assert_eq!(hits[0].url, "https://doc.rust-lang.org/book/");
-        assert!(!hits[0].title.contains("https://"));
+        assert_eq!(hits[0].url, "https://doc.rust-lang.org/book/");        assert!(!hits[0].title.contains("https://"));
+    }
+
+    #[test]
+    fn yahoo_extracts_heading_instead_of_outer_link_breadcrumb() {
+        let html = r#"
+        <html><body>
+          <div class="compTitle options-toggle">
+            <a data-matarget="algo" href="https://example.com/ownership">
+              <div><span>Example</span>https://example.com › ownership</div>
+              <h3 class="title"><span>Understanding Ownership</span></h3>
+            </a>
+            <div class="compText"><p>A focused explanation.</p></div>
+          </div>
+        </body></html>
+        "#;
+        let hits = parse("yahoo", html);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Understanding Ownership");        assert!(!hits[0].title.contains("https://"));
     }
 }
