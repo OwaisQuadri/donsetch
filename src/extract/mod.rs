@@ -981,7 +981,12 @@ fn downstream(
         1.0
     };
     let is_shell = raw_len > 20_000 && density < 0.05 && full.len() < 3_000;
-    let thin = !section_hit
+    // A PDF can legitimately contain only a few words. It is already parsed
+    // from a complete binary document, so HTML shell heuristics must never
+    // label a short PDF as a JS-rendered page.
+    let is_pdf = pdf_pages.is_some();
+    let thin = !is_pdf
+        && !section_hit
         && ((full.len() < 800 && (thin_flag || raw_len > 5_000 || blocks_total == 0))
             || (thin_flag && has_skeletons && full.len() < 4000)
             || is_shell);

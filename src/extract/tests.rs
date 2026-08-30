@@ -1164,6 +1164,43 @@ fn content_density_large_page_many_chars_not_thin() {
     );
 }
 
+#[test]
+fn short_pdf_is_not_classified_as_an_html_shell() {
+    let doc = Html::parse_document("<html lang=\"en\"><title>Receipt</title></html>");
+    let meta = metadata::metadata(&doc);
+    let blocks = vec![blocks::Block::Para {
+        md: "Total due: EUR 12".to_string(),
+        link_density: 0.0,
+        path: Vec::new(),
+    }];
+    let pages = vec![crate::pdf::PageMeta {
+        page: 0,
+        chars: 17,
+        ocr: false,
+        confidence: 1.0,
+    }];
+    let lang = language::detect(&doc);
+
+    let out = downstream(
+        &meta,
+        blocks,
+        25_000,
+        false,
+        false,
+        Vec::new(),
+        lang,
+        Some(pages),
+        "https://example.com/receipt.pdf",
+        &ExtractOptions::default(),
+        16_000,
+    )
+    .unwrap();
+
+    assert!(!out.thin);
+    assert!(!out.markdown.contains("JS-rendered"));
+    assert_eq!(out.pdf_pages.as_ref().map(Vec::len), Some(1));
+}
+
 // ════════════════════════════════════════════════════════════
 // 12. CROSS-BLOCK DEDUP
 // ════════════════════════════════════════════════════════════
