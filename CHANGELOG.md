@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alongside the existing Serper.dev provider. Routes by intent like
   the other providers: `google_scholar` engine for paper queries,
   `tbm=nws` for news.
+- **Playwright-managed Chromium discovery (issue #84):** the browser
+  probe now finds every Playwright layout (chrome-linux64,
+  chrome-win64, chrome-mac-arm64 plus the legacy dirs), honors
+  `PLAYWRIGHT_BROWSERS_PATH` and `XDG_CACHE_HOME`, and does it via
+  one shared helper on all three platforms. The headless-shell
+  registry stays excluded on purpose (strictly weaker CDP target).
 
 ### Fixed
 
@@ -23,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   macOS and Windows and the hint was pure noise on every daemon
   start. The hint is a platform-gated pure function now, with a
   regression test that runs on the Windows/macOS CI legs.
+- **fake-ip TUNs no longer trip the SSRF guard (issue #83):**
+  networks where a DNS rewriter maps every hostname into
+  198.18.0.0/15 (mihomo/Clash/Surge) saw every fetch blocked as a
+  false positive. The guard is now two-tiered: URL literals stay
+  strict, the DNS-resolved tier exempts the IETF-reserved
+  benchmarking block only, and every real private range stays
+  blocked. `DONSETCH_ALLOW_PRIVATE_EGRESS=1` now works end to end
+  (it was dead at the guard layer). Transport pinning agrees with
+  the guard so no layer re-blocks what another allowed.
 
 ## [3.4.3] - 2026-08-30
 
