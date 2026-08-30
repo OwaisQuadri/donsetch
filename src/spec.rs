@@ -83,7 +83,8 @@ pub struct ToolSpec {
     pub name: &'static str,
     /// CLI subcommand (`fetch`).
     pub cli_cmd: &'static str,
-    /// One-liner for `donsetch --help` listing.
+    /// One-liner — `donsetch --help` listing AND the MCP
+    /// `instructions` blurb sent at initialize.
     pub summary: &'static str,
     /// Full description — MCP tool description AND CLI long help.
     pub description: &'static str,
@@ -117,7 +118,7 @@ const FETCH_PARAMS: &[ParamSpec] = &[
         kind: ParamKind::Str,
         cli: CliKind::Flag,
         required: false,
-        help: "Relevance query — returns ONLY blocks relevant to your question, cutting tokens 50-80% on long pages. Hybrid keyword + semantic matching catches blocks with different vocabulary than your query. If nothing matches, returns full page with a notice. ALWAYS set when you know what you're looking for — #1 token saver.",
+        help: "Relevance query — returns ONLY blocks that score against it, cutting tokens 50-80% on long pages. Scoring is BM25 keyword matching, so phrase the query in the page's own vocabulary. A cross-encoder pass also catches blocks that use different words, but only on pages of 80 blocks or fewer AND only when the rerank model is already cached from prior search use — plain BM25 otherwise, never a download mid-fetch. If nothing matches, returns the full page with an inline notice. ALWAYS set when you know what you're looking for — #1 token saver.",
     },
     ParamSpec {
         name: "max_chars",
@@ -319,7 +320,7 @@ const CRAWL_PARAMS: &[ParamSpec] = &[
         kind: ParamKind::Str,
         cli: CliKind::Flag,
         required: false,
-        help: "Relevance query — rank pages by relevance and crawl only matching ones. Uses hybrid keyword + semantic matching. Essential for large sites; without it the crawl wastes budget on noise. Set this whenever you have a specific topic in mind.",
+        help: "Relevance query — ranks the frontier and crawls only matching pages. Scored by token overlap on LINK TEXT + URL PATH (content isn't fetched yet), so word it as the site does in URLs and link labels; a link sharing no token is never enqueued. Fetched pages are then focus-filtered as in web_fetch. Essential on large sites — without it the crawl burns budget on noise.",
     },
     ParamSpec {
         name: "max_pages",
@@ -445,7 +446,7 @@ pub static TOOLS: &[ToolSpec] = &[
         name: "web_crawl",
         cli_cmd: "crawl",
         summary: "Crawl a site into markdown (sitemap-aware, focus-ranked, resumable)",
-        description: "Crawl a site from a seed — for multi-page extraction (docs, API refs, wikis). Single page → web_fetch; finding sites → web_search.\n\nTwo-phase: sitemap discovery (cheap URL inventory) first, then focus-ranked page fetching with adaptive per-host pacing. Docs sites (mkdocs/docusaurus/sphinx/antora) get their nav as the site map automatically.\n\nModes: full (default) = map + content · map = URL inventory only, very cheap — see what a site has before committing · content = BFS from seed, no sitemap (use when sitemap is missing). PDF pages auto-parsed, not skipped.\n\nBudgets: focus (topic) ranks pages by keyword+semantic relevance and crawls only matches — set it whenever you have a topic. max_pages / max_total_chars / deadline_s cap the run; resume tokens continue across calls. since_last=true skips pages unchanged since your last crawl of the site (fingerprint memory — returns only what moved). Send _meta.progressToken for live per-page progress (\"12 pages, 34 queued\"); cancellation stops gracefully and keeps the resume token.\n\nResponse: map (if any) + pages as markdown. structuredContent = {seed, pages:[{url,title,kind,chars,quality}], map, queued, filtered_out, skipped:[{url,reason}], stop, elapsed_s, resume}. stop = FrontierEmpty (done) | MaxPages|CharBudget|DepthLimit|Deadline (budget — resume to continue) | ThrottledOut (site pushed back — wait, then resume) | Cancelled (resume token kept)",
+        description: "Crawl a site from a seed — for multi-page extraction (docs, API refs, wikis). Single page → web_fetch; finding sites → web_search.\n\nTwo-phase: sitemap discovery (cheap URL inventory) first, then focus-ranked page fetching with adaptive per-host pacing. Docs sites (mkdocs/docusaurus/sphinx/antora) get their nav as the site map automatically.\n\nModes: full (default) = map + content · map = URL inventory only, very cheap — see what a site has before committing · content = BFS from seed, no sitemap (use when sitemap is missing). PDF pages auto-parsed, not skipped.\n\nBudgets: focus (topic) ranks the frontier by link-text/URL-path keyword overlap and crawls only matches — set it whenever you have a topic. max_pages / max_total_chars / deadline_s cap the run; resume tokens continue across calls. since_last=true skips pages unchanged since your last crawl of the site (fingerprint memory — returns only what moved). Send _meta.progressToken for live per-page progress (\"12 pages, 34 queued\"); cancellation stops gracefully and keeps the resume token.\n\nResponse: map (if any) + pages as markdown. structuredContent = {seed, pages:[{url,title,kind,chars,quality}], map, queued, filtered_out, skipped:[{url,reason}], stop, elapsed_s, resume}. stop = FrontierEmpty (done) | MaxPages|CharBudget|DepthLimit|Deadline (budget — resume to continue) | ThrottledOut (site pushed back — wait, then resume) | Cancelled (resume token kept)",
         params: CRAWL_PARAMS,
         examples: &[
             "donsetch crawl https://docs.site.com --topic \"authentication\"",

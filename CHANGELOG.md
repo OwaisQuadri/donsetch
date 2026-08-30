@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MCP `instructions` at initialize:** the handshake now carries a
+  short server blurb — one line per tool, generated from the spec
+  table — so a client injects it into the agent's context alongside
+  the system prompt. This is what an agent sees on harnesses with
+  deferred tool loading, which show only tool NAMES up front and
+  fetch schemas on demand: without it, nothing tells the agent
+  these tools exist or when to reach for one. Kept deliberately
+  small (~100 tokens) since it is resident in every session whether
+  or not the server is used, and gated at 150 tokens by a new
+  invariant in `tests/token_invariants.rs` — the first gate in that
+  file on what we send at handshake time rather than on what a
+  response costs. A golden fixture (`tests/fixtures/initialize.json`)
+  pins the whole initialize result; the package version is held as
+  a sentinel there so a release bump never has to re-bless it.
+
 ### Fixed
+
+- **`focus` was described as doing more than it does:** both tool
+  descriptions claimed "hybrid keyword + semantic matching"
+  unconditionally. On `web_fetch` the cross-encoder pass in fact
+  runs only on pages of ≤80 blocks AND only when the rerank model
+  is already cached from prior search use — plain BM25 otherwise,
+  never a download mid-fetch. On `web_crawl` there is no semantic
+  matching at all: frontier candidates are scored by token overlap
+  against link text and URL path (page content isn't fetched yet),
+  and a link sharing no token with the query is never enqueued —
+  a hard gate the old text didn't mention, though it decides what
+  the crawl reaches. Both descriptions now match the code, so an
+  agent can phrase a query for the matcher it actually gets.
 
 - **Xvfb install hint printed on macOS/Windows every session
   (issue #81):** the "install xvfb" advice belongs to Linux-family
