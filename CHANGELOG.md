@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stemming strips `-ed`) falsely counted as a match. The full-form
   check is now a contiguous token-subsequence match instead of a
   string `contains`, closing the same word-boundary gap the
-  existing fragment-based check (issue #86 follow-up) already
-  guarded against.
+  existing fragment-based check (added in v2.3.1) already guarded
+  against.
 
 ## [3.4.4] - 2026-08-31
 
