@@ -412,6 +412,7 @@ donsetch keys add tavily tvly-...       # Tavily
 donsetch keys add exa sk-exa-...        # Exa (stackable)
 donsetch keys add serper ...            # Serper.dev
 donsetch keys add serpapi ...           # SerpApi
+donsetch keys add bravesearch ...       # Brave Search API
 donsetch keys add tinyfish sk-...       # TinyFish (free tier)
 donsetch keys add parallel nKil3...     # Parallel AI (fast mode)
 donsetch keys add bd 576d013c...        # Bright Data SERP
