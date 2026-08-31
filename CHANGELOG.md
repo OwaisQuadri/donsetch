@@ -5,6 +5,20 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`focus_match` compound-term check crossed word boundaries:** the
+  crawl frontier's hard focus gate matched a compound query term
+  (e.g. `auto-complete`) against any URL/anchor text containing it
+  as a raw substring, so `auto-completed` (a different word once
+  stemming strips `-ed`) falsely counted as a match. The full-form
+  check is now a contiguous token-subsequence match instead of a
+  string `contains`, closing the same word-boundary gap the
+  existing fragment-based check (issue #86 follow-up) already
+  guarded against.
+
 ## [3.4.4] - 2026-08-31
 
 ### Added
