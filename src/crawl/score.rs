@@ -1,4 +1,4 @@
-//! Frontier relevance scoring — BM25-lite over anchor text + URL path
+//! Frontier relevance scoring: BM25-lite over anchor text + URL path
 //! tokens, with real Okapi IDF when a site inventory is available.
 //! The crawl spends its budget on pages that MATTER to the focus
 //! query, not on the sitemap's order.
@@ -24,7 +24,7 @@ use crate::extract::language;
 
 /// Score one candidate URL against the focus query.
 /// `anchor` = the link text where we found it ("" from sitemaps).
-/// `path` = URL path. `focus` = None means no focus — score = 0
+/// `path` = URL path. `focus` = None means no focus: score = 0
 /// and the queue falls back to sitemap/depth order.
 pub fn score_candidate(anchor: &str, path: &str, focus: Option<&str>) -> f64 {
     score_candidate_with_idf(anchor, path, focus, None)
@@ -33,7 +33,7 @@ pub fn score_candidate(anchor: &str, path: &str, focus: Option<&str>) -> f64 {
 /// Score one candidate URL against the focus query, with optional
 /// Okapi IDF from the site inventory. `anchor` = the link text
 /// where we found it ("" from sitemaps). `path` = URL path.
-/// `focus` = None means no focus — score = 0 and the queue falls
+/// `focus` = None means no focus: score = 0 and the queue falls
 /// back to sitemap/depth order. `idf` = None reproduces the
 /// pre-IDF flat weights exactly (used when no inventory exists).
 pub fn score_candidate_with_idf(
@@ -199,7 +199,7 @@ pub fn focus_match(anchor: &str, path: &str, focus: &str) -> bool {
             // string `contains` here would cross word boundaries
             // (e.g. "auto-complete" is a substring of
             // "auto-completed", a different word once "-ed" is
-            // stripped) — token-subsequence matching can't.
+            // stripped). Token-subsequence matching can't.
             if !fragments.is_empty()
                 && (contains_subsequence(&path_toks, &fragments)
                     || contains_subsequence(&anchor_toks, &fragments))
