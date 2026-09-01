@@ -562,6 +562,12 @@ impl Ghost {
         .ok_or_else(|| FetchError::ghost("no devtools ws line"))?;
 
         let cdp = cdp::Cdp::connect(&ws_url).await?;
+        // Replant the session vault: login/session cookies harvested
+        // from earlier browser runs. Best-effort by design: a walled
+        // or hostile cookie shape can never fail a launch. Without
+        // this a login survives only inside Chromium's own profile
+        // DB, which a hard kill or profile loss takes with it.
+        Self::restore_session_cookies(&cdp).await;
 
         // One page target, attached flat.
         let target = cdp
@@ -771,7 +777,54 @@ impl Ghost {
     /// plus crashpad handlers on Unix (they daemonize into
     /// their own groups and escape the group kill; on Windows
     /// the Job Object already owns them).
+    ///
+    /// Graceful first, hard kill only as the fallback. Chromium
+    /// checkpoints the cookie DB, Local Storage, session files and
+    /// preferences only on a clean exit; a bare SIGKILL discards
+    /// every write since the last checkpoint, so a login or
+    /// storage token set during the session this daemon just ran
+    /// would silently vanish at reap. The close handshake is
+    /// send-once best-effort (a dead CDP link fails it instantly),
+    /// and the whole path is time-bounded so a hung browser can
+    /// never stall the caller. Cross-platform: Browser.close is
+    /// CDP, same on Linux/macOS/Windows.
     pub async fn kill(&mut self) {
+        if self.frozen {
+            // A SIGSTOPped tree cannot answer CDP: thaw before the
+            // handshake so it can receive it (reaper kills frozen
+            // ghosts after REAP_AFTER).
+            self.proc.thaw();
+            self.frozen = false;
+        }
+        // Vault the authenticated state before the browser can
+        // take it with it: session cookies gathered now survive
+        // whatever exit shape this reap ends up being, including
+        // the hard-kill fallback below. Bounded: a wedged CDP
+        // must not stretch the reap budget.
+        if let Ok(Ok(list)) =
+            tokio::time::timeout(std::time::Duration::from_secs(3), self.cookies()).await
+        {
+            cache::store_session_cookies(&list);
+        }
+        let cdp = self.cdp.clone();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            cdp.call(None, "Browser.close", json!({})),
+        )
+        .await;
+        // Bounded wait for the clean exit. Resolves fast in every
+        // real shape: close processed (Chromium flushes then exits),
+        // CDP already dead but the child still shutting down, or an
+        // already-exited child (thaw showed a corpse). Only a truly
+        // wedged browser spends the whole budget here.
+        if tokio::time::timeout(std::time::Duration::from_secs(6), self.child.wait())
+            .await
+            .is_ok()
+        {
+            sweep_crashpad();
+            return;
+        }
+        // Hard fallback: hung browser. Last-resort only.
         self.proc.kill_group();
         sweep_crashpad();
         let _ = self.child.wait().await;
@@ -933,12 +986,92 @@ impl Ghost {
                         name: name.to_string(),
                         value: value.to_string(),
                         domain: domain.to_string(),
+                        path: c
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
                         expires_at: expires,
+                        secure: c.get("secure").and_then(Value::as_bool).unwrap_or(false),
+                        http_only: c.get("httpOnly").and_then(Value::as_bool).unwrap_or(false),
+                        same_site: c
+                            .get("sameSite")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Lax")
+                            .to_string(),
                     });
                 }
             }
         }
         Ok(out)
+    }
+
+    /// Replant the session vault into a fresh browser. Best-effort:
+    /// a hostile bucket or a vendor that rejects replanted cookies
+    /// must never fail a launch. Batch CDP call first, then the
+    /// per-cookie stable path as fallback (older/different builds
+    /// ship Storage.setCookies behind different rpc versions).
+    async fn restore_session_cookies(cdp: &cdp::Cdp) {
+        let list = crate::ghost::cache::load_session_cookies();
+        if list.is_empty() {
+            return;
+        }
+        let batch: Vec<serde_json::Value> = list
+            .iter()
+            .filter_map(|c| {
+                if c.domain.is_empty() {
+                    return None;
+                }
+                let mut v = serde_json::json!({
+                    "name": c.name,
+                    "value": c.value,
+                    "domain": c.domain,
+                    "path": if c.path.is_empty() { "/".to_string() } else { c.path.clone() },
+                    "secure": c.secure,
+                    "httpOnly": c.http_only,
+                    "sameSite": if c.same_site.is_empty() { "Lax".to_string() } else { c.same_site.clone() },
+                });
+                if let Some(e) = c.expires_at {
+                    v["expires"] = serde_json::json!(e);
+                }
+                Some(v)
+            })
+            .collect();
+        if !batch.is_empty() {
+            let ok = cdp
+                .call(
+                    None,
+                    "Storage.setCookies",
+                    serde_json::json!({ "cookies": batch }),
+                )
+                .await
+                .is_ok();
+            if ok {
+                return;
+            }
+            for c in &list {
+                if c.domain.is_empty() {
+                    continue;
+                }
+                let mut params = serde_json::json!({
+                    "name": c.name,
+                    "value": c.value,
+                    "domain": c.domain,
+                    "path": if c.path.is_empty() { "/" } else { &c.path },
+                    "secure": c.secure,
+                    "httpOnly": c.http_only,
+                    "sameSite": if c.same_site.is_empty() { "Lax" } else { &c.same_site },
+                });
+                if let Some(e) = c.expires_at {
+                    params["expires"] = serde_json::json!(e);
+                }
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    cdp.call(None, "Network.setCookie", params),
+                )
+                .await;
+            }
+        }
     }
 
     /// PNG screenshot → path (D16 byproduct).

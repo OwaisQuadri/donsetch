@@ -2337,6 +2337,7 @@ async fn ghost_escalate(
                 page.vendor.as_deref(),
                 replay_content_ok,
             );
+            crate::ghost::cache::store_session_cookies(&page.cookies);
         }
         // Don't cache challenge/wall DOMs — defense in depth alongside
         // the ghost_fetch timeout check. A challenge page that has
@@ -2595,6 +2596,7 @@ async fn fetch_with_actions(
         && !cookies.is_empty()
     {
         daemon.fetcher.import_cookies(&cookies).await;
+        crate::ghost::cache::store_session_cookies(&cookies);
         if page.vendor.is_some() {
             daemon
                 .state
