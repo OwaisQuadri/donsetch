@@ -32,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets an authenticated plain-HTTP fetch on the first request
   after a restart; plain renders harvest too, not just solve and
   actions.
+- **Cookie harvests could stall a finished fetch:** solve and
+  actions harvested with the 20s generic CDP timeout, so a wedged
+  browser added a 20s tail to a completed response. All harvest
+  sites now carry explicit 3-5s bounds and degrade to no-vault
+  instead of stalling.
+- **Crawl renders kept their cookies to themselves:** a login set
+  during a crawl's JS-render now lands in the session vault and
+  the tier-1 jar like every other tier-2 flow.
 - **Windows daemon collision on the shared profile:** two
   daemons fought Chromium's singleton and the loser died without a
   DevTools line. A create_new profile lockfile now mirrors the
