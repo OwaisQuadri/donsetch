@@ -5,7 +5,7 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.5.0] - 2026-09-01
 
 ### Added
 
@@ -23,6 +23,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while the session still came back from the vault.
 
 ### Fixed
+
+- **Xvfb startup race and misleading diagnostics (issue #95):**
+  concurrent sessions racing for the shared display could kill each
+  other's Xvfb via the stale-cleanup pkill, degrade to headful
+  off-screen, and blame the package manager. Startup is now
+  serialized through a create_new gate: one coordinator, everyone
+  else reuses the winner's display. A present binary that exits
+  early surfaces its own last stderr line, never an install hint;
+  the reporter's fake-Xvfb repro is a regression test. Stale gates
+  self-heal after 30s. `DONSETCH_XVFB_DISPLAY` overrides the display
+  number for multi-daemon hosts.
+- **Windows profile lock stealable from a live daemon (PR #97,
+  mnaza):** the lockfile mtime was set once at creation, so every
+  lock older than 10 minutes looked stale and could be deleted out
+  from under a still-running daemon: a second process would then
+  claim the same profile. The lock now heartbeats every 120s, and
+  the stale window has three heartbeats of margin; the heartbeat is
+  aborted before removal in Drop.
+- **pi extension stderr noise:** raw MCP stderr forwarding put every
+  non-fatal daemon warning into pi's TUI as a popup. Only crash or
+  fatal lines surface now; `DONSETCH_DEBUG`/`DEBUG` restores full
+  forwarding.
+
+### Changed
+
+- **Browser version reporting is the real build:** version probing
+  is cached (one spawn per binary per process, was one per ghost
+  launch), and the full dotted build now flows through resolution
+  into `doctor`, `status`, and backend descriptions instead of a
+  padded major.
+- **CloakBrowser launches keep the stealth that matters:** the
+  extension/plugin and default-app disabling flags are dropped for
+  the cloak backend only, so its C++-level plugin enumeration
+  patches stay effective; stock Chromium keeps the hardened flags.
+
 
 - **prebuilts refused to start on Ubuntu 22.04 LTS (issue #93):**
   the release legs built on a glibc 2.39 runner, so both npm and

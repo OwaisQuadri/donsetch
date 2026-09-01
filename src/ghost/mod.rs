@@ -152,8 +152,9 @@ pub fn sandbox_opt_in_enabled() -> bool {
 /// `DONSETCH_BROWSER_BACKEND=chromium|headless|cloakbrowser|auto` selects the
 /// backend. `chromium` preserves the original headful/off-screen behavior;
 /// `headless` uses the same original binary with `--headless=new` forced.
-/// Auto mode prefers a local CloakBrowser override, then system Chromium;
-/// CloakBrowser downloading is opt-in via `DONSETCH_CLOAK_AUTO_DOWNLOAD=1`.
+/// `auto` (default) is plain Chromium discovery. CloakBrowser runs only
+/// after explicit selection; downloading is additionally opt-in via
+/// `DONSETCH_CLOAK_AUTO_DOWNLOAD=1`.
 pub fn resolve_browser() -> Result<cloak::BrowserResolution, FetchError> {
     cloak::resolve_browser().map_err(FetchError::ghost)
 }
@@ -609,6 +610,15 @@ impl Ghost {
         let mut chrome_args: Vec<String> = default_chrome_args(&dir, profile);
         let force_headless = browser.backend == cloak::BrowserBackend::HeadlessChromium;
         if browser.backend == cloak::BrowserBackend::CloakBrowser {
+            // Cloak's C++ patches own the extension/plugin and
+            // default-app surfaces: its real plugin list and app
+            // behavior are the stealth guarantee. The vanilla
+            // surface flags added above delete exactly that value.
+            // Drop them for this backend only (stock chromium keeps
+            // them: enumerable-extension fingerprint class).
+            chrome_args.retain(|a| {
+                !a.starts_with("--disable-default-apps") && !a.starts_with("--disable-extensions")
+            });
             let platform = match profile.platform {
                 crate::profile::Platform::Linux => "linux",
                 crate::profile::Platform::Windows => "windows",
