@@ -564,10 +564,14 @@ impl Ghost {
         let cdp = cdp::Cdp::connect(&ws_url).await?;
         // Replant the session vault: login/session cookies harvested
         // from earlier browser runs. Best-effort by design: a walled
-        // or hostile cookie shape can never fail a launch. Without
-        // this a login survives only inside Chromium's own profile
-        // DB, which a hard kill or profile loss takes with it.
-        Self::restore_session_cookies(&cdp).await;
+        // or hostile cookie shape can never fail a launch. Only the
+        // SHARED profile gets the replay: a temp-profile ghost (a
+        // concurrent divergence run) must not borrow the canonical
+        // session, or a vendor that binds sessions to fingerprints
+        // sees the same login riding two profiles.
+        if temp_profile.is_none() {
+            Self::restore_session_cookies(&cdp).await;
+        }
 
         // One page target, attached flat.
         let target = cdp
@@ -800,9 +804,13 @@ impl Ghost {
         // take it with it: session cookies gathered now survive
         // whatever exit shape this reap ends up being, including
         // the hard-kill fallback below. Bounded: a wedged CDP
-        // must not stretch the reap budget.
-        if let Ok(Ok(list)) =
-            tokio::time::timeout(std::time::Duration::from_secs(3), self.cookies()).await
+        // must not stretch the reap budget. Only the shared
+        // profile feeds the vault: a temp-profile run is a
+        // concurrent divergence and must not stamp its cookies
+        // into the canonical session.
+        if self.temp_profile.is_none()
+            && let Ok(Ok(list)) =
+                tokio::time::timeout(std::time::Duration::from_secs(3), self.cookies()).await
         {
             cache::store_session_cookies(&list);
         }

@@ -51,6 +51,15 @@ impl Daemon {
         let ghost_mgr = GhostManager::new().await;
         let state = Arc::new(Mutex::new(GhostState::load()));
 
+        // Tier 1 starts the session with the vault too: a domain
+        // that serves without JS gets an authenticated plain-HTTP
+        // fetch on the very first request after a restart, not
+        // only after the browser has visited it once.
+        {
+            let sessions = crate::ghost::cache::load_session_cookies();
+            fetcher.import_cookies(&sessions).await;
+        }
+
         // Build ghost escalation hook for the crawl: renders
         // JS-only pages in the headless browser so SPA sites
         // yield real content instead of empty shells. Capped at
@@ -2191,6 +2200,7 @@ async fn ghost_escalate(
     }
     if !page.cookies.is_empty() {
         daemon.fetcher.import_cookies(&page.cookies).await;
+        crate::ghost::cache::store_session_cookies(&page.cookies);
     }
     // Retry tier 1 with fresh cookies — the cheap path back to
     // normal HTTP when the gate was cookie-driven.
