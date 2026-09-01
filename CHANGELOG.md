@@ -145,14 +145,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refresh can never block cleanup on exit.
 - **CloakBrowser archive extraction didn't reject rooted paths on
   Windows:** `safe_member()`'s traversal guard used `is_absolute()`,
-  which requires a drive prefix on Windows — a path like
+  which requires a drive prefix on Windows: a path like
   `/tmp/chrome` has a root but no prefix, so `is_absolute()` is
   false there even though joining it onto the extraction dir still
   escapes it (Windows path-join semantics replace everything past
   the prefix for any rooted push). Practical impact is narrow: the
   archive's hash is checked against a manifest that is itself
   Ed25519-signed and verified against a public key pinned in this
-  binary, before extraction ever starts — exploiting this needs a
+  binary, before extraction ever starts: exploiting this needs a
   compromise of that signing key or release process, not just an
   untrusted archive. Switched the
   guard to `has_root()`, which `is_absolute()` is itself defined as

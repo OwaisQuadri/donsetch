@@ -692,7 +692,8 @@ mod tests {
         let hits = parse("bing", html);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "The Rust Programming Language");
-        assert_eq!(hits[0].url, "https://doc.rust-lang.org/book/");        assert!(!hits[0].title.contains("https://"));
+        assert_eq!(hits[0].url, "https://doc.rust-lang.org/book/");
+        assert!(!hits[0].title.contains("https://"));
     }
 
     #[test]
@@ -710,6 +711,7 @@ mod tests {
         "#;
         let hits = parse("yahoo", html);
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].title, "Understanding Ownership");        assert!(!hits[0].title.contains("https://"));
+        assert_eq!(hits[0].title, "Understanding Ownership");
+        assert!(!hits[0].title.contains("https://"));
     }
 }
