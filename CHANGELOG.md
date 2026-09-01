@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   downstream shell heuristics could mark valid, compact PDF output as thin
   and suggest browser rendering. Documents already identified through PDF
   page metadata now bypass HTML-only shell classification.
+- **Tracking parameters split identical search results during URL
+  deduplication (PR #103):** normalized URL keys retained analytics
+  identifiers such as `utm_*`, `gclid`, `fbclid`, and `msclkid`, so the same
+  page could appear as distinct candidates. Deduplication now drops a
+  conservative set of known tracking keys while preserving meaningful query
+  parameters, ordering, and encoding. (changelog: document tracking-parameter deduplication)
 
 
 ## [3.5.0] - 2026-09-01
