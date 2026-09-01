@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grouped selectors followed document order and could choose the breadcrumb
   anchor before the actual heading. Bing parsing now prefers the `h2` result
   link while retaining the existing fallback selectors.
+- **Requested table-of-contents output could be replaced by page text
+  (PR #101):** content-rescue paths treated a compact outline as a failed
+  extraction on long pages. A completed TOC projection now returns directly
+  instead of falling through to body-oriented rescue.
 
 
 ## [3.5.0] - 2026-09-01
