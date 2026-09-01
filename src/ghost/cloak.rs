@@ -473,7 +473,7 @@ fn safe_member(path: &Path) -> Result<(), String> {
     // has_root(), not is_absolute(): on Windows a path can have a
     // root without a drive prefix (`\tmp\chrome`, or `/tmp/chrome`
     // once the archive's forward slashes are turned into
-    // components) and is_absolute() returns false for those —
+    // components) and is_absolute() returns false for those:
     // joining one onto the extraction dir still replaces
     // everything past the prefix, escaping it just the same. Unix
     // defines is_absolute() as has_root(), so this is a no-op
@@ -660,6 +660,9 @@ mod tests {
         // Absolute paths parse differently per OS: build one in the
         // platform's own dialect instead of asserting unix syntax on
         // Windows (a bare "/tmp/chrome" is not absolute there).
+        // Rooted without a drive prefix: the exact escape the
+        // has_root() guard closes on Windows (PR #98).
+        assert!(safe_member(Path::new("/tmp/chrome")).is_err());
         let absolute = if cfg!(windows) {
             "C:\\tmp\\chrome"
         } else {

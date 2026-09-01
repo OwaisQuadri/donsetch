@@ -5,6 +5,22 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Windows rooted-without-drive archive paths passed the cloak
+  extraction guard (PR #98, mnaza):** `safe_member` used
+  `is_absolute()`, which Windows defines as root plus drive
+  prefix: an archive entry like `/tmp/...` or `\tmp\...` has a
+  root but no prefix, reported not-absolute, and could escape the
+  extraction root when joined. The guard now uses `has_root()`
+  (identical semantics on Unix), with the regression case pinned
+  in the traversal test. The screenshot path resolver got the same
+  `has_root()` treatment so its first line of defense matches
+  reality instead of relying on the canonical-frame check further
+  down.
+
 ## [3.5.0] - 2026-09-01
 
 ### Added
