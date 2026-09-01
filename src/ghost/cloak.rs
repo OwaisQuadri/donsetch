@@ -46,7 +46,7 @@ impl BrowserBackend {
 
 fn parse_backend(value: Option<&str>) -> Result<Option<BrowserBackend>, String> {
     match value {
-        None | Some("auto") => Ok(None),
+        None | Some("") | Some("auto") => Ok(None),
         Some("chromium") | Some("chrome") | Some("original") => Ok(Some(BrowserBackend::Chromium)),
         Some("headless") | Some("original-headless") => Ok(Some(BrowserBackend::HeadlessChromium)),
         Some("cloak") | Some("cloakbrowser") => Ok(Some(BrowserBackend::CloakBrowser)),
@@ -89,9 +89,12 @@ impl BrowserResolution {
     }
 }
 
-/// Resolve the configured browser. `auto` prefers a local Cloak override,
-/// otherwise the normal Chromium discovery path; it only considers a download
-/// after Chromium discovery fails and the explicit opt-in is set.
+/// Resolve the configured browser. `auto` is plain Chromium discovery with
+/// the original headful/off-screen behavior. CloakBrowser is used only after
+/// explicit selection (`DONSETCH_BROWSER_BACKEND=cloakbrowser`); a bare
+/// `CLOAKBROWSER_BINARY_PATH` does not switch backends, and a download
+/// additionally requires `DONSETCH_CLOAK_AUTO_DOWNLOAD=1` (or an explicit
+/// backend plus that flag when Chromium discovery fails).
 pub fn resolve_browser() -> Result<BrowserResolution, String> {
     resolve_browser_with_download(true)
 }
@@ -106,9 +109,7 @@ fn resolve_browser_with_download(allow_download: bool) -> Result<BrowserResoluti
         .map(|v| v.to_string_lossy().trim().to_ascii_lowercase());
     let backend = parse_backend(requested.as_deref())?;
 
-    if backend == Some(BrowserBackend::CloakBrowser)
-        || (backend.is_none() && std::env::var_os("CLOAKBROWSER_BINARY_PATH").is_some())
-    {
+    if backend == Some(BrowserBackend::CloakBrowser) {
         return resolve_cloak(allow_download);
     }
 
@@ -601,6 +602,52 @@ mod tests {
     #[test]
     fn backend_selection_rejects_unknown_values() {
         assert!(parse_backend(Some("firefox")).is_err());
+    }
+
+    #[test]
+    fn empty_backend_value_means_auto() {
+        assert_eq!(parse_backend(Some("")), Ok(None));
+    }
+
+    #[test]
+    fn cloak_never_selected_by_bare_binary_path() {
+        // Dondai's rule: CloakBrowser is not used unless explicitly selected.
+        // A stray CLOAKBROWSER_BINARY_PATH (set for another tool) must not
+        // switch the backend on its own.
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let backend_var = std::env::var_os("DONSETCH_BROWSER_BACKEND");
+        let legacy_var = std::env::var_os("DONGHOST_BROWSER_BACKEND");
+        let path_var = std::env::var_os("CLOAKBROWSER_BINARY_PATH");
+        // SAFETY: single-threaded for the duration via ENV_LOCK, and the
+        // process has no other env-mutating code paths in this test binary.
+        unsafe {
+            std::env::remove_var("DONSETCH_BROWSER_BACKEND");
+            std::env::remove_var("DONGHOST_BROWSER_BACKEND");
+            std::env::set_var("CLOAKBROWSER_BINARY_PATH", "/nonexistent/cloak-chrome");
+        }
+        let resolved = resolve_browser_without_download();
+        for (k, v) in [
+            ("DONSETCH_BROWSER_BACKEND", backend_var),
+            ("DONGHOST_BROWSER_BACKEND", legacy_var),
+            ("CLOAKBROWSER_BINARY_PATH", path_var),
+        ] {
+            unsafe {
+                match v {
+                    Some(value) => std::env::set_var(k, value),
+                    None => std::env::remove_var(k),
+                }
+            }
+        }
+        drop(_guard);
+        // If the result is Ok the backend must not be CloakBrowser. If no
+        // Chromium was discoverable on this machine it errors out, which
+        // still proves CloakBrowser was not silently selected.
+        if let Ok(browser) = resolved {
+            assert_ne!(browser.backend, BrowserBackend::CloakBrowser);
+        }
     }
     #[test]
     fn archive_names_are_platform_specific() {

@@ -189,9 +189,10 @@ DONSETCH_BROWSER_BACKEND=cloakbrowser \
 ```
 
 Accepted aliases are `original` for `chromium` and `original-headless` for
-`headless`. `auto` is also accepted: it uses a configured local CloakBrowser
-path when present, otherwise the original Chromium backend. CloakBrowser
-downloads remain disabled unless explicitly enabled.
+`headless`. `auto` (the default) always uses the original Chromium backend
+with the shipped headful/off-screen behavior. CloakBrowser is used only
+after explicit selection via `DONSETCH_BROWSER_BACKEND=cloakbrowser`; a
+bare `CLOAKBROWSER_BINARY_PATH` on its own never switches the backend.
 
 For a local CloakBrowser build, `CLOAKBROWSER_BINARY_PATH` is used without any
 network access. Public downloads are opt-in only:

@@ -142,7 +142,7 @@ pub async fn run() {
         format!("{} browser ready, no profiles yet", cli::green("good"))
     } else {
         format!(
-            "{} browser unavailable — tier 2 unavailable",
+            "{} browser unavailable: tier 2 unavailable",
             cli::red("warn")
         )
     };

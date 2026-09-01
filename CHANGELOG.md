@@ -110,7 +110,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Selectable browser backend:** `DONSETCH_BROWSER_BACKEND` now supports
   `chromium` for the original shipped behavior, `headless` to force the
   original Chromium binary into `--headless=new`, and `cloakbrowser` for the
-  CloakBrowser backend. `auto` remains available for automatic resolution.
+  CloakBrowser backend. `auto` (the default) keeps the shipped Chromium
+  behavior; CloakBrowser runs only after explicit backend selection, and
+  downloads stay opt-in via `DONSETCH_CLOAK_AUTO_DOWNLOAD=1`.
 - **Explicit CloakBrowser backend:** DonGhost resolves Chromium versus
   CloakBrowser explicitly, accepts `CLOAKBROWSER_BINARY_PATH` without network
   access, and supports opt-in (`DONSETCH_CLOAK_AUTO_DOWNLOAD=1`) public binary

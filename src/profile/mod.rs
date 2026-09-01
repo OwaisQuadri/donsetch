@@ -449,7 +449,8 @@ pub(crate) fn probe_spawned_major() -> Option<u32> {
 }
 
 /// Parse the first full dotted Chromium version from a version banner.
-pub(crate) fn parse_version_string(line: &str) -> Option<String> {
+#[cfg(test)]
+fn parse_version_string(line: &str) -> Option<String> {
     line.split_whitespace().find_map(|token| {
         let parts: Vec<_> = token.split('.').collect();
         if parts.len() >= 4
