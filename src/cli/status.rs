@@ -1,8 +1,8 @@
-//! `donsetch status` — one-glance overview of everything.
+//! `donsetch status` : one-glance overview of everything.
 //!
 //! Shows: version + update check, keys (count + default mode),
 //! proxies (count), cache size, quick health hint. This is the
-//! "I just installed it, what's the state?" command — fast, no
+//! "I just installed it, what's the state?" command : fast, no
 //! network probes, no browser launch.
 
 use crate::cli;
@@ -16,7 +16,7 @@ const REPO: &str = "dondai44423/donsetch";
 pub async fn run() {
     cli::init();
     let current = env!("CARGO_PKG_VERSION");
-    cli::print_title(&format!("DonSeTch {current} — Status"));
+    cli::print_title(&format!("DonSeTch {current} : Status"));
     println!();
 
     // ── Version + update ────────────────────────────────────
@@ -197,7 +197,7 @@ fn format_size(bytes: u64) -> String {
 }
 
 /// Fetch the latest version from the GitHub releases.atom feed.
-/// Same logic as version.rs — no API, no rate limits.
+/// Same logic as version.rs : no API, no rate limits.
 async fn fetch_latest_version(fetcher: &Fetcher) -> Result<String, String> {
     let url = format!("https://github.com/{REPO}/releases.atom");
     let out = fetcher.fetch(&url).await.map_err(|e| e.to_string())?;

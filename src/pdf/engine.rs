@@ -7,7 +7,7 @@
 //! `load_document`, which hands plain Rust data to the caller.
 //!
 //! Coordinates are normalized to screen space (origin top-left, y grows
-//! downward, points) using the page height at load time — the rest of
+//! downward, points) using the page height at load time : the rest of
 //! the pipeline never has to think about PDF's bottom-left origin.
 
 #![allow(dead_code)]
@@ -39,7 +39,7 @@ pub struct PdfChar {
     pub angle: f32,
     /// Character index order in the content stream.
     pub order: u32,
-    /// Dingbat-font glyph (checkbox/seal art — picture, not text).
+    /// Dingbat-font glyph (checkbox/seal art : picture, not text).
     pub dingbat: bool,
     /// Canonicalized from a rotated/vertical run (rotate.rs set it).
     pub rt: bool,
@@ -186,7 +186,7 @@ fn quick_validate(bytes: &[u8]) -> Result<(), LoadError> {
     // Scan for "/Length" with direct numeric value. If claimed length
     // mismatches the actual stream bytes by more than a generous slack,
     // the document is corrupt. Indirect lengths (e.g. "/Length 5 0 R")
-    // are ignored – they are validated by PDFium itself.
+    // are ignored - they are validated by PDFium itself.
     //
     // Note: naive `endstream` search can be fooled if stream content
     // itself contains the literal `endstream`; for our minimal PDFs
@@ -213,20 +213,20 @@ fn quick_validate(bytes: &[u8]) -> Result<(), LoadError> {
             p += 1;
         }
         if start == p {
-            // no direct digits – likely indirect object; skip
+            // no direct digits - likely indirect object; skip
             pos = abs + 7;
             continue;
         }
         // If next non-space after digits is not whitespace / >> / stream,
         // it's indirect like "5 0 R". Check a few bytes ahead: if we see
-        // " 0 R" pattern, skip validation – indirect Lengths are resolved
+        // " 0 R" pattern, skip validation - indirect Lengths are resolved
         // by PDFium and must not be flagged here.
         let mut peek = p;
         while peek < bytes.len() && matches!(bytes[peek], b' ' | b'\t') {
             peek += 1;
         }
         if peek < bytes.len() && bytes[peek] == b'0' {
-            // could be indirect – be conservative and skip
+            // could be indirect - be conservative and skip
             // look for 'R' within next 5 bytes
             let end = (peek + 6).min(bytes.len());
             if bytes[peek..end].contains(&b'R') {
@@ -314,7 +314,7 @@ fn quick_validate(bytes: &[u8]) -> Result<(), LoadError> {
             // or obj? Allow up to 1000 bytes slack for
             // whitespace/comments between the offset and the keyword.
             // Incremental PDFs may have the last xref far from the
-            // first, so distance to first xref is irrelevant – check
+            // first, so distance to first xref is irrelevant - check
             // against the last xref instead.
             if let Some(xref_pos) = bytes.windows(4).rposition(|w| w == b"xref") {
                 let dist = val.abs_diff(xref_pos);
@@ -338,7 +338,7 @@ fn quick_validate(bytes: &[u8]) -> Result<(), LoadError> {
                 }
                 // Xref entry sanity: only fail if an entry offset is
                 // beyond EOF (points outside file). Missing "obj"
-                // markers are ignored – PDFium repairs them and we
+                // markers are ignored - PDFium repairs them and we
                 // must not false-positive on real-world files.
                 let mut off = xref_pos + 4;
                 // skip whitespace and possible "0 N" header line
@@ -413,7 +413,7 @@ pub fn is_dingbat_family(name: &str) -> bool {
 }
 
 /// Mark a font as monospace when its NAME says so (the descriptor's
-/// FixedPitch bit is dropped by many subset pipelines — books &
+/// FixedPitch bit is dropped by many subset pipelines : books &
 /// guides embed mono fonts without it).
 pub const DONSHEET_MONO_HINT: u32 = 0x8000_0000;
 
@@ -531,7 +531,7 @@ pub struct LoadOpts {
 /// requested via LoadOpts.
 pub struct PageInput {
     pub chars: PageChars,
-    /// Rasterized page (transient — treat as scratch, extract what you
+    /// Rasterized page (transient : treat as scratch, extract what you
     /// need during the sink call).
     pub bitmap: Option<super::pixels::PageBitmap>,
     pub widgets: Vec<super::forms::FormWidget>,
@@ -656,7 +656,7 @@ pub fn rasterize_pages(
 /// to the normalized pure-Rust model. `page_sink` receives each page's
 /// bundle (and may transform it into the caller's per-page type `P`).
 ///
-/// The PDFium lock is held for the entire walk — handles never escape.
+/// The PDFium lock is held for the entire walk : handles never escape.
 #[allow(clippy::too_many_arguments)]
 pub fn load_document<P, F>(
     bytes: &[u8],
@@ -875,7 +875,7 @@ where
                 }
             }
             // Lazy pixel rendering: text-rich pages (200+ chars,
-            // no images) don't need pixel fusion — the text layer
+            // no images) don't need pixel fusion : the text layer
             // is sufficient for reading order and garbage detection.
             // This makes 50-page arXiv papers fast (no bitmap per page).
             let char_count = chars.len();

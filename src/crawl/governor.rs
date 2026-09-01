@@ -1,6 +1,6 @@
-//! The Crawl Governor — rate-limit immune system.
+//! The Crawl Governor : rate-limit immune system.
 //!
-//! The failure mode of crawlers is not "can't fetch" — it's
+//! The failure mode of crawlers is not "can't fetch" : it's
 //! "fetched 40 pages fine, then the host put the IP in a
 //! penalty box for 30 minutes." Every crawler eventually
 //! discovers its pace; smart ones discover it on page 5,
@@ -23,14 +23,14 @@ use std::time::{Duration, Instant};
 /// Base inter-request delay per lane when healthy.
 ///
 /// v2 elastic pacing: 300ms+jitter (~225-375ms gaps) is the
-/// pace of a human skimming docs — clicking through interesting
+/// pace of a human skimming docs : clicking through interesting
 /// links fast. A normal browser page load fires 20-80 requests
 /// to one host in parallel, so single-document fetches at this
 /// pace sit far below any per-IP threshold that allows normal
 /// browsing. The governor's job is the ESCALATION ladder, not
 /// presumptive slowness: any throttle signal (429/503), latency
 /// stress (EWMA > 3× baseline), or robots crawl-delay raises
-/// the pace reactively — we discover the host's real limit from
+/// the pace reactively : we discover the host's real limit from
 /// its own signals instead of taxing every crawl with a 700ms+
 /// theater of politeness. Measured effect: small-crawl median
 /// 6.29s → ~2.5s with zero observed throttling on test hosts.
@@ -198,7 +198,7 @@ impl Governor {
 
     /// Record a healthy response: decay the rung (recovery),
     /// fold latency into EWMA, flag pre-wall stress. Also pull
-    /// the pending next_allowed FORWARD when the rung decays —
+    /// the pending next_allowed FORWARD when the rung decays :
     /// a host answering fine again shouldn't serve an old
     /// penalty window computed while it was upset.
     pub fn on_success(&self, host: &str, lane: &str, latency: Duration, dwell_ms: u64) {
@@ -238,7 +238,7 @@ impl Governor {
         // Dwell time: a human reads the page before navigating
         // to the next one. Proportional to page size (bytes/4),
         // capped at 2s. Added AFTER rung adjustments so it
-        // extends — not replaces — the paced window. This breaks
+        // extends : not replaces : the paced window. This breaks
         // the metronome fingerprint: a 50KB page gets a longer
         // gap than a 2KB page, just like real reading.
         if dwell_ms > 0 {
@@ -288,7 +288,7 @@ impl Governor {
     }
 
     /// Record a network error (timeout, reset): gentler than
-    /// throttled — one lane rung, no host box.
+    /// throttled : one lane rung, no host box.
     pub fn on_error(&self, host: &str, lane: &str) {
         let mut lanes = self
             .lanes

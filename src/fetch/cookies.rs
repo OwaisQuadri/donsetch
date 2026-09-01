@@ -164,7 +164,7 @@ impl CookieJar {
                             }
                             // RFC 6265 §5.3 step 6: reject Domain
                             // attributes that are not the request
-                            // host or a parent of it — otherwise any
+                            // host or a parent of it : otherwise any
                             // origin can pin cookies on any victim
                             // domain (cookie tossing).
                             if normalized == normalized_host

@@ -4,10 +4,10 @@
 //! Format: { default, providers: [{ name, keys: [{ key, state, ts }] }] }
 //!
 //! Key states:
-//!   active         — ready to use
-//!   rate_limited   — 429, auto-recovers after RATE_LIMIT_COOLDOWN
-//!   credit_depleted — 402, stays dead until user resets
-//!   invalid        — 401/403, permanently dead (wrong/revoked key)
+//!   active         : ready to use
+//!   rate_limited   : 429, auto-recovers after RATE_LIMIT_COOLDOWN
+//!   credit_depleted : 402, stays dead until user resets
+//!   invalid        : 401/403, permanently dead (wrong/revoked key)
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -121,7 +121,7 @@ impl ByokConfig {
             Ok(json) => {
                 let tmp = path.with_extension("tmp");
                 // Create the tmp file 0600 BEFORE writing key
-                // material — the old write-then-chmod path left a
+                // material : the old write-then-chmod path left a
                 // world-readable file behind on any crash.
                 let write_ok = {
                     #[cfg(unix)]
@@ -295,7 +295,7 @@ impl ByokConfig {
     /// Pick the next usable (provider, key) pair, skipping
     /// any pairs in the `skip` set. This is used to avoid
     /// retrying keys that had transient errors (5xx, network)
-    /// in the same search call — without it, pick_key() would
+    /// in the same search call : without it, pick_key() would
     /// return the same active key again, infinite loop.
     pub fn pick_key_skipping(
         &mut self,
@@ -557,7 +557,7 @@ pub fn render_list(cfg: &ByokConfig) {
     );
     println!("  {}  {}", cli::dim("default:"), cli::green(&cfg.default));
 
-    // Warn if no usable keys remain — search will fall back
+    // Warn if no usable keys remain : search will fall back
     // to the local keyless engine.
     let any_active = cfg
         .providers
@@ -567,7 +567,7 @@ pub fn render_list(cfg: &ByokConfig) {
     if !any_active {
         println!();
         println!(
-            "  {} all keys are dead — search falls back to local engine",
+            "  {} all keys are dead : search falls back to local engine",
             cli::yellow("\u{26A0}")
         );
         println!(
@@ -781,7 +781,7 @@ mod tests {
         cfg.add_key("tavily", "tvly-key1");
         cfg.add_key("exa", "exa-key1");
         cfg.set_default("local");
-        // pick_key_skipping should still find keys — "local" is
+        // pick_key_skipping should still find keys : "local" is
         // not a provider, so it's skipped and providers are tried
         // in config order.
         let skip = std::collections::HashSet::new();
@@ -796,7 +796,7 @@ mod tests {
         cfg.add_key("tavily", "tvly-key1");
         cfg.add_key("exa", "exa-key1");
         cfg.set_default("local");
-        // Remove exa — default should stay "local".
+        // Remove exa : default should stay "local".
         cfg.remove_keys("exa", None);
         assert_eq!(cfg.default, "local");
         assert!(cfg.is_local_default());

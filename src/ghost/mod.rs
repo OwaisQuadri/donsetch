@@ -1,11 +1,11 @@
-//! DonGhost — the tier-2 ghost browser.
+//! DonGhost : the tier-2 ghost browser.
 //!
 //! A real Chromium, driven over raw CDP with zero
 //! automation flags and zero script injection. Exists for
 //! exactly two jobs DonShadow can't do:
-//!   SOLVE  — pass a JS challenge, harvest clearance
+//!   SOLVE  : pass a JS challenge, harvest clearance
 //!            cookies, hand them to tier 1.
-//!   RENDER — execute a JS-rendered page, hand the DOM
+//!   RENDER : execute a JS-rendered page, hand the DOM
 //!            HTML to DonSift.
 //!
 //! Lifecycle: lazy launch → freeze (SIGSTOP the process
@@ -36,7 +36,7 @@ use crate::error::FetchError;
 use crate::profile::BrowserProfile;
 
 /// Idle this long → SIGSTOP the process group.
-/// (Daemon lifecycle — used by the MCP idle reaper.)
+/// (Daemon lifecycle : used by the MCP idle reaper.)
 pub const FREEZE_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
 /// Frozen this long → reap entirely.
 pub const REAP_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
@@ -59,7 +59,7 @@ pub const WINLOCK_STALE_AFTER: std::time::Duration = std::time::Duration::from_s
 /// dead. Without a heartbeat, a second daemon starting mid-call
 /// would see the lockfile's un-refreshed creation-time mtime,
 /// mistake the still-live holder for an abandoned one, and steal
-/// the profile out from under it — exactly the collision this lock
+/// the profile out from under it : exactly the collision this lock
 /// exists to prevent.
 #[cfg(windows)]
 pub const WINLOCK_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -394,7 +394,7 @@ fn known_chrome_paths() -> Vec<PathBuf> {
         // %LOCALAPPDATA%\ms-playwright\chromium-*\chrome-win64\chrome.exe
         paths.extend(playwright_candidates());
     }
-    // Edge: Chromium-based and pre-installed on Windows — often the
+    // Edge: Chromium-based and pre-installed on Windows : often the
     // ONLY CDP-capable browser on a stock box. Its directory is never
     // on PATH, so it must be probed explicitly.
     if let Some(pfx86) = std::env::var_os("ProgramFiles(x86)") {
@@ -408,7 +408,7 @@ fn known_chrome_paths() -> Vec<PathBuf> {
 
 #[cfg(windows)]
 fn chrome_names() -> &'static [&'static str] {
-    // Edge is Chromium-based, pre-installed on Windows — often
+    // Edge is Chromium-based, pre-installed on Windows : often
     // the only available CDP-capable browser.
     &["chrome.exe", "msedge.exe", "chromium.exe"]
 }
@@ -438,7 +438,7 @@ fn is_executable(path: &std::path::Path) -> bool {
 }
 
 impl Ghost {
-    /// Launch cold. Headful Chrome on Xvfb (Linux) — the real
+    /// Launch cold. Headful Chrome on Xvfb (Linux) : the real
     /// stealth mode. Headful has real WebGL, real window.chrome,
     /// real screen geometry. Headless is detectable; headful on
     /// a virtual display is not. Falls back to `--headless=new`
@@ -451,7 +451,7 @@ impl Ghost {
         profile: &BrowserProfile,
         display: Option<&str>,
     ) -> Result<Self, FetchError> {
-        // Unused on macOS/Windows (Xvfb is Linux-only) — clippy -Dwarnings errors on it.
+        // Unused on macOS/Windows (Xvfb is Linux-only) : clippy -Dwarnings errors on it.
         #[cfg(not(linux_like))]
         let _ = display;
 
@@ -530,7 +530,7 @@ impl Ghost {
                             Err(_) => {
                                 // Sub-second precision (a full Duration
                                 // compare, not `.as_secs() > 600` as
-                                // before) — the boundary shifts by
+                                // before) : the boundary shifts by
                                 // under a second either way, moot at a
                                 // 10-minute threshold.
                                 let stale = std::fs::metadata(&lock_path)
@@ -574,7 +574,7 @@ impl Ghost {
         #[cfg(windows)]
         let winlock: Option<std::path::PathBuf> = _winlock_opt;
         // Keep the winlock's mtime fresh for as long as this Ghost
-        // holds it — see WINLOCK_HEARTBEAT's doc comment for why
+        // holds it : see WINLOCK_HEARTBEAT's doc comment for why
         // this can't just rely on WINLOCK_STALE_AFTER alone.
         #[cfg(windows)]
         let winlock_heartbeat = winlock.clone().map(|p| {
@@ -618,11 +618,11 @@ impl Ghost {
         }
         // Opt-in escape hatch for environments where sandbox is
         // unavailable (e.g. containers without user-namespace support
-        // or AppArmor restrictions). Never enabled by default —
+        // or AppArmor restrictions). Never enabled by default :
         // requires explicit env var and prints a loud warning.
         if std::env::var_os("DONGHOST_NO_SANDBOX").is_some_and(|v| v == "1") {
             eprintln!(
-                "[ghost] WARNING: DONGHOST_NO_SANDBOX=1 — launching Chrome with --no-sandbox and --disable-setuid-sandbox. This disables the Chromium sandbox and is UNSAFE. Only use in isolated containers."
+                "[ghost] WARNING: DONGHOST_NO_SANDBOX=1 : launching Chrome with --no-sandbox and --disable-setuid-sandbox. This disables the Chromium sandbox and is UNSAFE. Only use in isolated containers."
             );
             chrome_args.push("--no-sandbox".into());
             chrome_args.push("--disable-setuid-sandbox".into());
@@ -647,7 +647,7 @@ impl Ghost {
         //
         // macOS / Windows: no Xvfb, but headful Chrome with the
         //   window positioned at -32000,-32000 (far off-screen).
-        //   The window exists, has real GPU, real WebGL — but the
+        //   The window exists, has real GPU, real WebGL : but the
         //   user never sees it. This is strictly better than
         //   --headless=new, which uses SwiftShader (detectable).
         //
@@ -789,7 +789,7 @@ impl Ghost {
         }
         cdp.call(Some(&session), "Page.enable", json!({})).await?;
 
-        // Stealth JS injection — runs before any page script.
+        // Stealth JS injection : runs before any page script.
         // Patches the most common automation detection vectors:
         // - navigator.webdriver: belt-and-suspenders alongside
         //   --disable-blink-features=AutomationControlled
@@ -799,10 +799,10 @@ impl Ghost {
         //   on Linux miss the chrome.runtime object)
         // - navigator.permissions.query: patch notifications to
         //   return 'denied' (real Chrome default, automation
-        //   returns 'prompt' — a known detection vector)
+        //   returns 'prompt' : a known detection vector)
         // - navigator.plugins: ensure length > 0 (headful Chrome
         //   should have plugins, but some setups don't)
-        // Minimal patches — over-patching is itself detectable.
+        // Minimal patches : over-patching is itself detectable.
         let _ = cdp
             .call(
                 Some(&session),
@@ -865,7 +865,7 @@ impl Ghost {
             .await?;
         }
 
-        // Session warmup — Debian 12 chromium 151 (observed): the
+        // Session warmup : Debian 12 chromium 151 (observed): the
         // FIRST session-scoped navigation's CDP response is deferred
         // until a one-time ~26s barrier after browser start (the
         // DevTools-visible face of this build's slow first-paint
@@ -878,7 +878,7 @@ impl Ghost {
         // HTTPS URL: about:blank and data: URLs do not trip (and so
         // do not absorb) the barrier. It flows through the same
         // Fetch request guard as any other navigation, so the SSRF
-        // posture is unchanged. Failures are tolerated — healthy
+        // posture is unchanged. Failures are tolerated : healthy
         // Chrome answers instantly and pays only a trivial page load.
         {
             let _ = cdp
@@ -945,7 +945,7 @@ impl Ghost {
         self.frozen
     }
 
-    /// Reap the browser entirely — the whole process tree,
+    /// Reap the browser entirely : the whole process tree,
     /// plus crashpad handlers on Unix (they daemonize into
     /// their own groups and escape the group kill; on Windows
     /// the Job Object already owns them).
@@ -1019,7 +1019,7 @@ impl Ghost {
     /// until the generic 20s CDP timeout, blocking tier-2 entirely.
     ///
     /// Fix: dispatch `Page.navigate` but do NOT block on its
-    /// response. Poll `current_url()` instead — it uses the
+    /// response. Poll `current_url()` instead : it uses the
     /// browser-level `Target.getTargetInfo`, which is routed
     /// separately from the page session and still returns the
     /// advancing URL. This succeeds on both healthy Chrome (fast
@@ -1044,7 +1044,7 @@ impl Ghost {
         //
         // Debian 12 chromium 151 (observed in testing): session-
         // scoped CDP responses queue behind a settling navigation
-        // — Page.navigate's response can lag tens of seconds on
+        // : Page.navigate's response can lag tens of seconds on
         // trivial pages while the URL advance itself is <1s
         // (browser-level Target.getTargetInfo answers in ms), and
         // every subsequent session-scoped call shares that queue.
@@ -1092,7 +1092,7 @@ impl Ghost {
         }
     }
 
-    /// Current document HTML. DOM domain only — no Runtime,
+    /// Current document HTML. DOM domain only : no Runtime,
     /// no script execution.
     ///
     /// Both calls are bounded to 3s per leg: session-scoped CDP
@@ -1124,7 +1124,7 @@ impl Ghost {
             .to_string())
     }
 
-    /// Current page URL (targetInfo — no Runtime).
+    /// Current page URL (targetInfo : no Runtime).
     pub async fn current_url(&self) -> Result<String, FetchError> {
         Ok(self
             .cdp
@@ -1327,7 +1327,7 @@ impl Ghost {
     }
 
     /// Move the mouse to (x, y) along the human path WITHOUT
-    /// pressing — hover. Reuses the click pre-move geometry.
+    /// pressing : hover. Reuses the click pre-move geometry.
     pub async fn hover(&self, x: f64, y: f64) -> Result<(), FetchError> {
         let mut rng = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1361,7 +1361,7 @@ impl Ghost {
     }
 
     /// Evaluate a JS expression and return the decoded JSON
-    /// result. Caller-invoked Runtime — the same discipline as
+    /// result. Caller-invoked Runtime : the same discipline as
     /// the Turnstile geometry lookups in ops.rs: Runtime.enable
     /// is NEVER called, so the DataDome console trap stays
     /// defused. Expression must be an arrow-IIFE returning a
@@ -1460,7 +1460,7 @@ impl Ghost {
         Ok(v.as_bool().unwrap_or(false))
     }
 
-    /// Type text into the focused element with a human cadence —
+    /// Type text into the focused element with a human cadence :
     /// log-normal-ish inter-key gaps with rare think-pauses.
     /// CDP key events are isTrusted=true; the cadence is the
     /// behavioral cover (a metronome of exactly-50ms keys is the
@@ -1524,7 +1524,7 @@ impl Ghost {
     pub async fn press_key(&self, key: &str) -> Result<(), FetchError> {
         let Some((code, vk)) = named_key(key) else {
             return Err(FetchError::ghost(format!(
-                "unknown key {key:?} — supported: Enter, Tab, Escape, Backspace, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, PageUp, PageDown, Home, End"
+                "unknown key {key:?} : supported: Enter, Tab, Escape, Backspace, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, PageUp, PageDown, Home, End"
             )));
         };
         for ty in ["rawKeyDown", "keyUp"] {
@@ -1547,7 +1547,7 @@ impl Ghost {
     }
 
     /// Scroll with trusted mouse-wheel events at the viewport
-    /// center. `to`: "top" | "bottom" | "down" — or a pixel
+    /// center. `to`: "top" | "bottom" | "down" : or a pixel
     /// amount via scroll_px. Bottom keeps scrolling until the
     /// page stops growing (lazy-load friendly), bounded.
     pub async fn scroll(&self, to: &str, px: i64) -> Result<(), FetchError> {
@@ -1567,7 +1567,7 @@ impl Ghost {
                     if y == last_y {
                         stall += 1;
                         if stall >= 2 {
-                            break; // page stopped moving — done
+                            break; // page stopped moving : done
                         }
                     } else {
                         stall = 0;
@@ -1634,7 +1634,7 @@ impl Drop for Ghost {
         // Child was dropped without killing Chrome.
         self.proc.kill_group();
         sweep_crashpad();
-        // Stop refreshing the winlock's mtime before removing it —
+        // Stop refreshing the winlock's mtime before removing it :
         // same abort-then-cleanup order as fetch_guard above.
         #[cfg(windows)]
         if let Some(handle) = self.winlock_heartbeat.take() {
@@ -1832,7 +1832,7 @@ mod sandbox_tests {
     }
 
     // Exercises the chrome-linux64/chrome-linux suffixes returned by
-    // playwright_entry_suffixes() on this cfg — see that function's
+    // playwright_entry_suffixes() on this cfg : see that function's
     // own gate. Fails on macOS/Windows if run there since those
     // platforms probe a different suffix set entirely.
     #[cfg(not(any(target_os = "macos", windows)))]

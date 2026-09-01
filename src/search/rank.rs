@@ -1,4 +1,4 @@
-//! rank.rs — weighted RRF + consensus + relevance +
+//! rank.rs : weighted RRF + consensus + relevance +
 //! priors + diversity. This is where naive-merge
 //! metasearch (SearXNG) loses.
 
@@ -121,13 +121,13 @@ fn relevance(query: &str, docs: &[(String, String)]) -> Vec<f64> {
         .collect()
 }
 
-/// Collapse every whitespace run — newlines included — into a
+/// Collapse every whitespace run : newlines included : into a
 /// single space. HTML-scraped engines already do this in
 /// `engines::text`, but JSON-sourced hits arrive raw: MDN
 /// summaries, BYOK provider snippets (Exa returns page text),
 /// GitHub descriptions. A newline inside a snippet breaks the
 /// three-space indent of the markdown list, so normalize once
-/// here — the one point every source flows through — rather
+/// here : the one point every source flows through : rather
 /// than per parser, where the next engine would miss it.
 fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -145,7 +145,7 @@ pub fn merge(
     // Group by normalized URL. RRF mass is counted
     // PER INDEX FAMILY, not per engine: brave/bing/ddg
     // share the Bing tail index, so a farm ranked by all
-    // three is ONE opinion — the family dedup already
+    // three is ONE opinion : the family dedup already
     // applied to the consensus bonus now applies to the
     // mass itself. Otherwise correlated engines let
     // keyword-stuffed farms out-mass independent sources
@@ -157,7 +157,7 @@ pub fn merge(
     for (engine, hits) in per_engine {
         let base = trust.get(engine).copied().unwrap_or(1.0);
         // Wikipedia on a conceptual query is not a "vertical
-        // hint" — it IS the canonical encyclopedia engine.
+        // hint" : it IS the canonical encyclopedia engine.
         // Full weight keeps farm consensus from outranking
         // the explainer humans actually trust.
         let authoritative = conceptual && engine == "wikipedia";
@@ -166,7 +166,7 @@ pub fn merge(
         } else {
             base
         };
-        // Verticals are independent sources — each is its
+        // Verticals are independent sources : each is its
         // OWN family (deduping arxiv against scholar or
         // github against hn would destroy their mass).
         let family = if is_vertical(engine) {
@@ -200,7 +200,7 @@ pub fn merge(
                 entry.snippet = hit_snippet.clone();
             }
             // Best title: breadcrumbs ("a › b › c") and
-            // URL-echoes are longer than real titles — keep
+            // URL-echoes are longer than real titles : keep
             // the shortest CLEAN candidate.
             let bad = |t: &str| t.contains(" › ") || t.starts_with("http") || t.len() < 3;
             if !bad(&hit_title) && (bad(&entry.title) || hit_title.len() < entry.title.len()) {
@@ -223,7 +223,7 @@ pub fn merge(
 
     // Consensus multiplier: engines are independent-ish
     // (Brave/Mojeek truly independent; Bing/DDG share an
-    // index — count shared-index sources at half weight).
+    // index : count shared-index sources at half weight).
     for r in &mut results {
         let engines: Vec<&str> = r.sources.iter().map(|(e, _)| e.as_str()).collect();
         let mut independent: Vec<&str> = Vec::new();
@@ -261,10 +261,10 @@ pub fn merge(
     // by keyword match; general engines not surfacing it means
     // it's probably tangential. Applied after BM25+prior so
     // it affects the pre-rerank score that feeds the rerank
-    // blend — the 60% RRF weight keeps it below consensus
+    // blend : the 60% RRF weight keeps it below consensus
     // results even when the cross-encoder scores it high.
     // The `authoritative` flag already gives full RRF weight
-    // (no VERTICAL_WEIGHT reduction) — that's enough of a
+    // (no VERTICAL_WEIGHT reduction) : that's enough of a
     // boost. The penalty for zero general-engine corroboration
     // applies equally: if no SERP found the Wikipedia article,
     // it's probably the wrong one (e.g. Linearizability for
@@ -286,13 +286,13 @@ pub fn merge(
     // version numbers like "5.5" when the query says "5.2").
     // Sits after rerank so the cross-encoder can still rescue
     // semantically-relevant results, but coverage gaps can't
-    // be fully overridden — "binary tree" ≠ "B-tree" no matter
+    // be fully overridden : "binary tree" ≠ "B-tree" no matter
     // how similar the cross-encoder thinks they are.
     crate::search::coverage::penalize(query, &mut results);
 
     // Authority decisiveness: the post-rerank top-placement
     // layer. Recall puts the right result IN the list; this
-    // puts it FIRST — query-aware official domains, title
+    // puts it FIRST : query-aware official domains, title
     // entity coverage, news freshness. Multipliers act on the
     // final blended score (post min-max normalization), so
     // they self-limit: near-zero semantic misses stay down.
@@ -318,7 +318,7 @@ pub fn merge(
             .collect::<Vec<_>>()
             .join(" ");
         if !title_key.is_empty() && !seen_titles.insert(title_key) {
-            continue; // duplicate title — syndicated content
+            continue; // duplicate title : syndicated content
         }
         deduped.push(r);
     }
@@ -363,7 +363,7 @@ fn engine_family(engine: &str) -> &str {
 /// Weak-results honesty: no cross-family consensus on the
 /// TOP result and a shallow merge means the answer is not
 /// trustworthy. `merged_total` is the PRE-truncation count
-/// — a max_results=4 call must not read as shallow when
+/// : a max_results=4 call must not read as shallow when
 /// fifty results merged underneath it.
 pub fn is_weak(results: &[Merged], merged_total: usize) -> bool {
     if results.is_empty() {
@@ -375,7 +375,7 @@ pub fn is_weak(results: &[Merged], merged_total: usize) -> bool {
     families.len() < 2 && merged_total < 8
 }
 
-/// Total results before truncation — feed to is_weak.
+/// Total results before truncation : feed to is_weak.
 pub fn merged_total(per_engine: &[(String, Vec<super::engines::Hit>)]) -> usize {
     let mut keys = std::collections::HashSet::new();
     for (_, hits) in per_engine {

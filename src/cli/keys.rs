@@ -105,7 +105,7 @@ fn cmd_add(args: &[String]) {
         }
     } else if is_new {
         println!(
-            "  {} added key to {} (stacked — {} providers now configured)",
+            "  {} added key to {} (stacked : {} providers now configured)",
             green("\u{2713}"),
             bold(&provider),
             cfg.providers.len()
@@ -127,12 +127,12 @@ fn cmd_add(args: &[String]) {
         println!();
         if cfg.is_local_default() {
             println!(
-                "  {} keys configured — local is default, BYOK is fallback.",
+                "  {} keys configured : local is default, BYOK is fallback.",
                 dim("note:")
             );
         } else {
             println!(
-                "  {} BYOK search is now active — local search is bypassed.",
+                "  {} BYOK search is now active : local search is bypassed.",
                 dim("note:")
             );
         }
@@ -181,12 +181,12 @@ fn cmd_remove(args: &[String]) {
             );
         } else {
             println!(
-                "  {} removed all keys for {} — no providers remaining",
+                "  {} removed all keys for {} : no providers remaining",
                 green("\u{2713}"),
                 bold(&provider)
             );
             println!(
-                "  {} BYOK search disabled — local search is active.",
+                "  {} BYOK search disabled : local search is active.",
                 dim("note:")
             );
         }
@@ -224,7 +224,7 @@ fn cmd_default(args: &[String]) {
 
     let mut cfg = ByokConfig::load();
 
-    // "local" bypasses the is_configured() check — you can set
+    // "local" bypasses the is_configured() check : you can set
     // local as default even with keys configured (to test local
     // search without removing keys), or with no keys (no-op).
     if provider != "local" && !cfg.is_configured() {
@@ -237,13 +237,13 @@ fn cmd_default(args: &[String]) {
         if provider == "local" {
             if cfg.is_configured() {
                 println!(
-                    "  {} default set to {} — local search first, BYOK fallback",
+                    "  {} default set to {} : local search first, BYOK fallback",
                     green("\u{2713}"),
                     bold("local")
                 );
             } else {
                 println!(
-                    "  {} default set to {} (no BYOK keys — local is already active)",
+                    "  {} default set to {} (no BYOK keys : local is already active)",
                     green("\u{2713}"),
                     bold("local")
                 );
@@ -393,7 +393,7 @@ fn cmd_import(args: &[String]) {
         );
     } else {
         println!(
-            "  {} no keys in import — local search is active",
+            "  {} no keys in import : local search is active",
             dim("note:")
         );
     }
@@ -424,7 +424,7 @@ fn cmd_clear() {
 fn print_help() {
     println!(
         "{}",
-        bold("donsetch keys — BYOK search provider management")
+        bold("donsetch keys : BYOK search provider management")
     );
     println!();
     println!("  {}", bold("Commands:"));
@@ -468,7 +468,7 @@ fn print_help() {
     println!("    serpapi    SerpApi Google SERP (serpapi.com)");
     println!("    bravesearch Brave Search API (api.search.brave.com)");
     println!("    tinyfish   TinyFish Search (api.search.tinyfish.ai)");
-    println!("    parallel   Parallel AI Search (api.parallel.ai) — fast mode");
+    println!("    parallel   Parallel AI Search (api.parallel.ai) : fast mode");
     println!("    brightdata Bright Data SERP API (api.brightdata.com)");
     println!("    {}", dim("    aliases: bd = brightdata"));
     println!();

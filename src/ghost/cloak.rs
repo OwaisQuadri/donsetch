@@ -71,15 +71,15 @@ pub struct BrowserResolution {
     pub backend: BrowserBackend,
     pub path: PathBuf,
     pub source: &'static str,
-    pub version: Option<u32>,
+    /// Full dotted build (e.g. 151.0.7922.108), probed once per
+    /// binary per process. Keeps doctor/status/describe on one
+    /// honest number.
+    pub version: Option<String>,
 }
 
 impl BrowserResolution {
     pub fn describe(&self) -> String {
-        let version = self
-            .version
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "unknown".into());
+        let version = self.version.clone().unwrap_or_else(|| "unknown".into());
         format!(
             "backend={} source={} path={} version={version}",
             self.backend.as_str(),
@@ -134,7 +134,7 @@ fn resolve_browser_with_download(allow_download: bool) -> Result<BrowserResoluti
 
 fn resolve_chromium(backend: BrowserBackend) -> Result<BrowserResolution, String> {
     let path = super::chromium_binary()?;
-    let version = crate::profile::probe_version_at_path(&path);
+    let version = crate::profile::probe_version_string_at_path(&path);
     let source = if std::env::var_os("DONGHOST_CHROME").is_some() {
         "explicit"
     } else {
@@ -149,26 +149,25 @@ fn resolve_chromium(backend: BrowserBackend) -> Result<BrowserResolution, String
 }
 
 fn resolve_cloak(allow_download: bool) -> Result<BrowserResolution, String> {
-    let (path, source, version) = if let Some(raw) = std::env::var_os("CLOAKBROWSER_BINARY_PATH") {
+    let (path, source) = if let Some(raw) = std::env::var_os("CLOAKBROWSER_BINARY_PATH") {
         let path = PathBuf::from(raw);
         validate_binary(&path)
             .map_err(|e| format!("CLOAKBROWSER_BINARY_PATH `{}` invalid: {e}", path.display()))?;
-        let version = crate::profile::probe_version_at_path(&path.to_string_lossy());
-        (path, "explicit", version)
+        (path, "explicit")
     } else {
         let requested = requested_version()?;
-        let version = version_major(&requested).ok();
         if let Some(path) = cached_binary(&requested) {
-            (path, "cache", version)
+            (path, "cache")
         } else if !allow_download || !auto_download_enabled() {
             return Err(format!(
                 "CloakBrowser binary not found; set CLOAKBROWSER_BINARY_PATH or {}=1 to download the signed public binary",
                 CLOAK_DOWNLOAD_OPT_IN
             ));
         } else {
-            (install_public_binary()?, "downloaded", version)
+            (install_public_binary()?, "downloaded")
         }
     };
+    let version = crate::profile::probe_version_string_at_path(&path.to_string_lossy());
     Ok(BrowserResolution {
         backend: BrowserBackend::CloakBrowser,
         path,
@@ -229,14 +228,6 @@ fn valid_version(value: &str) -> bool {
         && value
             .split('.')
             .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
-}
-
-fn version_major(version: &str) -> Result<u32, String> {
-    version
-        .split('.')
-        .next()
-        .and_then(|major| major.parse::<u32>().ok())
-        .ok_or_else(|| "download version has no numeric major".to_string())
 }
 
 fn cache_dir() -> PathBuf {

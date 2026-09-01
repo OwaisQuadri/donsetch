@@ -1,8 +1,8 @@
-//! Xvfb virtual display manager — the stealth foundation.
+//! Xvfb virtual display manager : the stealth foundation.
 //!
 //! Headless Chrome (`--headless=new`) is detectable: SwiftShader
 //! WebGL, missing `window.chrome`, screen dimension mismatches.
-//! Headful Chrome on a virtual X display is NOT — it has real
+//! Headful Chrome on a virtual X display is NOT : it has real
 //! GPU compositing, real window objects, real screen geometry.
 //!
 //! This module starts one Xvfb at daemon init and keeps it warm.
@@ -138,7 +138,7 @@ mod linux {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
             // Remove stale socket + lock files. A dead Xvfb leaves
-            // these behind — a new Xvfb can't bind to a stale socket,
+            // these behind : a new Xvfb can't bind to a stale socket,
             // and our readiness check would see the stale file and
             // think Xvfb is ready when it isn't.
             let sock_path = format!("/tmp/.X11-unix/X{}", display_num());
@@ -200,7 +200,7 @@ mod linux {
                     }
                     // Check if Xvfb died early.
                     if child.try_wait().ok().flatten().is_some() {
-                        return; // process exited — will fail below
+                        return; // process exited : will fail below
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
@@ -210,7 +210,7 @@ mod linux {
             if ready.is_err() || !std::fs::exists(&sock_path).unwrap_or(false) {
                 // Gather the real reason: Xvfb's own final words beat
                 // any generic guess (bad driver, missing xkb dir,
-                // permission problem — none of which are fixed by
+                // permission problem : none of which are fixed by
                 // "install Xvfb").
                 let tail = read_stderr_tail(&mut child).await.unwrap_or_default();
                 let _ = std::fs::remove_file(lock_path());
@@ -251,7 +251,7 @@ mod linux {
         pub fn is_alive(&mut self) -> bool {
             match &mut self.child {
                 Some(c) => c.try_wait().map(|r| r.is_none()).unwrap_or(false),
-                None => true, // borrowed — assume alive
+                None => true, // borrowed : assume alive
             }
         }
     }

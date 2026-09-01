@@ -1,4 +1,4 @@
-//! Bring Your Own Keys (BYOK) — provider search with key rotation.
+//! Bring Your Own Keys (BYOK) : provider search with key rotation.
 //!
 //! When the user configures API keys for external search providers
 //! (Tavily, Exa, Serper.dev, SerpApi, Brave Search API, TinyFish,
@@ -46,13 +46,13 @@ type ProviderResult = Result<(Vec<SearchHit>, u64), KeyError>;
 /// Each variant maps to a key state transition.
 #[derive(Debug)]
 enum KeyError {
-    /// 401/403 — key is wrong or revoked. Permanent death.
+    /// 401/403 : key is wrong or revoked. Permanent death.
     InvalidKey,
-    /// 402 or billing message — no credits. Dead until user resets.
+    /// 402 or billing message : no credits. Dead until user resets.
     CreditDepleted,
-    /// 429 — too many requests. Auto-recovers after cooldown.
+    /// 429 : too many requests. Auto-recovers after cooldown.
     RateLimited,
-    /// 5xx — server problem. No state change, try next key.
+    /// 5xx : server problem. No state change, try next key.
     ServerError(String),
     /// Network timeout/refused. No state change, try next key.
     NetworkError,
@@ -158,7 +158,7 @@ impl ByokSearcher {
         let mut last_error = String::new();
         // Track keys we've already tried this call. Transient
         // errors (5xx, network) don't change key state, so
-        // pick_key() would return the same key again — infinite
+        // pick_key() would return the same key again : infinite
         // loop without this set.
         let mut tried: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
@@ -187,7 +187,7 @@ impl ByokSearcher {
             match result {
                 Ok((hits, ms)) => {
                     if hits.is_empty() {
-                        // Provider returned 0 results — don't
+                        // Provider returned 0 results : don't
                         // return an empty list to the agent.
                         // Try the next provider, and if all are
                         // empty, fall back to local search.
@@ -235,7 +235,7 @@ impl ByokSearcher {
                     }
 
                     // Transient errors (server, network) don't mark
-                    // the key dead — but we still try the next key
+                    // the key dead : but we still try the next key
                     // to avoid getting stuck on a flaky provider.
                     // The loop continues to pick_key().
                 }

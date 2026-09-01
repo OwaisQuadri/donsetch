@@ -47,7 +47,7 @@ pub fn screenshots_dir() -> PathBuf {
 pub fn resolve_screenshot_path(input: &str) -> Result<PathBuf, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err("screenshot path is empty — provide a filename".into());
+        return Err("screenshot path is empty : provide a filename".into());
     }
     let p = PathBuf::from(trimmed);
 

@@ -1,4 +1,4 @@
-//! SERP parsers — one per engine, scraper-based, with
+//! SERP parsers : one per engine, scraper-based, with
 //! layered fallbacks. A parse that yields <3 hits counts
 //! as engine failure (the health system hears about it).
 
@@ -29,7 +29,7 @@ fn sel(css: &str) -> Selector {
 }
 
 /// DDG html endpoint wraps links in /l/?uddg= redirects.
-/// Decode to the real URL — consensus matching depends on
+/// Decode to the real URL : consensus matching depends on
 /// every engine reporting the SAME url.
 fn decode_ddg(href: &str) -> String {
     if let Some((_, q)) = href.split_once("uddg=") {
@@ -79,7 +79,7 @@ fn decode_bing(href: &str) -> String {
         }
     }
     // If this is a bing.com/ck/a stub we couldn't decode,
-    // return empty — the is_serp_url filter and the
+    // return empty : the is_serp_url filter and the
     // starts_with("http") check will drop it.
     if href.contains("bing.com/ck/a") {
         return String::new();
@@ -115,7 +115,7 @@ fn base64url_decode(s: &str) -> Option<String> {
 }
 
 /// Check if a URL is a search engine results page (SERP).
-/// These should never appear as search results — they leak
+/// These should never appear as search results : they leak
 /// through parsers when redirect decoding fails or when
 /// broad selectors match pagination/header links.
 fn is_serp_url(url: &str) -> bool {
@@ -151,7 +151,7 @@ pub fn parse(engine: &str, html: &str) -> Vec<Hit> {
         "brave" => parse_brave(&doc),
         "google" => parse_google(&doc),
         "bing" => parse_bing(&doc),
-        // DDG primary is now lite — the html endpoint serves a
+        // DDG primary is now lite : the html endpoint serves a
         // CAPTCHA challenge to proxy IPs.  parse_ddg (html parser)
         // is kept for the ddg_html fallback engine.
         "ddg" => parse_ddg_lite(&doc),
@@ -178,7 +178,7 @@ pub fn parse(engine: &str, html: &str) -> Vec<Hit> {
 }
 
 /// Google URL unwrapping: Google wraps result URLs in
-/// /url?q=REAL_URL&sa=U&ved=... — extract and decode the
+/// /url?q=REAL_URL&sa=U&ved=... : extract and decode the
 /// real URL. Direct http(s) links pass through unchanged.
 fn decode_google(href: &str) -> String {
     if let Some((_, q)) = href.split_once("/url?") {
@@ -418,7 +418,7 @@ fn parse_ddg(doc: &Html) -> Vec<Hit> {
 }
 
 fn parse_ddg_lite(doc: &Html) -> Vec<Hit> {
-    // Lite: a table — result-link anchors then snippet tds.
+    // Lite: a table : result-link anchors then snippet tds.
     let links = sel("a.result-link");
     let snippets = sel("td.result-snippet");
     let snippet_vec: Vec<String> = doc.select(&snippets).map(text).collect();
@@ -472,7 +472,7 @@ fn parse_mojeek(doc: &Html) -> Vec<Hit> {
 
 /// Yahoo redirect links: r.search.yahoo.com/...RU=REAL_URL
 /// or r.search.yahoo.com/..._url=REAL_URL. Decode to the
-/// real URL — consensus matching depends on every engine
+/// real URL : consensus matching depends on every engine
 /// reporting the SAME url.
 ///
 /// Yahoo embeds tracking parameters (/RK=, /RS=, /RV=) inside
@@ -501,7 +501,7 @@ fn decode_yahoo(href: &str) -> String {
             return strip_yahoo_tracking(&decoded);
         }
     }
-    // Can't decode — return empty so the parser's `starts_with("http")`
+    // Can't decode : return empty so the parser's `starts_with("http")`
     // check filters it out. Previously this returned the raw Yahoo
     // SERP URL, which leaked search.yahoo.com/search?p=... as a result.
     String::new()

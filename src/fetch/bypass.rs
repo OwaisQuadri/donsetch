@@ -10,7 +10,7 @@
 
 //! Billing: Bright Data bills only successful unlocks (standard zone
 //! mode). Failures are free. Guardrails: daily cap, hard timeout,
-//! and an explicit off switch — so no silent spend.
+//! and an explicit off switch : so no silent spend.
 
 //! Env:
 //!   DONSETCH_BYPASS=0                      disable bypass entirely

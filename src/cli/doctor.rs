@@ -1,4 +1,4 @@
-//! `donsetch --doctor` — health check with auto-fix.
+//! `donsetch --doctor` : health check with auto-fix.
 //!
 //! Checks, each with a clean pass/warn/fail icon and a dim
 //! detail string. Auto-fixes what it can (creates missing dirs,
@@ -85,14 +85,14 @@ pub async fn run() {
             cli::check_fail(
                 "Fetcher init",
                 &e.to_string(),
-                "TLS initialization failed — check system CA certificates",
+                "TLS initialization failed : check system CA certificates",
             );
             f += 1;
             collected.push((
                 "Fetcher init".into(),
                 "fail".into(),
                 e.to_string(),
-                "TLS initialization failed — check system CA certificates".into(),
+                "TLS initialization failed : check system CA certificates".into(),
             ));
             None
         }
@@ -253,14 +253,14 @@ async fn check_tls(fetcher: &Fetcher) -> CheckResult {
             CheckResult::Pass("TLS connection successful".into())
         }
         Ok(_) => {
-            // External service returned non-200 — skip silently.
+            // External service returned non-200 : skip silently.
             // The TLS stack works (we connected); the fingerprint
             // check service is just unavailable. Don't alarm users.
             CheckResult::Pass("TLS connected (fingerprint service unavailable)".into())
         }
         Err(_) => {
             // Can't reach the fingerprint service at all. Still
-            // don't warn — the service may be down or blocked,
+            // don't warn : the service may be down or blocked,
             // and the TLS stack is fine (we use it for every fetch).
             CheckResult::Pass("TLS stack active (fingerprint service unreachable)".into())
         }
@@ -271,10 +271,15 @@ async fn check_chrome() -> CheckResult {
     let result = tokio::task::spawn_blocking(crate::ghost::resolve_browser).await;
     match result {
         Ok(Ok(browser)) => {
-            let version = browser
-                .version
-                .map(|v| format!("{v}.0.0.0"))
-                .unwrap_or_else(|| "unknown version".into());
+            // Full dotted build, not just the major: probing the
+            // exact binary we resolved (backed identical for
+            // chromium and cloak) costs one spawn and is the only
+            // number that matters for debugging detection issues.
+            // A padded "151.0.0.0" was honest but vague.
+            let version =
+                crate::profile::probe_version_string_at_path(&browser.path.to_string_lossy())
+                    .or_else(|| browser.version.clone())
+                    .unwrap_or_else(|| "unknown version".into());
             CheckResult::Pass(format!(
                 "{} at {} ({}; {})",
                 version,
@@ -296,10 +301,10 @@ async fn check_chrome() -> CheckResult {
 }
 
 /// Xvfb: the Linux headful-stealth prerequisite. Missing Xvfb
-/// does NOT disable tier 2 — ghost falls back to off-screen
+/// does NOT disable tier 2 : ghost falls back to off-screen
 /// headful on the real display (a window may flash briefly) or
 /// headless on Wayland-only sessions (more detectable). Warn,
-/// not fail — but the user deserves to know.
+/// not fail : but the user deserves to know.
 fn check_xvfb() -> CheckResult {
     #[cfg(linux_like)]
     {
@@ -308,12 +313,12 @@ fn check_xvfb() -> CheckResult {
             return CheckResult::Pass("not needed (headless backend)".into());
         }
         // Termux (Android) has no X11 by default. Xvfb is not
-        // needed — Ghost uses --headless=new mode.
+        // needed : Ghost uses --headless=new mode.
         if std::env::var_os("PREFIX")
             .map(|p| p.to_string_lossy().contains("com.termux"))
             .unwrap_or(false)
         {
-            return CheckResult::Pass("not needed (Termux — headless mode)".into());
+            return CheckResult::Pass("not needed (Termux : headless mode)".into());
         }
         if crate::ghost::xvfb::is_available() {
             // :99 socket alive = daemon's Xvfb will be reused.
@@ -325,7 +330,7 @@ fn check_xvfb() -> CheckResult {
             })
         } else {
             CheckResult::Warn(
-                "not installed — tier 2 falls back to headless/off-screen (less stealthy)".into(),
+                "not installed : tier 2 falls back to headless/off-screen (less stealthy)".into(),
             )
         }
     }
@@ -412,7 +417,7 @@ async fn check_browser_launch() -> CheckResult {
     }
 }
 
-/// ghost-state.json holds cookies — it must not be
+/// ghost-state.json holds cookies : it must not be
 /// world-readable.
 fn check_state_permissions() -> CheckResult {
     #[cfg(unix)]
@@ -535,7 +540,7 @@ fn check_cache_dir() -> CheckResult {
             let _ = std::fs::remove_file(&test);
             let total = dir_size(&dir);
 
-            // Breakdown by component — helps users understand what's
+            // Breakdown by component : helps users understand what's
             // using space. The ghost-profile (Chrome's own cache) is
             // typically the largest; ghost-state.json (self-improvement)
             // should be < 1MB after cookie filtering.
@@ -681,7 +686,7 @@ fn check_onnx() -> CheckResult {
             let has_avx = crate::cpu::has_avx();
             if !has_avx {
                 return CheckResult::Warn(
-                    "CPU lacks AVX — OCR and rerank disabled (all other features work)".into(),
+                    "CPU lacks AVX : OCR and rerank disabled (all other features work)".into(),
                 );
             }
             // Check shared library presence.
@@ -698,7 +703,7 @@ fn check_onnx() -> CheckResult {
                 CheckResult::Pass("AVX detected, shared library present".into())
             } else {
                 CheckResult::Warn(
-                    "AVX detected but shared library missing — reinstall donsetch".into(),
+                    "AVX detected but shared library missing : reinstall donsetch".into(),
                 )
             }
         }

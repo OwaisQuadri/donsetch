@@ -3,7 +3,7 @@
 //! Every fetch is both an action AND an observation. This store
 //! learns from each outcome and routes the next fetch more
 //! efficiently. The more you use DonSeTch, the less it escalates
-//! to tier 2 — domains it has already solved get warm tier-1
+//! to tier 2 : domains it has already solved get warm tier-1
 //! with their clearance cookies injected, and cookies are kept
 //! alive by write-back from successful warm fetches.
 //!
@@ -99,7 +99,7 @@ pub struct DomainProfile {
     pub warm_fail_streak: u32,
     /// Tier-1 replay of ghost-harvested cookies VERIFIED working
     /// (the post-solve tier-1 retry came back ContentOk). Warm
-    /// routing is only offered after a verified replay — cookies
+    /// routing is only offered after a verified replay : cookies
     /// that the vendor binds to the browser fingerprint never
     /// earn a doomed tier-1 roundtrip.
     #[serde(default)]
@@ -111,13 +111,13 @@ pub struct DomainProfile {
 pub enum RouteDecision {
     /// No profile (first visit) or easy domain. Tier 1 cold.
     Cold,
-    /// Known to need tier 2, cookies still fresh — inject them.
+    /// Known to need tier 2, cookies still fresh : inject them.
     Warm(Vec<CookieRecord>),
     /// Known to need tier 2, cookies stale, cold-check recent.
-    /// Skip the doomed tier-1 round-trip — go straight to solve.
+    /// Skip the doomed tier-1 round-trip : go straight to solve.
     SkipToSolve,
     /// Known to need tier 2, but hasn't been cold-checked in a
-    /// while — try tier 1 cold. The wall may have been removed.
+    /// while : try tier 1 cold. The wall may have been removed.
     RecheckCold,
 }
 
@@ -143,25 +143,25 @@ pub struct RenderCache {
 const TTL_CAP: u64 = 2 * 60 * 60; // 2 hours
 
 /// If a domain is known to need tier 2, periodically try tier 1
-/// cold anyway — the wall may have been removed.
+/// cold anyway : the wall may have been removed.
 const RECHECK_INTERVAL: u64 = 24 * 60 * 60; // 24 hours
 
 /// SPA renders stale after 5 min.
 const RENDER_TTL: u64 = 5 * 60;
 
-/// Max render cache entries. Each stores full HTML — cap to
+/// Max render cache entries. Each stores full HTML : cap to
 /// prevent unbounded growth. LRU eviction when full.
 /// 20 entries × ~200KB avg = ~4MB max contribution to state file.
 const RENDER_MAX: usize = 20;
 
 /// Max HTML size to cache per render (200KB). Larger pages are
-/// rendered but not persisted — they'd bloat the state file.
+/// rendered but not persisted : they'd bloat the state file.
 const RENDER_MAX_HTML: usize = 200_000;
 
 // ────────────────────────── cookie filtering ──────────────────────────
 
 /// Cookie name prefixes that bot-wall vendors use for clearance/
-/// verification cookies. We only persist these — tracking cookies
+/// verification cookies. We only persist these : tracking cookies
 /// (_ga, TDID, demdex, etc.) bloat the state file with no benefit.
 const CLEARANCE_PREFIXES: &[&str] = &[
     "cf_",         // Cloudflare: cf_clearance, cf_chl, cf_ob_setup
@@ -439,7 +439,7 @@ pub fn cookies_fresh_at(profile: &DomainProfile, now: u64) -> bool {
     }
 
     // Server-set expiry: the earliest-expiring cookie is the
-    // weakest link — if it's past, the batch is stale.
+    // weakest link : if it's past, the batch is stale.
     if let Some(exp) = profile.cookies.iter().filter_map(|c| c.expires_at).min()
         && now >= exp
     {
@@ -472,7 +472,7 @@ impl GhostState {
             if let Ok(mut state) = serde_json::from_str::<Self>(&s) {
                 // One-time migration: prune tracking cookies from
                 // existing profiles. Pre-filter versions stored ALL
-                // cookies (_ga, TDID, demdex, etc.) — some domains
+                // cookies (_ga, TDID, demdex, etc.) : some domains
                 // had 1000+ cookies, making the state file 100MB+.
                 // After pruning, only clearance cookies remain.
                 let mut changed = false;
@@ -494,7 +494,7 @@ impl GhostState {
                     }
                 }
                 // One-time un-poisoning (v2.2): pre-v2.2 code marked
-                // domains needs_tier2 on ANY non-content verdict —
+                // domains needs_tier2 on ANY non-content verdict :
                 // a single 404 or rate-limit forced ghost on every
                 // later fetch. Profiles that never recorded an
                 // actual solve carry no wall knowledge: reset them
@@ -508,7 +508,7 @@ impl GhostState {
                     }
                     // Pre-v2.2 warm-stale learning clamped lifetimes
                     // to as low as 1s (single-failure, unfloored).
-                    // Those observations are garbage — drop them.
+                    // Those observations are garbage : drop them.
                     if profile.observed_lifetime.is_some_and(|o| o < 120) {
                         profile.observed_lifetime = None;
                         changed = true;
@@ -577,9 +577,9 @@ impl GhostState {
     }
 
     /// Atomic save: write to temp, rename. Survives crashes.
-    /// No-op in test builds — tests exercise the pure decision
+    /// No-op in test builds : tests exercise the pure decision
     /// and freshness logic without disk side effects.
-    /// No-op when DONSEEK_NO_DISK_STATE is set — keeps in-memory
+    /// No-op when DONSEEK_NO_DISK_STATE is set : keeps in-memory
     /// state for the session but doesn't persist to disk.
     pub fn save(&self) {
         #[cfg(not(test))]
@@ -620,7 +620,7 @@ impl GhostState {
                 };
                 if write_ok && let Err(e) = std::fs::rename(&tmp, &p) {
                     // e.g. antivirus lock on Windows: harvested
-                    // clearance cookies are lost this session — say
+                    // clearance cookies are lost this session : say
                     // so instead of silently re-burning ghost solves.
                     eprintln!("[ghost] cookie vault persist failed: {e}");
                 }
@@ -647,7 +647,7 @@ impl GhostState {
             // Warm only when cookies are fresh AND tier-1 replay has
             // actually been verified to work for this domain. Vendors
             // that bind clearance to the browser fingerprint reject
-            // tier-1 replay forever — serving Warm there just burns a
+            // tier-1 replay forever : serving Warm there just burns a
             // doomed roundtrip before every solve.
             if cookies_fresh_at(profile, n) && profile.replay_ok {
                 return RouteDecision::Warm(profile.cookies.clone());
@@ -656,10 +656,10 @@ impl GhostState {
             if n - profile.last_cold_check > RECHECK_INTERVAL {
                 return RouteDecision::RecheckCold;
             }
-            // Skip the doomed tier-1 attempt — go straight to solve.
+            // Skip the doomed tier-1 attempt : go straight to solve.
             return RouteDecision::SkipToSolve;
         }
-        // Easy domain — tier 1 cold.
+        // Easy domain : tier 1 cold.
         RouteDecision::Cold
     }
 
@@ -667,7 +667,7 @@ impl GhostState {
 
     /// A fetch completed with a non-challenge, non-content verdict
     /// (404, rate-limit, paywall, auth wall). These say nothing
-    /// about walls or cookies — they must not poison the route.
+    /// about walls or cookies : they must not poison the route.
     /// The counters move and the cold-check clock restarts (this
     /// WAS a tier-1 answer; the 24h recheck cadence follows it).
     pub fn record_fetch(&mut self, host: &str) {
@@ -679,7 +679,7 @@ impl GhostState {
     }
 
     /// Tier 1 cold succeeded. If the domain was previously known
-    /// to need tier 2, the wall is gone — clear the flag.
+    /// to need tier 2, the wall is gone : clear the flag.
     pub fn record_cold_ok(&mut self, host: &str) {
         let n = now();
         let p = self.profiles.entry(host.to_string()).or_default();
@@ -689,7 +689,7 @@ impl GhostState {
         if p.needs_tier2 {
             p.needs_tier2 = false;
             p.wall_vendor = None;
-            // Cookies from a previous solve are stale context — clear.
+            // Cookies from a previous solve are stale context : clear.
             p.cookies.clear();
             p.observed_lifetime = None;
             p.replay_ok = false;
@@ -697,9 +697,9 @@ impl GhostState {
         self.save();
     }
 
-    /// Tier 1 cold was walled — domain needs tier 2.
+    /// Tier 1 cold was walled : domain needs tier 2.
     /// (Callers: ONLY on an actual Challenge verdict. A 404 or a
-    /// rate-limit is not a wall — it must not force ghost mode.)
+    /// rate-limit is not a wall : it must not force ghost mode.)
     pub fn record_cold_walled(&mut self, host: &str, vendor: Option<&str>) {
         let n = now();
         let p = self.profiles.entry(host.to_string()).or_default();
@@ -713,10 +713,10 @@ impl GhostState {
         self.save();
     }
 
-    /// Tier 1 warm succeeded — cookies are still valid. Refresh
+    /// Tier 1 warm succeeded : cookies are still valid. Refresh
     /// the cookie vault from the response's Set-Cookie headers
     /// so the on-disk cookies stay as fresh as the server's latest
-    /// response. Only clearance cookies are merged — tracking
+    /// response. Only clearance cookies are merged : tracking
     /// cookies are filtered out to keep the state file compact.
     pub fn record_warm_ok(&mut self, host: &str, refreshed: &[CookieRecord]) {
         let n = now();
@@ -725,7 +725,7 @@ impl GhostState {
         p.warm_ok_count += 1;
         p.warm_fail_streak = 0;
         p.last_refreshed = n;
-        // Merge: replace by (name, domain), add new ones — but only
+        // Merge: replace by (name, domain), add new ones : but only
         // clearance cookies.
         for new in filter_clearance(refreshed) {
             if let Some(existing) = p
@@ -741,13 +741,13 @@ impl GhostState {
         self.save();
     }
 
-    /// Tier 1 warm was walled — cookies went stale. Learn the
+    /// Tier 1 warm was walled : cookies went stale. Learn the
     /// real lifetime: it's at most `now - last_solved`. Next
     /// time, trust the observation over the server's claim and
     /// re-solve before the cookies expire.
     ///
     /// Dampened: the FIRST warm failure keeps the cookies (vendor
-    /// challenges rotate; one wall is often transient — the next
+    /// challenges rotate; one wall is often transient : the next
     /// warm fetch gets to prove the cookies still live). Only a
     /// SECOND consecutive failure clears the vault and learns the
     /// lifetime. The learned lifetime is floored at 120s: a fluke
@@ -765,7 +765,7 @@ impl GhostState {
                 Some(prev) => prev.max(120).min(elapsed),
                 None => elapsed,
             });
-            // Cookies are dead — clear so route_for doesn't serve them.
+            // Cookies are dead : clear so route_for doesn't serve them.
             p.cookies.clear();
             p.last_refreshed = 0;
             p.replay_ok = false;
@@ -773,13 +773,13 @@ impl GhostState {
         self.save();
     }
 
-    /// Tier 2 solved the wall — store fresh cookies with real
-    /// expiry captured from CDP. Only clearance cookies are kept —
+    /// Tier 2 solved the wall : store fresh cookies with real
+    /// expiry captured from CDP. Only clearance cookies are kept :
     /// tracking cookies bloat the state file with no benefit.
     ///
     /// `replay_ok` records whether tier-1 replay of these cookies
     /// was VERIFIED (post-solve tier-1 fetch came back with real
-    /// content). Warm routing is gated on it — see route_for.
+    /// content). Warm routing is gated on it : see route_for.
     pub fn record_solved(
         &mut self,
         host: &str,
@@ -796,7 +796,7 @@ impl GhostState {
         p.needs_tier2 = true;
         p.warm_fail_streak = 0;
         p.replay_ok = replay_ok;
-        // A fresh solve restarts the lifetime observation window —
+        // A fresh solve restarts the lifetime observation window :
         // stale pre-fix lifetimes (the 1-second clamp bug) must
         // not outlive the solve that invalidated them.
         if p.observed_lifetime.is_some_and(|o| o < 120) {
@@ -811,7 +811,7 @@ impl GhostState {
     // ── Render cache (unchanged from v1) ──
 
     pub fn record_render(&mut self, url: &str, html: &str) {
-        // Skip oversized pages — caching 1MB+ HTML bloats the state
+        // Skip oversized pages : caching 1MB+ HTML bloats the state
         // file with no benefit (large pages are usually not SPAs
         // that need render caching).
         if html.len() > RENDER_MAX_HTML {
@@ -1002,7 +1002,7 @@ mod tests {
 
     #[test]
     fn fresh_ttl_cap() {
-        // No server expiry, no observed lifetime — cap at 2h.
+        // No server expiry, no observed lifetime : cap at 2h.
         let p = DomainProfile {
             cookies: vec![cr("s", "x", ".a.com", None)],
             last_solved: 1000,
@@ -1088,7 +1088,7 @@ mod tests {
                 needs_tier2: true,
                 cookies: vec![cr("cf", "x", ".hard.com", Some(100))],
                 last_solved: 100,
-                last_cold_check: 1, // very old — > RECHECK_INTERVAL
+                last_cold_check: 1, // very old : > RECHECK_INTERVAL
                 ..Default::default()
             },
         );
@@ -1292,7 +1292,7 @@ mod tests {
         s.record_warm_stale("so.com");
         let p = &s.profiles["so.com"];
         let learned = p.observed_lifetime.expect("learned");
-        assert!(learned >= 120, "got {learned} — must be floored");
+        assert!(learned >= 120, "got {learned} : must be floored");
     }
 
     #[test]
@@ -1363,7 +1363,7 @@ mod tests {
 
     #[test]
     fn legacy_migration() {
-        // Verify LegacyState deserialization — the production
+        // Verify LegacyState deserialization : the production
         // load() uses this to migrate old state files.
         let legacy_json = serde_json::json!({
             "solved": {

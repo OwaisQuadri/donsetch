@@ -1,4 +1,4 @@
-//! GhostManager — the daemon's browser lifecycle brain.
+//! GhostManager : the daemon's browser lifecycle brain.
 //!
 //! One browser, one tab, one job at a time. Frozen
 //! between jobs (0 CPU), reaped after 10 min frozen,
@@ -6,7 +6,7 @@
 //!
 //! On Linux, an Xvfb virtual display is started at init
 //! and kept warm. Ghost launches headful Chrome on this
-//! display — the stealth path that passes Cloudflare/DataDome.
+//! display : the stealth path that passes Cloudflare/DataDome.
 
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -77,7 +77,7 @@ impl Drop for GhostGuard {
 fn xvfb_missing_hint() -> Option<&'static str> {
     if cfg!(target_os = "linux") {
         Some(
-            "[ghost] Xvfb not found — install with `apt install xvfb` or `pacman -S xorg-server-xvfb` (or your distro's equivalent) for invisible headful Chrome on Linux",
+            "[ghost] Xvfb not found : install with `apt install xvfb` or `pacman -S xorg-server-xvfb` (or your distro's equivalent) for invisible headful Chrome on Linux",
         )
     } else {
         None
