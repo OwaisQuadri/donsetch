@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gets an authenticated plain-HTTP fetch on the first request
   after a restart; plain renders harvest too, not just solve and
   actions.
+- **Windows daemon collision on the shared profile:** two
+  daemons fought Chromium's singleton and the loser died without a
+  DevTools line. A create_new profile lockfile now mirrors the
+  unix flock: the loser diverges to a temp profile, and a stale
+  lock left by a dead daemon recovers by age (10 min).
 - **Browser fingerprint noise:** the ghost no longer runs Chrome
   default apps or extensions, killing the surprise-component
   detection class (enumerable extensions, default-app traffic)

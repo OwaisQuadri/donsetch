@@ -64,6 +64,12 @@ pub struct Ghost {
     /// `fetch::guards::ensure_url_safe` before it hits the network.
     /// Aborted in Drop so it cannot leak after Chrome is reaped.
     fetch_guard: Option<tokio::task::JoinHandle<()>>,
+
+    /// Windows profile-exclusion lockfile path (unix uses flock
+    /// instead). Removed in Drop so the next daemon can take the
+    /// shared profile.
+    #[cfg(windows)]
+    winlock: Option<std::path::PathBuf>,
 }
 
 /// Persistent profile dir: aged state passes challenges
@@ -424,30 +430,86 @@ impl Ghost {
             .open(&lockfile)
             .ok();
 
-        let (dir, temp_profile) = match profile_lock.as_ref() {
-            Some(f) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::io::AsRawFd;
-                    let got = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-                    if got == 0 {
-                        (profile_dir(), None)
-                    } else {
-                        let t = std::env::temp_dir()
-                            .join(format!("donsetch-ghost-{}", std::process::id()));
-                        (t.clone(), Some(t))
+        #[cfg(windows)]
+        let mut winlock: Option<std::path::PathBuf> = None;
+        let (dir, temp_profile) = {
+            let (dir_s, temp_s, _wl) = match profile_lock.as_ref() {
+                Some(f) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::io::AsRawFd;
+                        let got =
+                            unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+                        if got == 0 {
+                            (profile_dir(), None, None::<std::path::PathBuf>)
+                        } else {
+                            let t = std::env::temp_dir()
+                                .join(format!("donsetch-ghost-{}", std::process::id()));
+                            (t.clone(), Some(t), None::<std::path::PathBuf>)
+                        }
+                    }
+                    #[cfg(windows)]
+                    {
+                        // Windows flock(2) doppelgänger: an exclusive
+                        // create_new lockfile. Two daemons on the shared
+                        // profile fight Chromium's own singleton, and
+                        // the loser gets no DevTools line at all; the
+                        // lockfile loser diverges to a temp profile
+                        // exactly like the unix flock path. A stale
+                        // file (dead daemon left it) is recovered by
+                        // age: >10min old is taken as orphaned.
+                        let _ = f;
+                        let lock_path = crate::paths::cache_dir().join("ghost-profile.winlock");
+                        let take_lock = |p: &std::path::Path| {
+                            std::fs::OpenOptions::new()
+                                .write(true)
+                                .create_new(true)
+                                .open(p)
+                        };
+                        match take_lock(&lock_path) {
+                            Ok(_f) => (profile_dir(), None, Some(lock_path)),
+                            Err(_) => {
+                                let stale = std::fs::metadata(&lock_path)
+                                    .and_then(|m| m.modified())
+                                    .ok()
+                                    .and_then(|t| t.elapsed().ok())
+                                    .is_some_and(|e| e.as_secs() > 600);
+                                if stale {
+                                    let _ = std::fs::remove_file(&lock_path);
+                                    if take_lock(&lock_path).is_ok() {
+                                        (profile_dir(), None, Some(lock_path))
+                                    } else {
+                                        let t = std::env::temp_dir()
+                                            .join(format!("donsetch-ghost-{}", std::process::id()));
+                                        (t.clone(), Some(t), None::<std::path::PathBuf>)
+                                    }
+                                } else {
+                                    let t = std::env::temp_dir()
+                                        .join(format!("donsetch-ghost-{}", std::process::id()));
+                                    (t.clone(), Some(t), None::<std::path::PathBuf>)
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(not(any(unix, windows)))]
+                    {
+                        let _ = f;
+                        (profile_dir(), None, None::<std::path::PathBuf>)
                     }
                 }
-                #[cfg(not(unix))]
-                {
-                    let _ = f;
-                    (profile_dir(), None)
+                None => {
+                    let t =
+                        std::env::temp_dir().join(format!("donsetch-ghost-{}", std::process::id()));
+                    (t.clone(), Some(t), None::<std::path::PathBuf>)
                 }
+            };
+            let dir = dir_s;
+            let temp_profile = temp_s;
+            #[cfg(windows)]
+            {
+                winlock = _wl;
             }
-            None => {
-                let t = std::env::temp_dir().join(format!("donsetch-ghost-{}", std::process::id()));
-                (t.clone(), Some(t))
-            }
+            (dir, temp_profile)
         };
 
         std::fs::create_dir_all(&dir)
@@ -743,6 +805,8 @@ impl Ghost {
             profile_lock,
             temp_profile,
             fetch_guard: Some(fetch_guard),
+            #[cfg(windows)]
+            winlock,
         })
     }
 
@@ -1471,6 +1535,12 @@ impl Drop for Ghost {
         // Child was dropped without killing Chrome.
         self.proc.kill_group();
         sweep_crashpad();
+        // Release the Windows profile-exclusion lockfile (unix
+        // flock releases itself when this handle closes).
+        #[cfg(windows)]
+        if let Some(p) = &self.winlock {
+            let _ = std::fs::remove_file(p);
+        }
         // Clean up temp profile if we used one.
         if let Some(temp) = &self.temp_profile {
             let _ = std::fs::remove_dir_all(temp);
