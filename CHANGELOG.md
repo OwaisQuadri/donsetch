@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page could appear as distinct candidates. Deduplication now drops a
   conservative set of known tracking keys while preserving meaningful query
   parameters, ordering, and encoding. (changelog: document tracking-parameter deduplication)
+- **Yahoo result titles included breadcrumb and URL text (PR #100):**
+  result cards can wrap their breadcrumb and heading in one outer link, so
+  reading the whole anchor produced noisy titles. Yahoo parsing now extracts
+  the dedicated heading first and keeps the outer text as a fallback.
 
 
 ## [3.5.0] - 2026-09-01
