@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Session vault discipline:** replay and reap-harvest ride ONLY
+  the shared profile, so a temp-profile divergence run can never
+  borrow or overwrite the canonical session (a vendor that binds
+  sessions to fingerprints would see one login on two profiles);
+  tier 1 boots with the vault at daemon start, so a JS-less domain
+  gets an authenticated plain-HTTP fetch on the first request
+  after a restart; plain renders harvest too, not just solve and
+  actions.
+- **Browser fingerprint noise:** the ghost no longer runs Chrome
+  default apps or extensions, killing the surprise-component
+  detection class (enumerable extensions, default-app traffic)
+  without touching the browser surface sites actually check.
 - **Ghost reap used to discard the session's newest cookies (and
   could eat a login).** The reap SIGKILLed the process group with
   no shutdown handshake, so the cookie checkpoint Chromium only
