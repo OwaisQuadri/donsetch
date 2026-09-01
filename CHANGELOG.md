@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **prebuilts refused to start on Ubuntu 22.04 LTS (issue #93):**
+  the release legs built on a glibc 2.39 runner, so both npm and
+  GitHub release binaries demanded `GLIBC_2.39` and every 22.04
+  host died at first launch. Linux legs now build on
+  ubuntu-22.04 (glibc 2.35 baseline), pinned to lld (bfd 2.38
+  chokes on rustc 1.98's `.crel` relocations), and a new hard CI
+  gate objdumps the built bytes and fails the release if any
+  symbol exceeds 2.35: a regressed glibc leak now dies in CI,
+  not on a user's VM. README carries the verified build recipe.
 - **Session vault discipline:** replay and reap-harvest ride ONLY
   the shared profile, so a temp-profile divergence run can never
   borrow or overwrite the canonical session (a vendor that binds

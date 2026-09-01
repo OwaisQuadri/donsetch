@@ -99,8 +99,9 @@ npm install -g donsetch
 ```
 
 Downloads the prebuilt binary for your platform from GitHub Releases
-with SHA256 verification. No build tools needed. Linux x86_64 works on
-any glibc >= 2.27 distro (Ubuntu 18.04+).
+with SHA256 verification. No build tools needed. Linux prebuilts run
+on glibc >= 2.35 (Ubuntu 22.04 LTS and newer; the bundled ONNX lib
+keeps its own 2.27 floor, so OCR/rerank work on every one of those).
 
 **Homebrew (macOS/Linux):**
 
@@ -134,6 +135,20 @@ git clone https://github.com/dondai44423/donsetch.git
 cd donsetch
 cargo build --release --features ocr,rerank,http
 ```
+
+On Ubuntu 22.04 (or any distro with bfd 2.38): build with lld
+explicitly. bfd cannot parse the `.crel` relocations rustc 1.86+
+emits for aarch64, and the default link dies with "unknown
+architecture" errors:
+
+```bash
+sudo apt-get install -y cmake build-essential pkg-config libclang-dev clang lld nasm golang-go
+RUSTFLAGS="-C link-arg=-fuse-ld=lld" cargo build --release
+```
+
+Same recipe works for the release-binaries-for-22.04 case: any
+prebuilt from v3.4.5+ is built on the Ubuntu 22.04 baseline and
+runs there directly.
 
 First build compiles BoringSSL (~2 min), cached after. Chromium is
 optional (tier 2 escalation); DonSeTch auto-discovers system Chromium,
