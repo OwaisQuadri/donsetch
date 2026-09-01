@@ -158,8 +158,32 @@ function startServer(): Promise<void> {
       }
     });
 
+    // The daemon writes diagnostics to stderr (Xvfb warnings,
+    // fallback notices, ghost telemetry). Pi's TUI surfaces stderr
+    // as user-facing output: raw forwarding used to pop non-fatal
+    // warnings up (issue #95). Gate it:
+    // - DONSETCH_DEBUG / DEBUG set: forward everything (dev mode)
+    // - otherwise only crash/fatal lines survive; the rest is
+    //   tool-level information the caller already has
+    const debugMode =
+      (process.env.DONSETCH_DEBUG ?? "").length > 0 ||
+      (process.env.DEBUG ?? "").length > 0;
+    const FATAL_RE = /fatal|panic|crash|SIGSEGV|abort|OOM|out of memory/i;
+    let stderrTail = "";
     proc.stderr?.on("data", (chunk: Buffer) => {
-      process.stderr.write(chunk);
+      if (debugMode) {
+        process.stderr.write(chunk);
+        return;
+      }
+      stderrTail = (stderrTail + chunk.toString()).slice(-2048);
+      const lines = stderrTail.split("\n");
+      stderrTail = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed && FATAL_RE.test(trimmed)) {
+          process.stderr.write(`[donsetch] ${trimmed}\n`);
+        }
+      }
     });
 
     proc.on("error", (err) => {
