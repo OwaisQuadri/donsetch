@@ -126,7 +126,12 @@ pub async fn solve(
             // for extra certainty; hold for 2 polls.
             clear_streak += 1;
             if clear_streak >= 2 {
-                let cookies = ghost.cookies().await.unwrap_or_default();
+                let cookies =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), ghost.cookies())
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .unwrap_or_default();
                 ghost.touch();
                 return Ok(SolveOutcome::Solved(SolveResult {
                     cookies,
@@ -451,7 +456,12 @@ pub async fn ghost_fetch(
         if substantive && stable && past_min {
             settle_streak += 1;
             if settle_streak >= 2 {
-                let cookies = ghost.cookies().await.unwrap_or_default();
+                let cookies =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), ghost.cookies())
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .unwrap_or_default();
                 ghost.touch();
                 return Ok(GhostPage {
                     html,
@@ -534,7 +544,11 @@ pub async fn ghost_fetch(
             took: start.elapsed(),
         });
     }
-    let cookies = ghost.cookies().await.unwrap_or_default();
+    let cookies = tokio::time::timeout(std::time::Duration::from_secs(5), ghost.cookies())
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or_default();
     ghost.touch();
     Ok(GhostPage {
         html,
