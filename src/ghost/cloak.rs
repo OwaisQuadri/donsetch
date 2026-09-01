@@ -649,7 +649,15 @@ mod tests {
     #[test]
     fn archive_paths_reject_traversal() {
         assert!(safe_member(Path::new("../chrome")).is_err());
-        assert!(safe_member(Path::new("/tmp/chrome")).is_err());
+        // Absolute paths parse differently per OS: build one in the
+        // platform's own dialect instead of asserting unix syntax on
+        // Windows (a bare "/tmp/chrome" is not absolute there).
+        let absolute = if cfg!(windows) {
+            "C:\\tmp\\chrome"
+        } else {
+            "/tmp/chrome"
+        };
+        assert!(safe_member(Path::new(absolute)).is_err());
         assert!(safe_member(Path::new("chrome")).is_ok());
     }
 
