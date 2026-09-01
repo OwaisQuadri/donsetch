@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   down.
 - **PathBuf import now gated by x86_64 flag (PR #104):** this import
   was used only on x86_64 and caused clippy errors on other architectures.
+- **Bing result cards could expose attribution links as results (PR #99):**
+  grouped selectors followed document order and could choose the breadcrumb
+  anchor before the actual heading. Bing parsing now prefers the `h2` result
+  link while retaining the existing fallback selectors.
 
 
 ## [3.5.0] - 2026-09-01
