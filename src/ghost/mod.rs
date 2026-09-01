@@ -430,9 +430,7 @@ impl Ghost {
             .open(&lockfile)
             .ok();
 
-        #[cfg(windows)]
-        let mut winlock: Option<std::path::PathBuf> = None;
-        let (dir, temp_profile) = {
+        let (dir, temp_profile, _winlock_opt) = {
             let (dir_s, temp_s, _wl) = match profile_lock.as_ref() {
                 Some(f) => {
                     #[cfg(unix)]
@@ -505,12 +503,10 @@ impl Ghost {
             };
             let dir = dir_s;
             let temp_profile = temp_s;
-            #[cfg(windows)]
-            {
-                winlock = _wl;
-            }
-            (dir, temp_profile)
+            (dir, temp_profile, _wl)
         };
+        #[cfg(windows)]
+        let winlock: Option<std::path::PathBuf> = _winlock_opt;
 
         std::fs::create_dir_all(&dir)
             .map_err(|e| FetchError::ghost(format!("profile dir: {e}")))?;
