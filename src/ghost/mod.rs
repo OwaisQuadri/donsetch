@@ -93,6 +93,11 @@ pub fn default_chrome_args(
         "--disable-component-update".into(),
         "--disable-sync".into(),
         "--disable-translate".into(),
+        // Vanilla-browser surface: no surprise extension set
+        // (extensions are enumerable fingerprints), no default
+        // apps phoning home behind the page being fetched.
+        "--disable-default-apps".into(),
+        "--disable-extensions".into(),
         "--mute-audio".into(),
         "--disk-cache-size=1".into(),
         "--disable-gpu-shader-disk-cache".into(),
