@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (PR #101):** content-rescue paths treated a compact outline as a failed
   extraction on long pages. A completed TOC projection now returns directly
   instead of falling through to body-oriented rescue.
+- **Short PDFs could be mislabeled as HTML application shells (PR #102):**
+  downstream shell heuristics could mark valid, compact PDF output as thin
+  and suggest browser rendering. Documents already identified through PDF
+  page metadata now bypass HTML-only shell classification.
 
 
 ## [3.5.0] - 2026-09-01
