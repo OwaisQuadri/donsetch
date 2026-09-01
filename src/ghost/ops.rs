@@ -635,7 +635,10 @@ pub async fn render(ghost: &mut Ghost, url: &str, timeout: Duration) -> Result<S
 /// Fingerprint self-test: navigate our local page,
 /// read results back from the DOM (no Runtime ever).
 pub async fn selftest(ghost: &mut Ghost) -> Result<String, FetchError> {
-    let page = super::profile_dir().join(format!("selftest-{}.html", std::process::id()));
+    // Lives in the system temp dir, never the persistent profile:
+    // a hard-killed daemon used to leave selftest-<pid>.html
+    // litter inside the shared profile root.
+    let page = std::env::temp_dir().join(format!("donsetch-selftest-{}.html", std::process::id()));
     std::fs::write(&page, include_str!("selftest.html"))
         .map_err(|e| FetchError::ghost(format!("selftest: {e}")))?;
     let url = format!("file://{}", page.display());

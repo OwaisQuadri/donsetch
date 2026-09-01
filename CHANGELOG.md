@@ -7,8 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Session vault: logins survive daemon restarts, crashes, and a
+  `kill -9`.** Every tier-2 run now harvests login/session cookies
+  (after actions/solve fetches, and again at reap time) into
+  `ghost-state.json`: junk-filtered, deduped, capped, atomic write
+  like the rest of the state file. Every browser launch replants
+  them before the first navigation, batch CDP call with a
+  per-cookie fallback for older builds. A session established today
+  is still there next week, even if the daemon died hard in
+  between. Live-verified three ways: cookie + Local Storage across
+  separate processes; a full freeze -> reap -> relaunch cycle in
+  one daemon; and with Chromium's Cookies DB file deleted outright
+  while the session still came back from the vault.
+
 ### Fixed
 
+- **Ghost reap used to discard the session's newest cookies (and
+  could eat a login).** The reap SIGKILLed the process group with
+  no shutdown handshake, so the cookie checkpoint Chromium only
+  makes on clean exit never hit disk. Reap now thaws, harvests the
+  session vault, sends `Browser.close`, waits a bounded 6s for the
+  clean exit, and only then falls back to the hard kill. Same CDP
+  path on all three platforms. A profile's Cookies DB that had
+  sat untouched since 2026-08-30 now checkpoints on every exit.
+- **selftest pages littered the persistent browser profile** when
+  a daemon died mid-check; they now live in the system temp dir.
+- **Seven std mutex lock sites still panicked the daemon if the
+  lock was poisoned** (panic = abort build): converted to the same
+  poison-safe pattern as the earlier sweep.
 - **`focus_match` compound-term check crossed word boundaries:** the
   crawl frontier's hard focus gate matched a compound query term
   (e.g. `auto-complete`) against any URL/anchor text containing it
