@@ -2434,7 +2434,7 @@ async fn ghost_escalate(
     if page.html.len() < 5_000 {
         return Err((
             format!(
-                "not found: {url} : page returned no content (may not exist or requires JavaScript)"
+                "not found: {url} : page returned no extractable content (may not exist, is an empty JS shell, or the site served an anti-bot interstitial too small for the wall detector)"
             ),
             "permanent",
         ));

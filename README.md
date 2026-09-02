@@ -39,8 +39,10 @@
 > straight into a Bright Data account.
 
 DonSeTch gives any AI agent full web research from a single local process.
-Three tools, zero API keys, zero accounts. Rust, one binary. Every layer
-built from scratch: no reqwest, no hyper, no Playwright, no Selenium.
+Three tools, zero API keys, zero accounts. Rust, one binary. The fetch
+and crawl transport is built from scratch: no hyper, no Playwright, no
+Selenium. (BYOK adapters and the opt-in CloakBrowser installer use
+reqwest; the core paths that run on every fetch do not.)
 
 Works with every MCP client (Claude Code, Cursor, OpenCode, Pi, Hermes)
 and as a standalone CLI.
