@@ -505,6 +505,9 @@ fn print_help() {
     println!("    tinyfish   TinyFish Search (api.search.tinyfish.ai)");
     println!("    parallel   Parallel AI Search (api.parallel.ai) : fast mode");
     println!("    brightdata Bright Data SERP API (api.brightdata.com)");
+    println!(
+        "    unlocker   Bright Data Web Unlocker (paid solver for walled sites; key:: zone, fetch-side)"
+    );
     println!("    {}", dim("    aliases: bd = brightdata"));
     println!();
     println!("  {}", bold("Default:"));

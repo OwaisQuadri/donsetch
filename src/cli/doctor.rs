@@ -626,7 +626,17 @@ fn check_cache_dir() -> CheckResult {
                 ),
             ];
 
-            let breakdown: String = parts
+            let mut parts_vec: Vec<(&str, u64)> = parts.to_vec();
+            let known: u64 = parts_vec.iter().map(|(_, s)| *s).sum();
+            let other = total.saturating_sub(known);
+            // 'other' = vendored engine bits (PDFium static lib,
+            // ONNX runtime) staged in the cache dir: name them so
+            // nobody wonders where the bytes went.
+            if other >= 1_000_000 {
+                parts_vec.push(("engine-runtime", other));
+            }
+
+            let breakdown: String = parts_vec
                 .iter()
                 .filter(|(_, s)| *s > 0)
                 .map(|(name, size)| format!("{name}={}", format_size(*size)))

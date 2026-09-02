@@ -2360,6 +2360,40 @@ async fn ghost_escalate(
         return Ok((e, t, s, u));
     }
 
+    // JSON endpoints recovered through the ghost (reddit .json,
+    // registry APIs): Chrome wraps raw JSON in a <pre>; unwrap it
+    // and run the adapter over the true bytes instead of
+    // misclassifying a JSON page as a wall or a thin shell. This
+    // closes the adapter-after-solve gap: a reddit listing walled
+    // on tier-1 re-parses cleanly here after ghost recovery.
+    let pre = scraper::Html::parse_document(&page.html)
+        .select(&scraper::Selector::parse("pre").unwrap_or(scraper::Selector::parse("*").unwrap()))
+        .next()
+        .map(|n| n.text().collect::<String>());
+    let candidate = pre.as_deref().unwrap_or(&page.html);
+    let trimmed = candidate.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        if let Some(ext) =
+            crate::adapters::extract_json(trimmed.as_bytes(), "application/json", url, opts)
+        {
+            return Ok((
+                ext,
+                "ghost-json",
+                retry.as_ref().map(|r| r.status).unwrap_or(200),
+                url.to_string(),
+            ));
+        }
+        // No adapter: DonSift's generic pass for the raw body.
+        if let Ok(ext) = extract::extract(trimmed.as_bytes(), "application/json", url, opts) {
+            return Ok((
+                ext,
+                "ghost-json",
+                retry.as_ref().map(|r| r.status).unwrap_or(200),
+                url.to_string(),
+            ));
+        }
+    }
+
     // Last resort: raw text fallback. If the ghost DOM has real
     // visible text but DonSift's block extraction couldn't parse
     // it (complex DOM, non-standard structure), strip tags and
