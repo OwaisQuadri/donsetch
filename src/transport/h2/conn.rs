@@ -250,7 +250,7 @@ impl H2Conn {
                 }
                 PUSH_PROMISE => {
                     // RFC 7540 §6.4: RST_STREAM's payload is a 4-byte
-                    // error code, not a stream id — this used to send
+                    // error code, not a stream id (this used to send
                     // `stream_id`'s own bytes. We advertise
                     // ENABLE_PUSH=0 in SETTINGS, so a conforming
                     // server never pushes; REFUSED_STREAM tells a

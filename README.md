@@ -535,9 +535,13 @@ keyed, sliding 6h TTL, 200 entries, parallel fetches share one paid
 call, bodies stored byte-exact). Same page again inside the TTL =
 served from cache at zero cost.
 Env knobs: `DONSETCH_BYPASS=0` (off), `DONSETCH_BYPASS_MAX_DAILY`
-(default 50), `DONSETCH_BYPASS_TIMEOUT_SECS`, `DONSETCH_BYPASS_RENDER`,
-`DONSETCH_BYPASS_CACHE_TTL_SECS`, `DONSETCH_BYPASS_CACHE_MAX_ENTRIES`,
-`DONSETCH_BYPASS_CACHE=0`.
+(default 50), `DONSETCH_BYPASS_TIMEOUT_SECS` (default 120),
+`DONSETCH_BYPASS_RENDER`, `DONSETCH_BYPASS_CACHE_TTL_SECS`,
+`DONSETCH_BYPASS_CACHE_MAX_ENTRIES`, `DONSETCH_BYPASS_CACHE=0`,
+`DONSETCH_UNLOCKER_ZONE` (default zone), `DONSETCH_BYPASS_ENDPOINT`
+(test hook). Solver failures carry a concrete fix attached to the
+fetch's escalation trace, and `donsetch doctor --deep` probes the
+token + zone against Bright Data for free (no spend) first.
 
 <details>
 <summary><b>Anti-bot benchmark</b></summary>

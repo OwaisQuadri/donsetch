@@ -401,7 +401,7 @@ fn decode_utf16(buf: &[u16], len_units: usize) -> String {
 
 /// Decode a UTF-16LE buffer using a PDFium-reported BYTE count, as
 /// returned by `FPDF_GetMetaText`/`FPDFBookmark_GetTitle` (both
-/// count bytes, including the NUL terminator — see their headers in
+/// count bytes, including the NUL terminator (see their headers in
 /// fpdf_doc.h). `decode_utf16` above takes a UNIT count instead;
 /// passing a byte count straight through reads past the real string
 /// into the buffer's zero-initialized tail, appending trailing NULs
@@ -950,7 +950,7 @@ mod tests {
     #[test]
     fn decode_utf16_from_byte_count_never_reads_past_the_buffer() {
         // A byte_count larger than the actual buffer must never
-        // panic — defensive against a hostile/corrupt PDF causing
+        // panic: defensive against a hostile/corrupt PDF causing
         // PDFium to report an implausible size.
         let buf: Vec<u16> = vec!['x' as u16, 0x0000];
         assert_eq!(decode_utf16_from_byte_count(&buf, 1_000_000), "x");

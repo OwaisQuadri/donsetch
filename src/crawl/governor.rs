@@ -89,6 +89,10 @@ struct HostPenalty {
     rung: u32,
     /// Host is in a penalty box until this instant (429/storm).
     boxed_until: Option<Instant>,
+    /// Last activity on this host (any lane). Drives pruning so
+    /// a long-lived daemon does not grow one struct per host it
+    /// ever touched.
+    last_seen: Option<Instant>,
 }
 
 pub struct Governor {
@@ -151,13 +155,14 @@ impl Governor {
     /// for the shared host penalty box. Caller `tokio::time::sleep`s.
     pub fn wait_for(&self, host: &str, lane: &str, seq: u64) -> Duration {
         let host_boxed = {
-            let hosts = self
+            let mut hosts = self
                 .hosts
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            hosts
-                .get(host)
-                .and_then(|h| h.boxed_until)
+            prune_hosts(&mut hosts);
+            let h = hosts.entry(host.to_string()).or_default();
+            h.last_seen = Some(Instant::now());
+            h.boxed_until
                 .map(|u| u.saturating_duration_since(Instant::now()))
                 .unwrap_or(Duration::ZERO)
         };
@@ -254,6 +259,7 @@ impl Governor {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(h) = hosts.get_mut(host) {
+            h.last_seen = Some(Instant::now());
             h.rung = h.rung.saturating_sub(1);
             if h.rung == 0 {
                 h.boxed_until = None;
@@ -281,6 +287,7 @@ impl Governor {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let h = hosts.entry(host.to_string()).or_default();
+        h.last_seen = Some(Instant::now());
         h.rung = (h.rung + 1).min(MAX_BACKOFF_RUNG);
         let host_rung_mult = (1u64 << h.rung) as f64;
         h.boxed_until =
@@ -333,6 +340,37 @@ impl Governor {
                 .map(|hl| hl.next_allowed.saturating_duration_since(now))
                 .unwrap_or(Duration::ZERO)
         })
+    }
+}
+
+/// Prune hosts untouched for over an hour once the map passes
+/// 1024 entries: a penalty box's maximum horizon is minutes, so
+/// dropping hour-old state loses nothing but memory. Also drops
+/// idle map growth from one large breadth crawl per daemon life.
+fn prune_hosts(hosts: &mut HashMap<String, HostPenalty>) {
+    const CAP: usize = 1024;
+    const MAX_IDLE: Duration = Duration::from_secs(3600);
+    if hosts.len() <= CAP {
+        return;
+    }
+    let now = Instant::now();
+    hosts.retain(|_, h| {
+        h.last_seen
+            .map(|t| now.saturating_duration_since(t) < MAX_IDLE)
+            .unwrap_or(false)
+    });
+    // Belt and suspenders: if the crawl storm touched over a
+    // thousand hosts in the last hour (mega-breadth), keep only
+    // the most recently active.
+    if hosts.len() > CAP {
+        let mut sorted: Vec<(Instant, String)> = hosts
+            .iter()
+            .filter_map(|(k, h)| h.last_seen.map(|t| (t, k.clone())))
+            .collect();
+        sorted.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
+        let keep: std::collections::HashSet<String> =
+            sorted.into_iter().take(CAP).map(|(_, k)| k).collect();
+        hosts.retain(|k, _| keep.contains(k));
     }
 }
 
@@ -432,5 +470,34 @@ mod tests {
         g.wait_for("ex.com", "lane0", 1);
         let pick = g.best_lane("ex.com").unwrap();
         assert_eq!(pick.id, "lane1");
+    }
+
+    #[test]
+    fn host_map_prunes_stale_entries() {
+        let g = gov(&[LaneKind::Direct]);
+        for i in 0..1100 {
+            g.wait_for(&format!("h{i}.com"), "lane0", i);
+        }
+        // Age every entry past the idle window.
+        {
+            let mut hosts = g
+                .hosts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for h in hosts.values_mut() {
+                h.last_seen = Some(Instant::now() - Duration::from_secs(7200));
+            }
+        }
+        // One more touch triggers the prune pass.
+        g.wait_for("fresh.com", "lane0", 1200);
+        let hosts = g
+            .hosts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(
+            hosts.len() <= 2,
+            "stale hosts must be pruned, kept {}",
+            hosts.len()
+        );
     }
 }

@@ -116,7 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **PDF bookmark titles carried two trailing NUL characters:**
   `FPDF_GetMetaText`/`FPDFBookmark_GetTitle` report their length in bytes
   (including the UTF-16 NUL terminator), but the decode call was treating
-  that count as UTF-16 units — a mismatch that read past the real string
+  that count as UTF-16 units, a mismatch that read past the real string
   into the buffer's zero-initialized slack. `get_meta`'s output was
   unaffected (it already strips all `'\0'` chars), but every extracted
   outline/bookmark title picked up two invisible trailing NULs. Both call
@@ -130,7 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream would abort a completely unrelated new request in flight.
   Also: the RST_STREAM sent to refuse a PUSH_PROMISE (a spec
   violation, since we advertise `ENABLE_PUSH=0`) carried the wrong
-  payload — the current request's own stream id instead of a 4-byte
+  payload: the current request's own stream id instead of a 4-byte
   HTTP/2 error code (RFC 7540 §6.4); it now sends `REFUSED_STREAM`.
 
 
