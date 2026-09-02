@@ -53,7 +53,10 @@ impl Default for BypassConfig {
         Self {
             enabled: true,
             max_daily: 50,
-            timeout: Duration::from_secs(90),
+            // Bright Data documents unlock wait times up to 150s
+            // (expect_element etc.); 120s sits inside that window
+            // without renting the request slot for the maximum.
+            timeout: Duration::from_secs(120),
             render: false,
             endpoint: PROD_ENDPOINT.to_string(),
             cache_ttl: Duration::from_secs(21_600),
@@ -268,11 +271,27 @@ impl std::fmt::Display for BypassFail {
     }
 }
 
+/// Transient Solve-failure classes the current Bright Data docs
+/// name as retry-friendly ("retrying can succeed"). Used twice:
+/// at guidance time, and inside unlock() to decide the one retry.
+fn is_superficial_solve_failure(detail: &str) -> bool {
+    const RETRYABLE: &[&str] = &[
+        "resolve_failed_ssl",
+        "resolve_failed_timeout",
+        "resolve_failed_transport",
+        "resolve_failed_retryable",
+        "failover_timeout",
+        "max_requests_timeout",
+        "blocked_requests_limit",
+        "reject_block",
+    ];
+    RETRYABLE.iter().any(|c| detail.contains(c))
+}
+
 impl BypassFail {
     pub fn key_state(&self) -> Option<KeyState> {
         match self {
             Self::Api { status: 401, .. } => Some(KeyState::Invalid),
-            Self::Api { status: 403, .. } => Some(KeyState::Invalid),
             Self::Api { status: 402, .. } => Some(KeyState::CreditDepleted),
             Self::Api { status: 429, .. } => Some(KeyState::RateLimited),
             _ => None,
@@ -287,7 +306,10 @@ impl BypassFail {
                 "the token was rejected: re-add it (`donsetch keys add unlocker <token>[::zone]`) and make sure it is an API token, not a password"
             }
             Self::Api { status: 403, .. } => {
-                "the token is valid but this zone is not enabled for your account: verify the zone name or enable it in the Bright Data dashboard"
+                "Bright Data policy blocked this request or the zone type does not match the Web Unlocker API: verify the zone is a Web Unlocker zone and the target is not reserved/private"
+            }
+            Self::Api { status: 400, .. } => {
+                "the API rejected the request shape: the zone name or URL is wrong (a zone-not-found detail means the ::zone suffix has no match in the dashboard)"
             }
             Self::Api { status: 402, .. } => {
                 "this zone has no balance left: top up the Bright Data account or point the key at another zone (`::zone` suffix)"
@@ -300,23 +322,54 @@ impl BypassFail {
                 "network could not reach the Bright Data API: check connectivity and any local proxy, then retry (nothing was billed)"
             }
             Self::Config(_) => {
-                "fix the unlocker key configuration: `donsetch keys add unlocker <token>[::zone]`"
+                "fix the unlocker key configuration: `donsetch keys add unlocker <token>[::zone]` and match the zone name in the Bright Data dashboard"
             }
-            Self::Solve(_) => {
-                "the unlocker ran but the target still returned a wall: try again later or confirm this site is solvable in the Bright Data dashboard"
+            Self::Solve(d) => {
+                if is_superficial_solve_failure(d) {
+                    "a transient unlock failure class fired twice in a row: retry the fetch in a few seconds (neither attempt was billed)"
+                } else {
+                    "the unlocker ran but the target still returned a wall: try again later or confirm this site is solvable in the Bright Data dashboard"
+                }
             }
             Self::Internal(_) => "retry; if it persists, report it with the trace",
         }
     }
 }
 
-/// Parse the unlocker wrapper (format: "json"). Accepts both the
-/// `status` and `status_code` field names seen in Bright Data docs.
-/// API failures carry the API's own error text when it is JSON.
+/// Parse the unlocker wrapper (format: "json") against the
+/// current Bright Data contract. Unlock failures come in two
+/// shapes:
+/// - OUTER status != 200 : the API rejected the call before any
+///   unlock work (401 invalid token, 400 unknown zone / bad
+///   payload, 403 policy block, and so on).
+/// - OUTER 200 with a failing x-brd-status-code header : the
+///   request reached the unlocker but the target was not served;
+///   details ride x-brd-error / x-brd-error-code (or the legacy
+///   JSON `status`/`status_code` wrapper fields).
+///
 /// Returns (target_status, content_type, body) on success.
-pub fn parse_response(api_status: u16, bytes: &[u8]) -> Result<(u16, String, Vec<u8>), BypassFail> {
+pub fn parse_response(
+    api_status: u16,
+    headers: &reqwest::header::HeaderMap,
+    bytes: &[u8],
+) -> Result<(u16, String, Vec<u8>), BypassFail> {
     if api_status != 200 {
-        // Prefer the API's own error text when it returns JSON.
+        let text = String::from_utf8_lossy(&bytes[..bytes.len().min(400)])
+            .trim()
+            .to_string();
+        // 400 with the documented zone-not-found body is a local
+        // config problem, not an API fault: the user typed a zone
+        // name that does not exist in their account.
+        if api_status == 400 {
+            let lower = text.to_lowercase();
+            if (lower.contains("zone") && lower.contains("not found"))
+                || lower.contains("zone is not")
+            {
+                return Err(BypassFail::Config(format!(
+                    "bright data rejected the zone: {text}"
+                )));
+            }
+        }
         let detail = serde_json::from_slice::<Value>(bytes)
             .ok()
             .and_then(|v| {
@@ -324,47 +377,45 @@ pub fn parse_response(api_status: u16, bytes: &[u8]) -> Result<(u16, String, Vec
                     .and_then(|e| e.as_str())
                     .map(|s| s.to_string())
             })
-            .or_else(|| {
-                let n = bytes.len().min(200);
-                let s = String::from_utf8_lossy(&bytes[..n]).trim().to_string();
-                (!s.is_empty()).then_some(s)
-            })
-            .unwrap_or_default();
+            .or_else(|| (!text.is_empty()).then_some(text));
         return Err(BypassFail::Api {
             status: api_status,
-            detail,
+            detail: detail.unwrap_or_default(),
         });
     }
-    let v: Value = match serde_json::from_slice(bytes) {
-        Ok(v) => v,
-        Err(_) => {
-            return Err(BypassFail::Solve(
-                "unlocker returned unparseable JSON".to_string(),
-            ));
-        }
+    let header = |name: &str| -> Option<String> {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     };
-    let status_num: u64 = match v
-        .get("status")
-        .or_else(|| v.get("status_code"))
-        .and_then(|x| x.as_u64())
-    {
-        Some(n) => n,
+    // Bright Data's current docs put the real target status in the
+    // x-brd-status-code response header (older releases used
+    // status/status_code fields in the JSON wrapper). Accept both.
+    let v: Option<Value> = serde_json::from_slice(bytes).ok();
+    let legacy_status = v
+        .as_ref()
+        .and_then(|j| j.get("status").or_else(|| j.get("status_code")))
+        .and_then(|x| x.as_u64());
+    let target_status: Option<u64> =
+        legacy_status.or_else(|| header("x-brd-status-code").and_then(|h| h.parse::<u64>().ok()));
+    let status: u16 = match target_status.and_then(|n| u16::try_from(n).ok()) {
+        Some(s) => s,
         None => {
-            return Err(BypassFail::Solve(
-                "unlocker response missing status".to_string(),
-            ));
-        }
-    };
-    let status: u16 = match u16::try_from(status_num) {
-        Ok(n) => n,
-        Err(_) => {
-            return Err(BypassFail::Solve(
-                "unlocker status out of range".to_string(),
-            ));
+            let code = header("x-brd-error-code").or_else(|| header("x-brd-err-code"));
+            let msg = header("x-brd-error");
+            return Err(BypassFail::Solve(match (code, msg) {
+                (Some(c), Some(m)) => format!("{c}: {m}"),
+                (Some(c), None) => format!("{c}: no target status in response"),
+                (None, Some(m)) => format!("no target status: {m}"),
+                (None, None) => "unlocker response missing status".to_string(),
+            }));
         }
     };
     let ct: String = v
-        .get("headers")
+        .as_ref()
+        .and_then(|j| j.get("headers"))
         .and_then(|h| h.as_object())
         .and_then(|h| {
             h.iter()
@@ -372,7 +423,20 @@ pub fn parse_response(api_status: u16, bytes: &[u8]) -> Result<(u16, String, Vec
                 .map(|(_, val)| val.as_str().unwrap_or("").to_string())
         })
         .unwrap_or_else(|| "text/html".to_string());
-    let body: Vec<u8> = match v.get("body").and_then(|b| b.as_str()) {
+    if !(200..300).contains(&status) {
+        let code = header("x-brd-error-code").or_else(|| header("x-brd-err-code"));
+        let msg = header("x-brd-error").unwrap_or_default();
+        return Err(BypassFail::Solve(match code {
+            Some(c) if !msg.is_empty() => format!("target returned status {status} ({c}: {msg})"),
+            Some(c) => format!("target returned status {status} ({c})"),
+            None if !msg.is_empty() => format!("target returned status {status}: {msg}"),
+            None => format!("target returned status {status}"),
+        }));
+    }
+    let body: Vec<u8> = match v
+        .as_ref()
+        .and_then(|j| j.get("body").and_then(|b| b.as_str()))
+    {
         Some(s) => s.as_bytes().to_vec(),
         None => {
             return Err(BypassFail::Solve(
@@ -380,11 +444,6 @@ pub fn parse_response(api_status: u16, bytes: &[u8]) -> Result<(u16, String, Vec
             ));
         }
     };
-    if !(200..300).contains(&status) {
-        return Err(BypassFail::Solve(format!(
-            "target returned status {status}"
-        )));
-    }
     if body.is_empty() {
         return Err(BypassFail::Solve(
             "unlocker returned an empty body".to_string(),
@@ -641,17 +700,43 @@ pub async fn unlock(
         Err(e) => return Err(BypassFail::Network(format!("bypass request failed ({e})"))),
     };
     let api_status = resp.status().as_u16();
+    let headers = resp.headers().clone();
     let bytes = resp
         .bytes()
         .await
         .map_err(|e| BypassFail::Network(format!("bypass response truncated ({e})")))?;
-    let outcome =
-        parse_response(api_status, &bytes).map(|(status, content_type, body)| BypassOutcome {
-            status,
-            content_type,
-            body,
-            cached: false,
-        })?;
+    let mut result = parse_response(api_status, &headers, &bytes);
+    // One retry for the transient solve classes Bright Data names
+    // as retry-friendly: a different unlocker peer frequently
+    // succeeds where the first one failed, and a failed unlock is
+    // not billed, so no double spend is possible.
+    if let Err(e) = &result
+        && let BypassFail::Solve(d) = e
+        && is_superficial_solve_failure(d)
+    {
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let resp = match request().await {
+            Ok(r) => r,
+            Err(_) => {
+                return Err(BypassFail::Internal(
+                    "retry request failed after transient unlock failure".to_string(),
+                ));
+            }
+        };
+        let api_status = resp.status().as_u16();
+        let headers = resp.headers().clone();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| BypassFail::Network(format!("bypass response truncated ({e})")))?;
+        result = parse_response(api_status, &headers, &bytes);
+    }
+    let outcome = result.map(|(status, content_type, body)| BypassOutcome {
+        status,
+        content_type,
+        body,
+        cached: false,
+    })?;
     if ttl > 0 {
         cache_put(cache_dir, url, &outcome, cfg.cache_max);
     }
@@ -727,7 +812,8 @@ mod tests {
     #[test]
     fn parse_response_ok_shape() {
         let resp = br#"{"status":200,"headers":{"content-type":"text/html; charset=utf-8"},"body":"<html>hi</html>"}"#;
-        let (status, ct, body) = parse_response(200, resp).unwrap();
+        let (status, ct, body) =
+            parse_response(200, &reqwest::header::HeaderMap::new(), resp).unwrap();
         assert_eq!(status, 200);
         assert_eq!(ct, "text/html; charset=utf-8");
         assert_eq!(body, b"<html>hi</html>");
@@ -736,24 +822,88 @@ mod tests {
     #[test]
     fn parse_response_accepts_status_code_field() {
         let resp = br#"{"status_code":202,"headers":{},"body":"ok"}"#;
-        let (status, _, body) = parse_response(200, resp).unwrap();
+        let (status, _, body) =
+            parse_response(200, &reqwest::header::HeaderMap::new(), resp).unwrap();
         assert_eq!(status, 202);
         assert_eq!(body, b"ok");
     }
 
     #[test]
+    fn parse_response_header_status_contract() {
+        // The current docs put the target status in the
+        // x-brd-status-code response header; the JSON wrapper may
+        // carry no status at all. Must work without it.
+        let resp = br#"{"headers":{},"body":"ok"}"#;
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert("x-brd-status-code", "201".parse().unwrap());
+        let (status, _, body) = parse_response(200, &h, resp).unwrap();
+        assert_eq!(status, 201);
+        assert_eq!(body, b"ok");
+    }
+
+    #[test]
+    fn parse_response_header_status_failure_with_codes() {
+        let resp = br#"not json"#;
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert("x-brd-status-code", "502".parse().unwrap());
+        h.insert("x-brd-error-code", "reject_block".parse().unwrap());
+        h.insert("x-brd-error", "challenge blocked".parse().unwrap());
+        let err = parse_response(200, &h, resp).unwrap_err();
+        assert_eq!(
+            err,
+            BypassFail::Solve(
+                "target returned status 502 (reject_block: challenge blocked)".to_string()
+            )
+        );
+        assert!(is_superficial_solve_failure(&err.to_string()));
+    }
+
+    #[test]
+    fn parse_response_missing_status() {
+        let err = parse_response(200, &reqwest::header::HeaderMap::new(), br#"{"body":"x"}"#)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            BypassFail::Solve("unlocker response missing status".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_response_zone_not_found_is_config() {
+        let err = parse_response(
+            400,
+            &reqwest::header::HeaderMap::new(),
+            b"zone \"nope\" not found",
+        )
+        .unwrap_err();
+        assert!(matches!(err, BypassFail::Config(_)), "got {err:?}");
+        assert_eq!(err.key_state(), None);
+    }
+
+    #[test]
     fn parse_response_api_error_maps_state() {
-        let err = parse_response(401, b"unauthorized").unwrap_err();
+        let err =
+            parse_response(401, &reqwest::header::HeaderMap::new(), b"unauthorized").unwrap_err();
         assert_eq!(err.key_state(), Some(KeyState::Invalid));
-        let err = parse_response(402, b"no credit").unwrap_err();
+        let err =
+            parse_response(402, &reqwest::header::HeaderMap::new(), b"no credit").unwrap_err();
         assert_eq!(err.key_state(), Some(KeyState::CreditDepleted));
-        let err = parse_response(429, b"slow down").unwrap_err();
+        let err =
+            parse_response(429, &reqwest::header::HeaderMap::new(), b"slow down").unwrap_err();
         assert_eq!(err.key_state(), Some(KeyState::RateLimited));
+        // 403 is policy/zone-type, not a key problem.
+        let err = parse_response(403, &reqwest::header::HeaderMap::new(), b"policy").unwrap_err();
+        assert_eq!(err.key_state(), None);
     }
 
     #[test]
     fn parse_response_api_error_extracts_json_error_text() {
-        let err = parse_response(401, br#"{"error":"user is not authorized"}"#).unwrap_err();
+        let err = parse_response(
+            401,
+            &reqwest::header::HeaderMap::new(),
+            br#"{"error":"user is not authorized"}"#,
+        )
+        .unwrap_err();
         assert_eq!(
             err,
             BypassFail::Api {
@@ -766,7 +916,7 @@ mod tests {
     #[test]
     fn parse_response_target_error() {
         let resp = br#"{"status":403,"headers":{},"body":"forbidden"}"#;
-        let err = parse_response(200, resp).unwrap_err();
+        let err = parse_response(200, &reqwest::header::HeaderMap::new(), resp).unwrap_err();
         assert_eq!(
             err,
             BypassFail::Solve("target returned status 403".to_string())

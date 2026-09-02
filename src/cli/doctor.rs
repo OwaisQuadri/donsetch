@@ -873,7 +873,7 @@ fn bright_zone_probe(token: &str, zone: &str) -> Result<usize, String> {
             .map_err(|e| format!("request: {e}"))?;
         let status = resp.status().as_u16();
         if status == 401 || status == 403 {
-            return Err("the token or zone name was rejected (401/403)".to_string());
+            return Err("the token or zone name was rejected (401/403) : verify both in the Bright Data dashboard, or the zone type does not expose its route IPs".to_string());
         }
         if status != 200 {
             return Err(format!("HTTP {status}"));
