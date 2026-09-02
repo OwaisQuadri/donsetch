@@ -5,6 +5,8 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use url::Url;
+
 use crate::detect::walls::{self, Verdict};
 use crate::error::FetchError;
 use crate::ghost::cache::CookieRecord;
@@ -80,7 +82,7 @@ impl Fetcher {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for c in cookies {
-            jar.store_raw(&c.name, &c.value, &c.domain, c.expires_at);
+            jar.store_raw(c);
         }
     }
 
@@ -212,7 +214,9 @@ impl Fetcher {
                     .jar
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                jar.store_from_headers(&host, &out.headers);
+                let current_is_https =
+                    Url::parse(&current).is_ok_and(|u| u.scheme().eq_ignore_ascii_case("https"));
+                jar.store_from_headers(&host, &out.headers, current_is_https);
             }
 
             // 304: merge body from cache.
@@ -305,7 +309,9 @@ impl Fetcher {
                                 .jar
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            jar.store_from_headers(&host, &retry.headers);
+                            let current_is_https = Url::parse(&current)
+                                .is_ok_and(|u| u.scheme().eq_ignore_ascii_case("https"));
+                            jar.store_from_headers(&host, &retry.headers, current_is_https);
                         }
                         retry.verdict = walls::detect(retry.status, &retry.headers, &retry.body);
                         if matches!(retry.verdict, Verdict::ContentOk) {
@@ -379,7 +385,7 @@ impl Fetcher {
                 .jar
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(cookie) = jar.header_for(host, &path) {
+            if let Some(cookie) = jar.header_for(host, &path, is_https) {
                 let pos = req_headers
                     .iter()
                     .position(|(n, _)| n == "priority")

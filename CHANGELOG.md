@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Secure cookies could replay over plain HTTP (security):** the
+  tier-1 jar dropped the `Secure` attribute at both ingresses:
+  bare `Secure` tokens from `Set-Cookie` never matched the
+  key=value-only attribute parser, and the tier-2 harvest import
+  read the real flag from the browser record but discarded it.
+  A cookie set `Secure` on an HTTPS visit was replayed on later
+  plain-`http://` requests to the same host, exposing the session
+  to any passive network observer. Reported privately by mnaza
+  via the GitHub security advisory flow (own draft advisory, will
+  be published with the patched release). The jar now: stores the
+  `Secure`, `HttpOnly` and `SameSite` attributes including bare
+  tokens; rejects a Secure cookie arriving over plain HTTP;
+  refuses to attach Secure cookies to non-HTTPS requests (both
+  the fetch loop and the CDP-harvest import path); enforces the
+  `__Secure-`/`__Host-` prefix rules and `SameSite=None requires
+  Secure`; and round-trips the real flags through the snapshot
+  handoff. Proven by a live socket regression test that fails on
+  the old code (a setup server's Secure cookie got replayed in
+  cleartext) and passes now, plus unit coverage for every
+  ingress and gate.
+
 - **Windows rooted-without-drive archive paths passed the cloak
   extraction guard (PR #98, mnaza):** `safe_member` used
   `is_absolute()`, which Windows defines as root plus drive
