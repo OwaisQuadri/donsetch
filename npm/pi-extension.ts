@@ -31,6 +31,12 @@ const INIT_TIMEOUT_MS = 10_000;
 const CALL_TIMEOUT_MS = 120_000;
 const SHUTDOWN_GRACE_MS = 2_000;
 
+// A raw process.stderr.write bypasses pi's TUI paint cycle and
+// corrupts the viewport (worse across parallel agents). Gate it here.
+const DEBUG_MODE =
+  (process.env.DONSETCH_DEBUG ?? "").length > 0 ||
+  (process.env.DEBUG ?? "").length > 0;
+
 // ── TUI rendering note ──
 // Pi's TUI wraps tool calls in its own green (success) / red (failure)
 // highlight. We output PLAIN TEXT only : no ANSI codes at all.
@@ -165,13 +171,10 @@ function startServer(): Promise<void> {
     // - DONSETCH_DEBUG / DEBUG set: forward everything (dev mode)
     // - otherwise only crash/fatal lines survive; the rest is
     //   tool-level information the caller already has
-    const debugMode =
-      (process.env.DONSETCH_DEBUG ?? "").length > 0 ||
-      (process.env.DEBUG ?? "").length > 0;
     const FATAL_RE = /fatal|panic|crash|SIGSEGV|abort|OOM|out of memory/i;
     let stderrTail = "";
     proc.stderr?.on("data", (chunk: Buffer) => {
-      if (debugMode) {
+      if (DEBUG_MODE) {
         process.stderr.write(chunk);
         return;
       }
@@ -602,7 +605,11 @@ export default function (pi: ExtensionAPI) {
       });
     }
 
-    process.stderr.write(`[donsetch] ${mcpTools.length} tools registered: ${toolNames.join(", ")}\n`);
+    // Fires every session_start (unlike the failure paths above), so
+    // this one corrupted the viewport on every normal run.
+    if (DEBUG_MODE) {
+      process.stderr.write(`[donsetch] ${mcpTools.length} tools registered: ${toolNames.join(", ")}\n`);
+    }
   });
 
   pi.on("session_shutdown", () => {

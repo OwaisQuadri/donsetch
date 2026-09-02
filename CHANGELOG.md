@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **pi-extension: startup banner corrupted the viewport:** the
+  `[donsetch] N tools registered: ...` line printed on every
+  `session_start` via a raw `process.stderr.write`, which bypasses
+  pi's TUI paint cycle. Under parallel background agents each
+  process's banner interleaved with the others on the same screen,
+  producing garbled repeated lines above the status bar. Now gated
+  behind `DONSETCH_DEBUG`/`DEBUG`, matching the existing gate on the
+  daemon's forwarded stderr diagnostics (issue #95) so a normal
+  session prints nothing.
+
 - **Secure cookies could replay over plain HTTP (security):** the
   tier-1 jar dropped the `Secure` attribute at both ingresses:
   bare `Secure` tokens from `Set-Cookie` never matched the
