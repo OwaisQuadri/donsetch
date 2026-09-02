@@ -151,8 +151,12 @@ pub async fn run() {
     // 14. Ghost state.
     report!("Ghost state", check_ghost_state());
 
-    // 15. Bypass unlocker key.
-    report!("Bypass unlocker", check_bypass());
+    // 15. Bright Data account keys (SERP + unlocker): the paid
+    // layer gets more than a y/n. Default mode validates locally
+    // (presence, shape, cap + cache state, kill switches); --deep
+    // adds a free live zone probe (route_ips costs nothing).
+    report!("Bright Data SERP", check_brightdata());
+    report!("Bypass unlocker", check_bypass(deep));
 
     // 16. MCP client registration (detect + print blocks).
     print_mcp_section();
@@ -717,17 +721,172 @@ fn check_ghost_state() -> CheckResult {
     CheckResult::Pass(format!("{domains} domains, {renders} renders cached"))
 }
 
-fn check_bypass() -> CheckResult {
+fn mask_key(k: &str) -> String {
+    let start = k.split_once("::").map(|(t, _)| t).unwrap_or(k);
+    let b = start.as_bytes();
+    if b.len() <= 8 {
+        return format!("{}***", &start[..start.len().saturating_sub(1)]);
+    }
+    let head = std::str::from_utf8(&b[..6]).unwrap_or("");
+    let tail = std::str::from_utf8(&b[b.len() - 4..]).unwrap_or("");
+    format!("{head}...{tail}")
+}
+
+/// Bright Data SERP key: local validation + a free live zone probe
+/// in --deep mode (route_ips costs nothing, so the check can
+/// confirm token + zone without spending a cent).
+fn check_brightdata() -> CheckResult {
     let cfg = crate::search::byok::store::ByokConfig::load();
-    let has = crate::fetch::bypass::active_unlocker_key(&cfg).is_some();
-    if has {
-        CheckResult::Pass("unlocker key configured".to_string())
-    } else {
-        CheckResult::Warn(
+    let Some(entry) = cfg
+        .providers
+        .iter()
+        .find(|p| p.name == "brightdata")
+        .and_then(|p| p.keys.first())
+    else {
+        return CheckResult::Warn(
+            "not configured : keyless search still works, but SERP costs nothing to add via `donsetch keys add brightdata <token>[::zone]`"
+                .to_string(),
+        );
+    };
+    let (_, zone) = crate::search::byok::brightdata_key_parts(&entry.key)
+        .unwrap_or_else(|_| (String::new(), String::new()));
+    let masked = mask_key(&entry.key);
+    let state = match entry.state {
+        crate::search::byok::store::KeyState::Active => "active",
+        crate::search::byok::store::KeyState::Invalid => "rejected by Bright Data (fix the token)",
+        crate::search::byok::store::KeyState::CreditDepleted => "out of credits",
+        crate::search::byok::store::KeyState::RateLimited => "rate limited",
+    };
+    if entry.state != crate::search::byok::store::KeyState::Active {
+        return CheckResult::Fail(
+            format!("{masked} on {zone} : {state}"),
+            "`donsetch keys reset brightdata` re-activates the key after you fix the problem on Bright Data's side.".to_string(),
+        );
+    }
+    CheckResult::Pass(format!("{masked} on zone {zone}, {state}"))
+}
+
+fn check_bypass(deep: bool) -> CheckResult {
+    let cfg = crate::search::byok::store::ByokConfig::load();
+    let bc = crate::fetch::bypass::BypassConfig::from_env();
+    if !bc.enabled {
+        return CheckResult::Warn(
+            "integration disabled by DONSETCH_BYPASS=0 : walled sites will end on the tier-2 path instead of the solver"
+                .to_string(),
+        );
+    }
+    let Some(key) = crate::fetch::bypass::active_unlocker_key(&cfg) else {
+        return CheckResult::Warn(
             "not configured (optional, opt-in: donsetch keys add unlocker <key>[::zone])"
                 .to_string(),
-        )
+        );
+    };
+    let parsed = crate::fetch::bypass::parse_key(&key, crate::fetch::bypass::DEFAULT_ZONE);
+    let (_, zone) = match &parsed {
+        Ok((t, z)) => (t.clone(), z.clone()),
+        Err(_) => (String::new(), String::new()),
+    };
+    let masked = mask_key(&key);
+    if let Err(e) = &parsed {
+        return CheckResult::Fail(
+            format!("{masked} looks broken : {e}"),
+            "`donsetch keys add unlocker <token>[::zone]` replaces the key with a valid one."
+                .to_string(),
+        );
     }
+    // Daily cap state: how close are we to the ceiling today?
+    let count_path = crate::fetch::bypass::bypass_count_path(&crate::paths::cache_dir());
+    let used: u32 = std::fs::read_to_string(&count_path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    let cap_note = if used >= bc.max_daily {
+        ", daily cap reached (raise DONSETCH_BYPASS_MAX_DAILY to keep unlocking)".to_string()
+    } else {
+        format!(", {used}/{} daily unlocks used", bc.max_daily)
+    };
+    // Solve-cache state.
+    let cache_dir = crate::fetch::bypass::bypass_cache_dir(&crate::paths::cache_dir());
+    let cache_n: usize = std::fs::read_dir(&cache_dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+                .count()
+        })
+        .unwrap_or(0);
+    let cache_note = if bc.cache_ttl.is_zero() {
+        ", solve-cache disabled via DONSETCH_BYPASS_CACHE=0".to_string()
+    } else {
+        format!(", {cache_n} pages cached")
+    };
+    let base = format!(
+        "{masked} on zone {zone}{cap_note}{cache_note}, render-on-solve {}",
+        if bc.render { "on" } else { "off" }
+    );
+    // --deep: live, free zone validation (route_ips endpoint).
+    if deep {
+        let zone_for_probe = zone.clone();
+        let token_for_probe = key
+            .split_once("::")
+            .map(|(t, _)| t.to_string())
+            .unwrap_or_else(|| key.clone());
+        match std::thread::Builder::new()
+            .name("bd-probe".into())
+            .spawn(move || bright_zone_probe(&token_for_probe, &zone_for_probe))
+        {
+            Ok(handle) => match handle.join() {
+                Ok(Ok(n)) => {
+                    CheckResult::Pass(format!("{base} ; live zone probe OK ({n} IPs routed)"))
+                }
+                Ok(Err(e)) => CheckResult::Warn(format!(
+                    "{base} ; live zone probe failed: {e} (free check, nothing billed)"
+                )),
+                Err(_) => CheckResult::Pass(base),
+            },
+            Err(_) => CheckResult::Pass(base),
+        }
+    } else {
+        CheckResult::Pass(base)
+    }
+}
+
+/// Free Bright Data validation: the zone route_ips endpoint lists
+/// the zone's IP pool without making a request, so a dead token or
+/// wrong zone name shows up here before the first paid unlock.
+fn bright_zone_probe(token: &str, zone: &str) -> Result<usize, String> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    rt.block_on(async {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("client: {e}"))?;
+        let resp = client
+            .get(format!(
+                "https://api.brightdata.com/zone/route_ips?zone={zone}"
+            ))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| format!("request: {e}"))?;
+        let status = resp.status().as_u16();
+        if status == 401 || status == 403 {
+            return Err("the token or zone name was rejected (401/403)".to_string());
+        }
+        if status != 200 {
+            return Err(format!("HTTP {status}"));
+        }
+        let v: serde_json::Value = resp.json().await.map_err(|e| format!("parse: {e}"))?;
+        if let Some(n) = v.get("ip_count").and_then(|x| x.as_u64()) {
+            return Ok(n as usize);
+        }
+        if let Some(ips) = v.get("ips").and_then(|x| x.as_array()) {
+            return Ok(ips.len());
+        }
+        Ok(0)
+    })
 }
 
 // ── Helpers ───────────────────────────────────────────────────

@@ -2065,10 +2065,9 @@ async fn try_bypass(
         Ok(o) => o,
         Err(e) => {
             crate::fetch::bypass::apply_key_state("unlocker", &key, &e);
-            let msg = match &e {
-                crate::fetch::bypass::BypassFail::Api(s, _) => format!("bypass API error {s}"),
-                crate::fetch::bypass::BypassFail::Target(m) => m.clone(),
-            };
+            // Every failure class carries its own recovery hint;
+            // the trace is the channel agents (and users) can see.
+            let msg = format!("{e} [hint: {}]", e.guidance());
             trace.step("bypass", "unlocker", &msg, t0.elapsed().as_millis());
             return None;
         }

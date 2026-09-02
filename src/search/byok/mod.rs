@@ -22,6 +22,12 @@ mod serpapi;
 mod serpbase;
 mod serper;
 pub mod store;
+
+/// Doctor needs the token/zone split for the free zone probe;
+/// re-export it without widening the adapter's item visibility.
+pub(crate) fn brightdata_key_parts(key: &str) -> Result<(String, String), String> {
+    brightdata::parse_key(key)
+}
 mod tavily;
 mod tinyfish;
 
@@ -138,7 +144,7 @@ impl ByokSearcher {
 
     /// Search via the provider chain. Falls back through keys
     /// and providers. Returns Err if all keys/providers exhausted.
-    pub async fn search(
+    pub(crate) async fn search(
         &self,
         query: &str,
         max_results: usize,

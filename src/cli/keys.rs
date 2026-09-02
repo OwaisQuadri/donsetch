@@ -86,6 +86,22 @@ fn cmd_add(args: &[String]) {
         std::process::exit(1);
     }
 
+    // Paid-integration keys deserve instant shape feedback:
+    // a malformed key is caught here, not as a confusing API
+    // rejection on the first paid request.
+    if provider == "unlocker"
+        && let Err(e) = crate::fetch::bypass::parse_key(&key, crate::fetch::bypass::DEFAULT_ZONE)
+    {
+        eprintln!("  {} {e}", red("\u{2717}"));
+        std::process::exit(1);
+    }
+    if provider == "brightdata"
+        && let Err(e) = crate::search::byok::brightdata_key_parts(&key)
+    {
+        eprintln!("  {} {e}", red("\u{2717}"));
+        std::process::exit(1);
+    }
+
     let mut cfg = ByokConfig::load();
     let is_new = !cfg.providers.iter().any(|p| p.name == *provider);
     let was_first = cfg.providers.is_empty();
@@ -137,6 +153,24 @@ fn cmd_add(args: &[String]) {
             );
         }
         println!("  {} Restart your MCP server if running.", dim("      "));
+    }
+
+    // Unlocker keys: confirm the zone and point at the free
+    // validation so the first wall hit does not surprise anyone.
+    if provider == "unlocker" {
+        let (_, zone) = crate::fetch::bypass::parse_key(&key, crate::fetch::bypass::DEFAULT_ZONE)
+            .expect("validated above");
+        println!();
+        println!(
+            "  {} unlocker ready: zone {}, solve-cache on (repeat walls never bill twice)",
+            green("\u{2713}"),
+            bold(&zone)
+        );
+        println!(
+            "  {} {} validates the token and zone for free before any paid unlock",
+            dim("tip:"),
+            green("donsetch doctor --deep")
+        );
     }
 }
 
