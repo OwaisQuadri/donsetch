@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SerpBase as a BYOK search provider (PR #109, gefsikatsinelou):**
+  Google SERP via serpbase.dev with the X-API-Key auth their docs
+  specify, business-status envelope handling (1001 unauthorized
+  marks the key dead so rotation moves on), organic-result mapping
+  with position-derived relevance, and the same error
+  classification as the other providers. No dependency additions;
+  nothing changes when the key is absent. Closes #94.
+
 ### Fixed
 
 - **pi-extension: startup banner corrupted the viewport:** the

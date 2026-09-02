@@ -2,7 +2,9 @@
 //!
 //! POST https://api.serpbase.dev/google/search
 //! Auth: X-API-Key <key> (header)
-//! Body: { q, num, hl, gl }
+//! Body: { q, hl, gl, page, device }
+//! (no num parameter: the docs list q/hl/gl/page/device; results are
+//! capped locally after parse)
 //! Response: { status, organic: [{ position, title, link, snippet }], ... }
 //!
 //! `status` is a business-level code: 0 = success, non-zero = error
@@ -78,7 +80,6 @@ pub async fn search(
 
     let body = json!({
         "q": query,
-        "num": max.min(10),
     });
 
     let resp = client
@@ -145,7 +146,11 @@ pub async fn search(
         }
     }
 
-    let results = parse_results(&json);
+    let mut results = parse_results(&json);
+    // SerpBase has no num parameter (docs list q/hl/gl/page/device
+    // only): cap locally so a provider without server-side limits
+    // cannot flood the result set past the caller's budget.
+    results.truncate(max);
 
     let ms = started.elapsed().as_millis() as u64;
     Ok((results, ms))
