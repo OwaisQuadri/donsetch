@@ -381,8 +381,27 @@ async fn check_browser_launch() -> CheckResult {
         match fp {
             Ok(json_str) => {
                 let v: serde_json::Value = serde_json::from_str(&json_str).unwrap_or_default();
+                // Real-Chrome parity: webdriver must be false VIA THE
+                // NATIVE ACCESSOR with no own property on the
+                // navigator instance (an injected own property is a
+                // tell). undefined was pre-Chrome-89 behavior.
                 let webdriver = v.get("webdriver").and_then(|w| w.as_bool());
+                let no_own_prop =
+                    v.get("webdriverOwnProp").and_then(|w| w.as_bool()) == Some(false);
+                // WebGL null is a headless-only signature: it fires
+                // when the host cannot provide any GL (common on
+                // GPU-less Linux + a Chromium build without a
+                // working software rasterizer). Windows/macOS and
+                // GPU Linux report a real renderer and clear this.
+                // Warn, do not fail: the browser still works, and
+                // the SwiftShader launch flags enable it whenever
+                // the host can.
+                let gl_ok = v
+                    .get("webglRenderer")
+                    .and_then(|w| w.as_str())
+                    .is_some_and(|r| !r.is_empty() && r != "?" && r != "err" && r != "undefined");
                 let deep_clean = webdriver == Some(false)
+                    && no_own_prop
                     && v.get("hasChrome").and_then(|x| x.as_bool()) == Some(true)
                     && v.get("plugins")
                         .and_then(|x| x.as_u64())
@@ -390,13 +409,30 @@ async fn check_browser_launch() -> CheckResult {
                     && v.get("ua")
                         .and_then(|x| x.as_str())
                         .is_some_and(|ua| !ua.contains("HeadlessChrome"));
-                if deep_clean {
+                let gl_note = if gl_ok {
+                    format!(
+                        "webgl={}",
+                        v.get("webglRenderer")
+                            .and_then(|w| w.as_str())
+                            .unwrap_or("ok")
+                    )
+                } else {
+                    "webgl=null (host provides no GL; software renderer unavailable in this Chromium build)"
+                        .to_string()
+                };
+                if deep_clean && gl_ok {
                     CheckResult::Pass(format!(
-                        "launched in {launch_ms}ms, deep fingerprint clean (webdriver=false, chrome=true, plugins>0)"
+                        "launched in {launch_ms}ms, deep fingerprint clean (webdriver=false native, no own prop, {gl_note})"
+                    ))
+                } else if deep_clean {
+                    CheckResult::Warn(format!(
+                        "launched in {launch_ms}ms, fingerprint clean EXCEPT {gl_note}"
                     ))
                 } else {
                     CheckResult::Warn(format!(
-                        "launched in {launch_ms}ms, deep fingerprint incomplete: webdriver={webdriver:?}, chrome={:?}, plugins={:?}",
+                        "launched in {launch_ms}ms, deep fingerprint incomplete: webdriver={webdriver:?} ownProp={:?}, gl={:?}, chrome={:?}, plugins={:?}",
+                        v.get("webdriverOwnProp"),
+                        v.get("webglRenderer"),
                         v.get("hasChrome"),
                         v.get("plugins")
                     ))

@@ -138,6 +138,14 @@ pub fn default_chrome_args(
         "--disk-cache-size=1".into(),
         "--disable-gpu-shader-disk-cache".into(),
         "--disable-features=SiteEngagementService".into(),
+        // Software WebGL: a GPU-less box (Xvfb, VM, container)
+        // must still expose a renderer string. WebGL=null is a
+        // headless-only signature real desktops never produce;
+        // SwiftShader always initialises, so the page reads
+        // "Google SwiftShader" exactly like real Chrome on a
+        // machine without dedicated graphics.
+        "--use-gl=swiftshader".into(),
+        "--enable-unsafe-swiftshader".into(),
     ]
 }
 
@@ -800,9 +808,8 @@ impl Ghost {
         cdp.call(Some(&session), "Page.enable", json!({})).await?;
 
         // Stealth JS injection : runs before any page script.
-        // Patches the most common automation detection vectors:
-        // - navigator.webdriver: belt-and-suspenders alongside
-        //   --disable-blink-features=AutomationControlled
+        // Patches only what real Chrome guarantees and our launch
+        // does NOT:
         // - navigator.languages: ensure it's set (some Xvfb setups
         //   don't inherit the system locale)
         // - window.chrome: ensure it exists (some headful setups
@@ -812,14 +819,18 @@ impl Ghost {
         //   returns 'prompt' : a known detection vector)
         // - navigator.plugins: ensure length > 0 (headful Chrome
         //   should have plugins, but some setups don't)
-        // Minimal patches : over-patching is itself detectable.
+        // navigator.webdriver is DELIBERATELY not patched:
+        // defining it, even with get() => false, is itself the
+        // detection vector fpscanner flags (real Chrome leaves
+        // the property undefined); --disable-blink-features=
+        // AutomationControlled on the launch args handles the
+        // headless-mode case without defining anything.
         let _ = cdp
             .call(
                 Some(&session),
                 "Page.addScriptToEvaluateOnNewDocument",
                 json!({
                     "source": "\
-                        Object.defineProperty(navigator, 'webdriver', { get: () => false });\
                         Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });\
                         if (!window.chrome) { window.chrome = {}; }\
                         if (!window.chrome.runtime) { window.chrome.runtime = {}; }\
