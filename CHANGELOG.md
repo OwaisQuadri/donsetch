@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bright Data connection UX and diagnostics:** `donsetch keys add
+  unlocker|brightdata` now validates the key and zone shape at add
+  time and prints the active zone; `donsetch doctor --deep` adds a
+  FREE live zone probe (the route_ips endpoint validates token +
+  zone before the first paid call) and the default doctor shows
+  the daily-cap usage, solve-cache state and kill-switch state for
+  the solver and the SERP key state.
+
 - **SerpBase as a BYOK search provider (PR #109, gefsikatsinelou):**
   Google SERP via serpbase.dev with the X-API-Key auth their docs
   specify, business-status envelope handling (1001 unauthorized
@@ -18,6 +26,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing changes when the key is absent. Closes #94.
 
 ### Fixed
+
+- **Bright Data solver errors were bare status codes; the jar was
+  behind the current API contract:** every failure class the paid
+  tier can produce is now typed (api/network/config/solve/internal)
+  with a recovery hint attached to the fetch escalation trace.
+  `parse_response` reads the CURRENT contract (x-brd-status-code /
+  x-brd-error-code / x-brd-error response headers, legacy JSON
+  fields still accepted), zone-not-found is classified as a fixable
+  config problem instead of a generic API error, 403 policy blocks
+  no longer mark a healthy key dead, transient solve classes named
+  retry-friendly by the docs get one automatic retry (failures are
+  never billed twice), and the solve timeout default now sits
+  inside Bright Data's documented 30-150s unlock window. Solve-cache
+  v2 stores bodies byte-exact (v1's lossy UTF-8 round trip could
+  corrupt binary bodies on a cache hit), the parallel-gate map is
+  pruned so a long-lived daemon does not leak one mutex per URL,
+  and stale daily counters are cleaned up. BD SERP queries now
+  percent-encode UTF-8 correctly (non-ASCII queries were mangled
+  before). Proven end to end by a six-test live suite over a fake
+  Bright Data API (tests/bypass_live.rs).
 
 - **pi-extension: startup banner corrupted the viewport:** the
   `[donsetch] N tools registered: ...` line printed on every

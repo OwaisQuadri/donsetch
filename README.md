@@ -519,16 +519,21 @@ heading breadcrumbs.
   `Docs` / `Table` / `Page`, quality score 0-1, agent-trust signals
   inline (focus-miss, JS-shell warning, empty-content note).
 
-**Tier 3 bypass** (opt-in): when ghost itself hits a hard wall, fetch
-falls back to Bright Data Web Unlocker if a key is configured
+**Tier 3 bypass** (opt-in): when ghost itself hits a hard wall,
+fetch falls back to Bright Data Web Unlocker if a key is configured
 (`donsetch keys add unlocker <key>[::zone]`). The unlocker solves
 server-side, captchas included, and returns rendered HTML into the
-normal pipeline. Advanced users only; DonSeTch works identically
-without it. (Bright Data sign-up link above is an affiliate link.)
+normal pipeline. Failures carry exact guidance (token rejected,
+zone not found, balance empty, rate limit, target still walled)
+attached to the fetch escalation trace, and `donsetch doctor --deep`
+validates the token and zone for free before the first paid call.
+Advanced users only; DonSeTch works identically without it.
+(Bright Data sign-up link above is an affiliate link.)
 
 **Solve-cache**: every successful unlock is cached locally (URL-hash
 keyed, sliding 6h TTL, 200 entries, parallel fetches share one paid
-call). Same page again inside the TTL = served from cache at zero cost.
+call, bodies stored byte-exact). Same page again inside the TTL =
+served from cache at zero cost.
 Env knobs: `DONSETCH_BYPASS=0` (off), `DONSETCH_BYPASS_MAX_DAILY`
 (default 50), `DONSETCH_BYPASS_TIMEOUT_SECS`, `DONSETCH_BYPASS_RENDER`,
 `DONSETCH_BYPASS_CACHE_TTL_SECS`, `DONSETCH_BYPASS_CACHE_MAX_ENTRIES`,
