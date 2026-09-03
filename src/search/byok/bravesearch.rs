@@ -18,6 +18,7 @@
 //! Brave doesn't return a per-result position/rank field, so the
 //! score is derived from array order.
 
+use super::ProviderOutcome;
 use std::time::Instant;
 
 use serde_json::Value;
@@ -146,7 +147,11 @@ pub async fn search(
     };
 
     let ms = started.elapsed().as_millis() as u64;
-    Ok((results, ms))
+    Ok(ProviderOutcome {
+        hits: results,
+        ms,
+        degraded: false,
+    })
 }
 
 #[cfg(test)]

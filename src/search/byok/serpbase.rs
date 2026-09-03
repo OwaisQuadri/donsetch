@@ -18,6 +18,7 @@
 //! and an `organic_results` field; that contract is outdated and will
 //! return HTTP 200 with a non-zero `status` error envelope.
 
+use super::ProviderOutcome;
 use std::time::Instant;
 
 use serde_json::{Value, json};
@@ -153,7 +154,11 @@ pub async fn search(
     results.truncate(max);
 
     let ms = started.elapsed().as_millis() as u64;
-    Ok((results, ms))
+    Ok(ProviderOutcome {
+        hits: results,
+        ms,
+        degraded: false,
+    })
 }
 
 #[cfg(test)]

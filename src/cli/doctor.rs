@@ -158,6 +158,9 @@ pub async fn run() {
     report!("Bright Data SERP", check_brightdata());
     report!("Bypass unlocker", check_bypass(deep));
 
+    // 15.5 BYOK plugins (user-registered executable adapters).
+    report!("Search plugins", check_plugins());
+
     // 16. MCP client registration (detect + print blocks).
     print_mcp_section();
 
@@ -765,6 +768,44 @@ fn check_ghost_state() -> CheckResult {
     let domains = state.profiles.len();
     let renders = state.renders.len();
     CheckResult::Pass(format!("{domains} domains, {renders} renders cached"))
+}
+
+/// BYOK plugins: registration state only. Never probes the
+/// adapter from doctor (a probe is a real query through user
+/// code; it stays behind the explicit `--test` flag).
+fn check_plugins() -> CheckResult {
+    let cfg = crate::search::byok::plugin::PluginConfig::load();
+    if !cfg.is_configured() {
+        return CheckResult::Pass(
+            "none registered (optional: `donsetch keys add plugin <name> --cmd '...' --test`)"
+                .to_string(),
+        );
+    }
+    let names: Vec<String> = cfg.names().cloned().collect();
+    // Path-form program checks only: PATH lookups are resolved
+    // by the exec at run time, and absence there already yields
+    // a clear error on the first search.
+    let mut missing: Vec<String> = Vec::new();
+    for n in &names {
+        let prog = &cfg.plugins[n].cmd[0];
+        let is_path_form = prog.contains('/') || prog.contains('\\') || prog.starts_with('.');
+        if is_path_form && !std::path::Path::new(prog).exists() {
+            missing.push(format!("{n}: {prog}"));
+        }
+    }
+    let detail = format!(
+        "{} registered ({}), runs at search time",
+        names.len(),
+        names.join(", ")
+    );
+    if missing.is_empty() {
+        CheckResult::Pass(detail)
+    } else {
+        CheckResult::Warn(format!(
+            "{detail}; program not found: {}",
+            missing.join(", ")
+        ))
+    }
 }
 
 fn mask_key(k: &str) -> String {

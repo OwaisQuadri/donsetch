@@ -75,7 +75,7 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        "keys" => cli::keys::run(&args),
+        "keys" => cli::keys::run(&args).await,
         "proxy" => cli::proxy::run(&args).await,
         "status" => cli::status::run().await,
         "stop" => cli::stop::run(),
@@ -119,7 +119,7 @@ async fn route_help(cmd: &str) {
             let _ = cli::tool::run(cmd, &help_args).await;
         }
         "keys" => {
-            cli::keys::run(&["donsetch".into(), "keys".into(), "help".into()]);
+            cli::keys::run(&["donsetch".into(), "keys".into(), "help".into()]).await;
         }
         "proxy" => {
             // proxy::run is async, but print_help is sync.

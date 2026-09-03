@@ -5,6 +5,33 @@ All notable changes to DonSeTch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **BYOK search plugins:** platforms without a native adapter can
+  now be hooked through any user-registered executable that
+  answers a tiny stdin/stdout JSON contract (format 1:
+  `{query, max_results, intent, deadline_ms}` in,
+  `{results:[{title,url,snippet?,score?}], degraded?}` out).
+  Register with `donsetch keys add plugin <name> --cmd '...'
+  [--timeout N] [--test]`; the plugin then joins the same default
+  provider / fallback chain as natively supported keys, with
+  attribution, dedup, and rerank handoff unchanged. Any language
+  works. Reliability is enforced on our side: direct exec (never
+  a shell, argv tokenized once at registration), hard per-plugin
+  timeout with SIGKILL + kill-on-drop (MCP cancellation can never
+  orphan a child), 8 MiB stdout / 64 KiB stderr caps, overflow
+  kill, concurrent stderr draining (no pipe deadlocks), one
+  attempt per call with honest errors, graceful fallback. Names
+  are validated against native providers, keyless engine ids and
+  "local". New doctor check reports registration state and warns
+  on missing program files; `keys list` renders the plugin
+  section; `keys default` accepts plugin names. Native support
+  for big/keyed providers keeps coming - plugins are the bridge
+  for everything else. (README BYOK plugins section documents the
+  contract.)
+
 ## [3.5.1] - 2026-09-03
 
 ### Added

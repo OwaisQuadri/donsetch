@@ -18,10 +18,13 @@ mod bravesearch;
 mod brightdata;
 mod exa;
 mod parallel;
+pub mod plugin;
 mod serpapi;
 mod serpbase;
 mod serper;
 pub mod store;
+
+use plugin::{PluginDef, PluginStore};
 
 /// Doctor needs the token/zone split for the free zone probe;
 /// re-export it without widening the adapter's item visibility.
@@ -40,19 +43,29 @@ use crate::search::rank::Merged;
 use crate::search::{EngineReport, SearchOutcome};
 
 /// A single search result from any provider.
-struct SearchHit {
+#[derive(Debug)]
+pub(crate) struct SearchHit {
     title: String,
     url: String,
     snippet: String,
     score: f32,
 }
 
-type ProviderResult = Result<(Vec<SearchHit>, u64), KeyError>;
+/// A successful provider result: hits, wall-clock ms, and the
+/// provider's own degraded flag (plugins can report degradation).
+#[derive(Debug)]
+pub(crate) struct ProviderOutcome {
+    pub hits: Vec<SearchHit>,
+    pub ms: u64,
+    pub degraded: bool,
+}
+
+type ProviderResult = Result<ProviderOutcome, KeyError>;
 
 /// Error classification for key state management.
 /// Each variant maps to a key state transition.
 #[derive(Debug)]
-enum KeyError {
+pub(crate) enum KeyError {
     /// 401/403 : key is wrong or revoked. Permanent death.
     InvalidKey,
     /// 402 or billing message : no credits. Dead until user resets.
@@ -98,9 +111,10 @@ impl std::fmt::Display for KeyError {
 /// downed provider.
 const MAX_ATTEMPTS: usize = 20;
 
-/// BYOK searcher: holds the key store and HTTP client.
+/// BYOK searcher: holds the key store, plugin store and HTTP client.
 pub struct ByokSearcher {
     store: ByokStore,
+    plugins: PluginStore,
     client: reqwest::Client,
 }
 
@@ -111,8 +125,9 @@ impl Default for ByokSearcher {
 }
 
 impl ByokSearcher {
-    /// Load from disk. If no keys configured, search() returns
-    /// Err("not configured") and the caller falls back to local.
+    /// Load from disk. If no keys or plugins are configured,
+    /// search() returns Err("not configured") and the caller
+    /// falls back to local.
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -123,13 +138,14 @@ impl ByokSearcher {
 
         Self {
             store: ByokStore::new(),
+            plugins: PluginStore::new(),
             client,
         }
     }
 
-    /// True if at least one provider has at least one key.
+    /// True if at least one keyed provider or plugin exists.
     pub fn is_configured(&self) -> bool {
-        self.store.is_configured()
+        self.store.is_configured() || self.plugins.is_configured()
     }
 
     /// True if "local" is the default search method.
@@ -140,6 +156,7 @@ impl ByokSearcher {
     /// Reload config from disk (picks up CLI key changes live).
     pub fn reload(&self) {
         self.store.reload();
+        self.plugins.reload();
     }
 
     /// Search via the provider chain. Falls back through keys
@@ -180,7 +197,10 @@ impl ByokSearcher {
 
             // Pick the next usable (provider, key) pair,
             // skipping any we've already tried this call.
-            let (provider, key) = match self.store.pick_key_skipping(&tried) {
+            // Plugins participate with a synthetic key equal to
+            // their name: one attempt per plugin per call, like
+            // every transient-failing provider.
+            let (provider, key, plugin_def) = match self.pick_any_skipping(&tried) {
                 Some(pk) => pk,
                 None => {
                     return Err(format!("all keys exhausted: {last_error}"));
@@ -189,11 +209,14 @@ impl ByokSearcher {
             tried.insert((provider.clone(), key.clone()));
 
             // Dispatch to the provider adapter.
-            let result = dispatch(&self.client, &provider, &key, query, max, &intent).await;
+            let result = match plugin_def {
+                Some(def) => plugin::run_plugin(&provider, &def, query, max, &intent).await,
+                None => dispatch(&self.client, &provider, &key, query, max, &intent).await,
+            };
 
             match result {
-                Ok((hits, ms)) => {
-                    if hits.is_empty() {
+                Ok(outcome) => {
+                    if outcome.hits.is_empty() {
                         // Provider returned 0 results : don't
                         // return an empty list to the agent.
                         // Try the next provider, and if all are
@@ -204,12 +227,16 @@ impl ByokSearcher {
                         }
                         continue;
                     }
-                    let results = to_merged(hits, &provider, max);
+                    let results = to_merged(outcome.hits, &provider, max);
                     let report = vec![EngineReport {
                         engine: provider.clone(),
-                        status: "ok".into(),
+                        status: if outcome.degraded {
+                            "degraded".into()
+                        } else {
+                            "ok".into()
+                        },
                         hits: results.len(),
-                        ms,
+                        ms: outcome.ms,
                         egress: "byok".into(),
                     }];
                     return Ok(SearchOutcome {
@@ -248,6 +275,42 @@ impl ByokSearcher {
                 }
             }
         }
+    }
+
+    /// Combine the two lookups: Try a plugin named as default
+    /// first (they live outside the keyed provider chain), then
+    /// fall back to keyed providers (default-first), then
+    /// remaining plugins in registration order.
+    fn pick_any_skipping(
+        &self,
+        tried: &std::collections::HashSet<(String, String)>,
+    ) -> Option<(String, String, Option<PluginDef>)> {
+        let snap = self.plugins.snapshot();
+        let default = self.store.current_default();
+        if !default.is_empty() && default != "local" {
+            let pair = (default.clone(), default.clone());
+            if let Some(def) = snap.plugins.get(&default).cloned()
+                && !tried.contains(&pair)
+            {
+                return Some((default.clone(), default, Some(def)));
+            }
+        }
+        if let Some((provider, key)) = self.store.pick_key_skipping(tried) {
+            return Some((provider, key, None));
+        }
+        for name in snap.names() {
+            if *name == default {
+                continue;
+            }
+            let pair = (name.clone(), name.clone());
+            if tried.contains(&pair) {
+                continue;
+            }
+            if let Some(def) = snap.plugins.get(name).cloned() {
+                return Some((name.clone(), name.clone(), Some(def)));
+            }
+        }
+        None
     }
 }
 

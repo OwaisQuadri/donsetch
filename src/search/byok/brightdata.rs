@@ -15,6 +15,7 @@
 //! Zone can also be set via DONSETCH_BRIGHTDATA_ZONE env var,
 //! which takes priority over the default but not over `::`.
 
+use super::ProviderOutcome;
 use std::time::Instant;
 
 use serde_json::{Value, json};
@@ -190,7 +191,11 @@ pub(crate) async fn search(
         .unwrap_or_default();
 
     let ms = started.elapsed().as_millis() as u64;
-    Ok((results, ms))
+    Ok(ProviderOutcome {
+        hits: results,
+        ms,
+        degraded: false,
+    })
 }
 
 #[cfg(test)]

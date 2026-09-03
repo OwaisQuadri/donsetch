@@ -8,6 +8,7 @@
 //!           paper intent switches engine to google_scholar, still
 //!           returns `organic_results`.
 
+use super::ProviderOutcome;
 use std::time::Instant;
 
 use serde_json::Value;
@@ -158,7 +159,11 @@ pub async fn search(
     let results = parse_results(&json, results_key);
 
     let ms = started.elapsed().as_millis() as u64;
-    Ok((results, ms))
+    Ok(ProviderOutcome {
+        hits: results,
+        ms,
+        degraded: false,
+    })
 }
 
 #[cfg(test)]

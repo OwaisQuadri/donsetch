@@ -176,8 +176,10 @@ impl ByokConfig {
         Ok(cfg)
     }
 
-    /// Validate: provider names must be known, keys non-empty,
-    /// default must be "local" or a configured provider.
+    /// Validate: provider names must be known, keys non-empty.
+    /// The default must be "local", a configured provider, or a
+    /// well-formed plugin-name-shaped string (plugins live in a
+    /// separate store; the runtime picker resolves the rest).
     pub fn validate(&self) -> Result<(), String> {
         for p in &self.providers {
             if !PROVIDERS.contains(&p.name.as_str()) {
@@ -192,6 +194,7 @@ impl ByokConfig {
         if !self.default.is_empty()
             && self.default != "local"
             && !self.providers.iter().any(|p| p.name == self.default)
+            && !is_plugin_shaped(&self.default)
         {
             return Err(format!(
                 "default '{}' is not a configured provider",
@@ -456,6 +459,15 @@ impl ByokStore {
         cfg.save();
     }
 
+    /// The configured default (may name a plugin; may be empty).
+    pub fn current_default(&self) -> String {
+        self.config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .default
+            .clone()
+    }
+
     /// Reload config from disk (picks up CLI key changes).
     pub fn reload(&self) {
         let new_cfg = ByokConfig::load();
@@ -471,6 +483,21 @@ fn now_ts() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// A default that is neither "local" nor a keyed provider may
+/// still name a BYOK plugin: plugins are stored separately, so
+/// validation here checks only the shape (lowercase
+/// [a-z0-9][a-z0-9_-]* up to 32 chars). The runtime picker
+/// resolves whether a plugin of that name actually exists.
+pub(crate) fn is_plugin_shaped(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => {}
+        _ => return false,
+    }
+    name.len() <= 32
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -853,8 +880,18 @@ mod tests {
     }
 
     #[test]
+    fn from_json_accepts_plugin_shaped_default() {
+        // Plugin names live in a separate store: the default may
+        // name one as long as the shape is right.
+        let json = r#"{"default":"searxng","providers":[{"name":"tavily","keys":[{"key":"x","state":"active","ts":0}]}]}"#;
+        assert!(ByokConfig::from_json(json).is_ok());
+        let json_bad_shape = r#"{"default":"Bad Default!","providers":[]}"#;
+        assert!(ByokConfig::from_json(json_bad_shape).is_err());
+    }
+
+    #[test]
     fn from_json_rejects_invalid_default() {
-        let json = r#"{"default":"ghost","providers":[{"name":"tavily","keys":[{"key":"x","state":"active","ts":0}]}]}"#;
+        let json = r#"{"default":"ghost／etc","providers":[{"name":"tavily","keys":[{"key":"x","state":"active","ts":0}]}]}"#;
         assert!(ByokConfig::from_json(json).is_err());
     }
 

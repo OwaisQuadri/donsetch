@@ -487,6 +487,42 @@ donsetch keys default local             # dispatch order: keyless first
 > available at [get.brightdata.com](https://get.brightdata.com/ivqwoicrrlbr)
 > (affiliate link).
 
+### BYOK plugins (providers not natively supported yet)
+
+If the platform you have a key for is not natively supported, you can
+use a plugin as a workaround in the meantime: register any executable
+that answers a tiny stdin/stdout JSON contract, and DonSeTch treats it
+like any other search provider (default chain, fallback, attribution).
+Any language works: shell, Python, a compiled binary. No code changes
+to DonSeTch, no waiting for a release.
+
+```bash
+donsetch keys add plugin searxng --cmd 'python3 ~/searxng-adapter.py' --test
+```
+
+The adapter reads one JSON document on stdin and prints one on stdout.
+Request:
+
+```json
+{"format":1,"query":"rust async","max_results":8,"intent":"web","deadline_ms":30000}
+```
+
+Response:
+
+```json
+{"format":1,"results":[{"title":"...","url":"https://...","snippet":"...","score":0.9}]}
+```
+
+Errors: exit non-zero with a message on stderr, or respond with
+`{"format":1,"error":"...","retryable":true}`. Constraints that
+keep it reliable: hard timeout (default 30s, `--timeout` to change),
+8 MiB stdout cap, direct exec (no shell), killed on cancellation, and
+a malformed response degrades gracefully to the fallback chain.
+Keys belong in the adapter's own environment, never in DonSeTch
+config. Native support for the big/keyed providers (Exa, Bright Data,
+Tavily, Serper, SerpApi, Brave) keeps coming; plugins are the bridge
+for everything else.
+
 <div align="center">
 
 <img src="assets/byok-keys.png" alt="DonSeTch keys list" width="640">
